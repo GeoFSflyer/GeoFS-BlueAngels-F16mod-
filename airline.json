@@ -137,30 +137,6 @@
                     ],
                     "credits": "GeoFS Blue Angels"
                 }
-            ],
-            "labels": [
-                "Normal map",
-                "Specular shader",
-                "Texture",
-                "Propwash"
-            ],
-            "index": [
-                0,
-                3,
-                4,
-                1
-            ],
-            "parts": [
-                0,
-                0,
-                0,
-                0
-            ],
-            "mp": [
-                {
-                    "modelIndex": 0,
-                    "textureIndex": 0
-                }
             ]
         },
         "27": {
