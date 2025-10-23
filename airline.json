@@ -4,6 +4,119 @@
     "description": "Allows the GeoFS Blue Angels team to use their Blue Angels livery, and see it in multiplayer, using the Livery Selector.",
     "bgcolor": "darkblue",
     "aircrafts": {
+        "12": {
+            "name": "Pilatus PC-7 Mk-I",
+            "liveries": [
+                {
+                    "name": "Blue Angels #1",
+                    "texture": [
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-1.jpg",
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg"
+                    ],
+                    "credits": "GeoFS Blue Angels"
+                },
+                {
+                    "name": "Blue Angels #1 - Big-E",
+                    "texture": [
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-1-Big-E.jpg",
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg"
+                    ],
+                    "credits": "GeoFS Blue Angels"
+                },
+                {
+                    "name": "Blue Angels #2",
+                    "texture": [
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-2.jpg",
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg"
+                    ],
+                    "credits": "GeoFS Blue Angels"
+                },
+                {
+                    "name": "Blue Angels #2 - Natrium",
+                    "texture": [
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-2-Natrium.jpg",
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg"
+                    ],
+                    "credits": "GeoFS Blue Angels"
+                },
+                {
+                    "name": "Blue Angels #3",
+                    "texture": [
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-3.jpg",
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg"
+                    ],
+                    "credits": "GeoFS Blue Angels"
+                },
+                {
+                    "name": "Blue Angels #3 - Merpita",
+                    "texture": [
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-3-Merpita.jpg",
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg"
+                    ],
+                    "credits": "GeoFS Blue Angels"
+                },
+                {
+                    "name": "Blue Angels #4",
+                    "texture": [
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-4.jpg",
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg"
+                    ],
+                    "credits": "GeoFS Blue Angels"
+                },
+                {
+                    "name": "Blue Angels #4 - Sonic",
+                    "texture": [
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-4-Sonic.jpg",
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg"
+                    ],
+                    "credits": "GeoFS Blue Angels"
+                },
+                {
+                    "name": "Blue Angels #5",
+                    "texture": [
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-5.jpg",
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg"
+                    ],
+                    "credits": "GeoFS Blue Angels"
+                },
+                {
+                    "name": "Blue Angels #5 - BF18",
+                    "texture": [
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-5-BF18.jpg",
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg"
+                    ],
+                    "credits": "GeoFS Blue Angels"
+                },
+                {
+                    "name": "Blue Angels #6",
+                    "texture": [
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-6.jpg",
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg"
+                    ],
+                    "credits": "GeoFS Blue Angels"
+                },
+                {
+                    "name": "Blue Angels #6 - Rogue✦Viper",
+                    "texture": [
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-6-RogueViper.jpg",
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg"
+                    ],
+                    "credits": "GeoFS Blue Angels"
+                },
+                {
+                    "name": "Blue Angels Trainer",
+                    "texture": [
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-T.jpg",
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg"
+                    ],
+                    "credits": "GeoFS Blue Angels"
+                }
+            ],
+            "labels": [
+                "Normal map",
+                "Specular shader"
+            ]
+        },
         "27": {
             "name": "McDonell Douglas - Boeing F/A-18F Super Hornet",
             "liveries": [
