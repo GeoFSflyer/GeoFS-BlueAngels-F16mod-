@@ -12,8 +12,8 @@
                     "texture": [
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-1.jpg",
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg",
-                        "/models/aircraft/premium/pilatus/texture.jpg",
-                        "/models/aircraft/premium/pilatus/propblur.png"
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/texture.jpg",
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/propblur.png"
                     ],
                     "credits": "GeoFS Blue Angels"
                 },
@@ -22,8 +22,8 @@
                     "texture": [
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-1-Big-E.jpg",
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg",
-                        "/models/aircraft/premium/pilatus/texture.jpg",
-                        "/models/aircraft/premium/pilatus/propblur.png"
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/texture.jpg",
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/propblur.png"
                     ],
                     "credits": "GeoFS Blue Angels"
                 },
@@ -32,8 +32,8 @@
                     "texture": [
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-2.jpg",
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg",
-                        "/models/aircraft/premium/pilatus/texture.jpg",
-                        "/models/aircraft/premium/pilatus/propblur.png"
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/texture.jpg",
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/propblur.png"
                     ],
                     "credits": "GeoFS Blue Angels"
                 },
@@ -42,8 +42,8 @@
                     "texture": [
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-2-Natrium.jpg",
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg",
-                        "/models/aircraft/premium/pilatus/texture.jpg",
-                        "/models/aircraft/premium/pilatus/propblur.png"
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/texture.jpg",
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/propblur.png"
                     ],
                     "credits": "GeoFS Blue Angels"
                 },
@@ -52,18 +52,18 @@
                     "texture": [
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-3.jpg",
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg",
-                        "/models/aircraft/premium/pilatus/texture.jpg",
-                        "/models/aircraft/premium/pilatus/propblur.png"
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/texture.jpg",
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/propblur.png"
                     ],
                     "credits": "GeoFS Blue Angels"
                 },
                 {
                     "name": "Blue Angels #3 - Merpita",
                     "texture": [
-                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-3-Merpita.jpg",
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-3-Merpati.jpg",
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg",
-                        "/models/aircraft/premium/pilatus/texture.jpg",
-                        "/models/aircraft/premium/pilatus/propblur.png"
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/texture.jpg",
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/propblur.png"
                     ],
                     "credits": "GeoFS Blue Angels"
                 },
@@ -72,8 +72,8 @@
                     "texture": [
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-4.jpg",
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg",
-                        "/models/aircraft/premium/pilatus/texture.jpg",
-                        "/models/aircraft/premium/pilatus/propblur.png"
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/texture.jpg",
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/propblur.png"
                     ],
                     "credits": "GeoFS Blue Angels"
                 },
@@ -82,8 +82,8 @@
                     "texture": [
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-4-Sonic.jpg",
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg",
-                        "/models/aircraft/premium/pilatus/texture.jpg",
-                        "/models/aircraft/premium/pilatus/propblur.png"
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/texture.jpg",
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/propblur.png"
                     ],
                     "credits": "GeoFS Blue Angels"
                 },
@@ -92,8 +92,8 @@
                     "texture": [
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-5.jpg",
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg",
-                        "/models/aircraft/premium/pilatus/texture.jpg",
-                        "/models/aircraft/premium/pilatus/propblur.png"
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/texture.jpg",
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/propblur.png"
                     ],
                     "credits": "GeoFS Blue Angels"
                 },
@@ -102,8 +102,8 @@
                     "texture": [
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-5-BF18.jpg",
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg",
-                        "/models/aircraft/premium/pilatus/texture.jpg",
-                        "/models/aircraft/premium/pilatus/propblur.png"
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/texture.jpg",
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/propblur.png"
                     ],
                     "credits": "GeoFS Blue Angels"
                 },
@@ -112,8 +112,8 @@
                     "texture": [
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-6.jpg",
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg",
-                        "/models/aircraft/premium/pilatus/texture.jpg",
-                        "/models/aircraft/premium/pilatus/propblur.png"
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/texture.jpg",
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/propblur.png"
                     ],
                     "credits": "GeoFS Blue Angels"
                 },
@@ -122,8 +122,8 @@
                     "texture": [
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-6-RogueViper.jpg",
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg",
-                        "/models/aircraft/premium/pilatus/texture.jpg",
-                        "/models/aircraft/premium/pilatus/propblur.png"
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/texture.jpg",
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/propblur.png"
                     ],
                     "credits": "GeoFS Blue Angels"
                 },
@@ -132,8 +132,8 @@
                     "texture": [
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-T.jpg",
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg",
-                        "/models/aircraft/premium/pilatus/texture.jpg",
-                        "/models/aircraft/premium/pilatus/propblur.png"
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/texture.jpg",
+                        "https://www.geo-fs.com/models/aircraft/premium/pilatus/propblur.png"
                     ],
                     "credits": "GeoFS Blue Angels"
                 }
