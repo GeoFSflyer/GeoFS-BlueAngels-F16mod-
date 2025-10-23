@@ -158,8 +158,8 @@
             ],
             "mp": [
                 {
-                    "modelIndex": 1,
-                    "textureIndex": 2
+                    "modelIndex": 0,
+                    "textureIndex": 0
                 }
             ]
         },
