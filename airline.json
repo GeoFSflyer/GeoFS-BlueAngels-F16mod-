@@ -94,8 +94,8 @@
                 {
                     "name": "Blue Angels #4",
                     "texture": [
-                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg",
                         "https://www.geo-fs.com/models/aircraft/premium/pilatus/normal.jpg",
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg",
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-4.jpg",
                         "https://www.geo-fs.com/models/aircraft/premium/pilatus/propblur.png"
                     ],
@@ -104,8 +104,8 @@
                 {
                     "name": "Blue Angels #4 - Sonic",
                     "texture": [
-                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg",
                         "https://www.geo-fs.com/models/aircraft/premium/pilatus/normal.jpg",
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/specular_BA.jpg",
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/Pilatus/texture_BA2-4-Sonic.jpg",
                         "https://www.geo-fs.com/models/aircraft/premium/pilatus/propblur.png"
                     ],
