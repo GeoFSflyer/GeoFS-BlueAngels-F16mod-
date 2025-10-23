@@ -6,6 +6,30 @@
     "aircrafts": {
         "12": {
             "name": "Pilatus PC-7 Mk-I",
+            "index": [
+                0,
+                3,
+                4,
+                1
+            ],
+            "parts": [
+                0,
+                0,
+                0,
+                0
+            ],
+            "mp": [
+                {
+                    "modelIndex": 1,
+                    "textureIndex": 2
+                }
+            ],
+            "labels": [
+                "Normal map",
+                "Specular shader",
+                "Texture",
+                "Propwash"
+            ],
             "liveries": [
                 {
                     "name": "Blue Angels #1",
