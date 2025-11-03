@@ -227,6 +227,13 @@
                         "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/ATR_72-600/ATR_72-600-Little-Albert.jpg"
                     ],
                     "credits": "GeoFS Blue Angels"
+                },
+                {
+                    "name": "Blue Angels - Little Albert - 2019",
+                    "texture": [
+                        "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/ATR_72-600/ATR_72-600-Little-Albert-old.jpg"
+                    ],
+                    "credits": "GeoFS Blue Angels"
                 }
             ]
         }
