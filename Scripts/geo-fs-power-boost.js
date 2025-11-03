@@ -15,16 +15,26 @@
 
     let changeModeKey = "y"; // The key to press to see/hide the info.
     let engineMode = parseInt(localStorage.getItem("engineMode") ?? 0, 10);
-    let engineModes =
-        [
-            { "name": "Normal", "maxRpm": 10000 },
-            { "name": "Boost", "maxRpm": 15000 },
-            { "name": "Overdrive", "maxRpm": 25000 },
-            { "name": "Warp", "maxRpm": 50000 },
-        ];
+    let normalRpm;
+    let engineModes;
+
+    function setEngineModes() {
+        // Check the aircraft anytime, as it can be changed while flying.
+        let aircraftId = geofs?.aircraft?.instance?.id ?? '27';
+        normalRpm = aircraftId == '12' ? 6000 : 10000;
+        engineModes =
+            [
+                { "name": "Normal", "maxRpm": normalRpm },
+                { "name": "Boost", "maxRpm": normalRpm * 1.5 },
+                { "name": "Overdrive", "maxRpm": normalRpm * 2.5 },
+                { "name": "Warp", "maxRpm": normalRpm * 5 },
+            ];
+    }
 
     function changeEngineMode(mode) {
+        setEngineModes();
         engineMode = mode;
+        localStorage.setItem("engineNormalRpm", normalRpm);
         localStorage.setItem("engineMode", engineMode);
         localStorage.setItem("engineModeName", engineModes[mode].name);
 
