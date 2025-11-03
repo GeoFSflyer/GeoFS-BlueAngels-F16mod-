@@ -44,6 +44,7 @@
         }
         let inLandingConfig = geofs.animation.values.airspeedms * msToKnots < 200 && geofs.animation.values.altitude < 1000 && geofs.animation.values.climbrate < 0;
         let altAboveGround = geofs.animation.values.altitude.toLocaleString('en-US', { maximumFractionDigits: 0 }) + " ft";
+        let radioAltimeter = geofs.animation.values.haglFeet.toLocaleString('en-US', { maximumFractionDigits: 0 }) + " ft";
 
         let flightLevel = geofs.animation.values.altitude / 100;
         if (flightLevel >= minFlightLevel) {
@@ -147,6 +148,9 @@
             flightStatus = "<span style='color: yellow;'>STALLING</span>";
         }
 
+        let pitch = Math.round(geofs.animation.values.atilt * -10) / 10 + "°";
+        let rpm = Math.round(geofs.animation.values.rpm) / 100 + "%";
+
         if (displayMode == 0) {
             infoDisplay.innerHTML = "Info: OFF";
         } else if (displayMode == 1) {
@@ -162,12 +166,17 @@
                 mach = " - " + mach;
             }
             infoDisplay.innerHTML = "5 | TAS: " + trueAirSpeed + " - " + groundSpeed + mach + "  |  ALT: " + flightLevel + altAboveGround + climbrate + "  |  " + (aoa != "" ? (aoa + "  |  ") : "") + flightStatus;
+        } else if (displayMode == 6) {
+            if (mach != "") {
+                mach = " - " + mach;
+            }
+            infoDisplay.innerHTML = "T/O | TAS: " + trueAirSpeed + "  |  ABOVE GROUND: " + radioAltimeter + climbrate + "  |  PITCH: " + pitch + "  |  RPM: " + rpm + "  |  " + flightStatus;
         }
     }
 
     function changeFlightInfoMode() {
         displayMode++;
-        displayMode = displayMode % 6;
+        displayMode = displayMode % 7;
         localStorage.setItem("displayMode", displayMode);
     }
 
