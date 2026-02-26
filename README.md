@@ -47,6 +47,15 @@ If you don't have rights for this, create an Issue or Pull Request with the requ
 # Scripts
 These scripts are used by the GeoFS Blue Angels to improve their flying. Install the browser extension Tampermonkey to manage these scripts easily.
 
+## Flight recorder
+This addon allows you to record your flight and play it back while recording a new flight. This way you can record formation flights and practise formation flying. It is in beta, and tested only with the F-18 so far, so expect some bugs.
+
+Installation: [add this script](https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/geo-fs-flight-recorder.js) to Tampermonkey, or execute it in Developer Console.
+
+Use it by clicking the Flight Recorder button in the top right, opening this panel:
+
+![Flight Recorder](Images/scripts/FlightRecorder.png)
+
 ## Multiplayer info
 With this script you see the speed, distance and aircraft type for each aircraft, so you can intercept them easily. Press the 'L' key to see/hide labels.
 As GeoFS isn't equiped with a radar, we use this as an alternative.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoFS Flight Recorder
 // @namespace    https://github.com/ArjanKw/GeoFS-BlueAngels/
-// @version      1.1.2
+// @version      1.1.3
 // @description  Record and replay GeoFS flights with lightweight gear state playback.
 // @match        https://www.geo-fs.com/*
 // @grant        none
@@ -55,7 +55,7 @@
   }
 
   /* ---------- Config ---------- */
-  const VERSION = '1.1.2';
+  const VERSION = '1.1.3';
   const LS_KEY = 'FlightRecorder100';
   const MAX_DT_CAP = 120;
   const MAX_STEPS = 10;
@@ -78,6 +78,7 @@
     'gearactuator', 'actuator',
     'gearstrut', 'strut', 'oleo'
   ];
+  const LIVERY_ID_OFFSET = 10000;
 
   let defaultSampleMs = 16; // 60 Hz
   let easingOn = false;
@@ -150,13 +151,15 @@
       name: `${ac.aircraftRecord?.name || 'Unknown'} ${id}`,
       description: '',
       createdAt,
+      aircraftId: String(ac?.id ?? ac?.aircraftRecord?.id ?? ''),
       modelUrl,
       sampleMs,
       base: { lat0, lon0, mLat: m.mLat, mLon: m.mLon },
       lla: [],
       htr: [],
       xy: [],
-      gearEvents: []
+      gearEvents: [],
+      liveryEvents: []
     };
   }
 
@@ -186,7 +189,13 @@
       sampleCount: tr.lla.length,
       targetSamples: tr.lla.length,
       startT: 0,
-      lastGearUp: null
+      lastGearUp: null,
+      lastLiverySig: null
+    };
+    tr._livery = {
+      applying: false,
+      lastSig: null,
+      vaCache: Object.create(null)
     };
   }
 
@@ -199,13 +208,15 @@
         name: t.name,
         description: t.description || '',
         createdAt: t.createdAt,
+        aircraftId: t.aircraftId,
         modelUrl: t.modelUrl,
         sampleMs: t.sampleMs,
         base: t.base,
         lla: t.lla,
         htr: t.htr,
         xy: t.xy,
-        gearEvents: t.gearEvents || []
+        gearEvents: t.gearEvents || [],
+        liveryEvents: t.liveryEvents || []
       }))
     };
   }
@@ -229,6 +240,7 @@
     tr.orderId = orderId;
     tr.id = String(tr.id || `T${String(orderId).padStart(4, '0')}`);
     tr.createdAt = Number(tr.createdAt) || Date.now();
+    tr.aircraftId = String(tr.aircraftId || '');
     return tr;
   }
 
@@ -746,6 +758,178 @@
     return up;
   }
 
+  function cloneLiveryId(value) {
+    if (value == null) return null;
+    if (typeof value === 'object') {
+      try {
+        return JSON.parse(JSON.stringify(value));
+      } catch {
+        return null;
+      }
+    }
+    return value;
+  }
+
+  function liverySig(value) {
+    if (value == null) return '';
+    if (typeof value === 'object') {
+      const url = String(value.url || '').trim();
+      const idx = Number(value.idx);
+      return `va:${url}|${Number.isFinite(idx) ? idx : -1}`;
+    }
+    const n = Number(value);
+    return Number.isFinite(n) ? `id:${n}` : '';
+  }
+
+  function readCurrentLiveryId(ac) {
+    return cloneLiveryId(ac?.liveryId ?? null);
+  }
+
+  function liveryAtIndex(track, idx) {
+    const ev = track?.liveryEvents || [];
+    let current = null;
+    for (let i = 0; i < ev.length; i++) {
+      if ((ev[i]?.t ?? -1) > idx) break;
+      current = cloneLiveryId(ev[i]?.id ?? null);
+    }
+    return current;
+  }
+
+  function getLiverySelectorAircraftEntry(track) {
+    const ls = window.LiverySelector;
+    const acId = String(track?.aircraftId || '');
+    return ls?.liveryobj?.aircrafts?.[acId] || null;
+  }
+
+  function makeUniqueGhostModelUrl(track) {
+    const base = String(track?.modelUrl || '');
+    if (!base) return base;
+    const sep = base.includes('?') ? '&' : '?';
+    const token = encodeURIComponent(`${track?.id || 'ghost'}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    return `${base}${sep}frghost=${token}`;
+  }
+
+  async function getVALivery(track, liveryRef) {
+    const url = String(liveryRef?.url || '').trim();
+    const idx = Number(liveryRef?.idx);
+    if (!url || !Number.isFinite(idx) || idx < 0) return null;
+
+    const cache = track?._livery?.vaCache || Object.create(null);
+    if (!cache[url]) {
+      cache[url] = fetch(url).then((r) => r.json()).catch(() => null);
+      if (track?._livery) track._livery.vaCache = cache;
+    }
+    const airline = await cache[url];
+    const acId = String(track?.aircraftId || '');
+    const ac = airline?.aircrafts?.[acId];
+    const livery = ac?.liveries?.[idx];
+    if (!livery) return null;
+    return { livery, source: airline };
+  }
+
+  function changeGhostModelTexture(track, textureUrl, index) {
+    const ghost = track?._ghost;
+    const model = ghost?._model;
+    if (!ghost || !model || !textureUrl || !Number.isFinite(Number(index))) return;
+
+    const rendererTex = model?._rendererResources?.textures?.[index];
+    const width = Number(rendererTex?._width) || 0;
+    const height = Number(rendererTex?._height) || 0;
+
+    // Use per-instance texture path (same strategy as LiverySelector multiplayer)
+    // so we don't mutate shared model textures used by the player's own aircraft.
+    Cesium.Resource.fetchImage({ url: textureUrl })
+      .then((img) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = width || img.width || 1024;
+        canvas.height = height || img.height || 1024;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/png');
+
+        try {
+          if (typeof ghost.changeTexture === 'function') {
+            ghost.changeTexture(dataUrl, { index });
+            return;
+          }
+        } catch {
+          // fallback below
+        }
+
+        try {
+          if (typeof model.changeTexture === 'function') {
+            model.changeTexture(dataUrl, { index });
+            return;
+          }
+        } catch {
+          // fallback below
+        }
+      })
+      .catch(() => {
+        // ignore remote texture fetch errors
+      });
+  }
+
+  function applyGhostMaterial(model, mat) {
+    if (!model || !mat?.name) return;
+    const key = Object.keys(mat).find((k) => k !== 'name');
+    const v = mat?.[key];
+    if (!key || !Array.isArray(v) || v.length < 3) return;
+    try {
+      model.getMaterial(mat.name).setValue(key, new Cesium.Cartesian4(v[0], v[1], v[2], 1.0));
+    } catch {
+      // ignore material failures
+    }
+  }
+
+  async function applyTrackLivery(track, liveryId) {
+    if (!track?._ghost?._model?.ready) return;
+    const entry = getLiverySelectorAircraftEntry(track);
+    if (!entry) return;
+
+    let livery = null;
+    if (typeof liveryId === 'object' && liveryId) {
+      const va = await getVALivery(track, liveryId);
+      livery = va?.livery || null;
+    } else {
+      const idNum = Number(liveryId);
+      if (!Number.isFinite(idNum)) return;
+      const idx = idNum >= LIVERY_ID_OFFSET ? idNum - LIVERY_ID_OFFSET : idNum;
+      livery = entry?.liveries?.[idx] || null;
+    }
+    if (!livery) return;
+
+    const parts = Array.isArray(entry.parts) ? entry.parts : [];
+    const indices = Array.isArray(entry.index) ? entry.index : [];
+    const textures = Array.isArray(livery.texture) ? livery.texture : [];
+    const mats = livery.materials || {};
+    const model = track._ghost._model;
+
+    for (let i = 0; i < textures.length; i++) {
+      const tx = textures[i];
+      if (tx && typeof tx === 'object' && tx.material != null) {
+        const mat = mats?.[tx.material];
+        if (mat) applyGhostMaterial(model, mat);
+        continue;
+      }
+      if (typeof tx !== 'string' || !tx) continue;
+      const modelIndex = Number(indices[i]);
+      if (!Number.isFinite(modelIndex)) continue;
+      changeGhostModelTexture(track, tx, modelIndex);
+    }
+  }
+
+  function requestApplyTrackLivery(track, liveryId) {
+    if (!track?._livery || track._livery.applying) return;
+    track._livery.applying = true;
+    Promise.resolve(applyTrackLivery(track, liveryId))
+      .catch(() => { })
+      .finally(() => {
+        if (track?._livery) track._livery.applying = false;
+      });
+  }
+
   /* ---------- Recording ---------- */
   function canStartRecording() {
     return recordState === 'IDLE';
@@ -971,6 +1155,9 @@
     tr._rec.startT = t0;
     tr._rec.lastT = t0;
     tr._rec.recording = true;
+    const initialLivery = readCurrentLiveryId(ac);
+    tr._rec.lastLiverySig = liverySig(initialLivery);
+    tr.liveryEvents.push({ t: 0, id: initialLivery });
 
     currentRec = tr;
     recordState = 'RECORDING';
@@ -997,6 +1184,7 @@
       name: currentRec.name,
       description: currentRec.description || '',
       createdAt: currentRec.createdAt,
+      aircraftId: currentRec.aircraftId,
       modelUrl: currentRec.modelUrl,
       sampleMs: currentRec.sampleMs,
       base: currentRec.base,
@@ -1004,6 +1192,7 @@
       htr: currentRec.htr,
       xy: currentRec.xy,
       gearEvents: currentRec.gearEvents,
+      liveryEvents: currentRec.liveryEvents,
       _nodeNames: currentRec._nodeNames
     };
     initTrackRuntime(finalized);
@@ -1057,6 +1246,13 @@
         rec.lastGearUp = upNow;
       }
 
+      const liveryNow = readCurrentLiveryId(ac);
+      const sigNow = liverySig(liveryNow);
+      if (rec.lastLiverySig == null || rec.lastLiverySig !== sigNow) {
+        track.liveryEvents.push({ t: rec.sampleCount, id: liveryNow });
+        rec.lastLiverySig = sigNow;
+      }
+
       rec.sampleCount++;
     }
   }
@@ -1069,12 +1265,14 @@
   function spawnGhost(track) {
     if (!track?.lla?.length || !track?.htr?.length) return null;
     try {
+      const ghostModelUrl = makeUniqueGhostModelUrl(track);
       const ghost = new geofs.api.Model(null, {
-        url: track.modelUrl,
+        url: ghostModelUrl,
         location: track.lla[0],
         rotation: track.htr[0]
       });
       track._ghost = ghost;
+      track._ghostModelUrl = ghostModelUrl;
       return ghost;
     } catch {
       return null;
@@ -1164,6 +1362,10 @@
     track._play.lastT = t0;
     track._precision = null;
     track._lastGearUp = null;
+    if (track._livery) {
+      track._livery.lastSig = null;
+      track._livery.applying = false;
+    }
     updatePlayState();
   }
 
@@ -1204,6 +1406,10 @@
     track._ghost = null;
     track._nodeCache = { ready: false, all: [], gear: [], wheels: [], doors: [], ladder: [] };
     track._lastGearUp = null;
+    if (track._livery) {
+      track._livery.lastSig = null;
+      track._livery.applying = false;
+    }
     updatePlayState();
   }
 
@@ -1229,6 +1435,13 @@
     }
 
     setGhostPose(track, pose.lla, pose.htr);
+
+    const liveryNow = liveryAtIndex(track, i1);
+    const sigNow = liverySig(liveryNow);
+    if (track._livery && track._livery.lastSig !== sigNow) {
+      track._livery.lastSig = sigNow;
+      requestApplyTrackLivery(track, liveryNow);
+    }
 
     const upNow = gearUpAtIndex(track, i1);
     if (track._lastGearUp == null || track._lastGearUp !== upNow) {
@@ -1496,6 +1709,7 @@
           name: t.name,
           description: t.description || '',
           createdAt: t.createdAt,
+          aircraftId: t.aircraftId,
           modelUrl: t.modelUrl,
           sampleMs: t.sampleMs,
           base: t.base,
@@ -1503,6 +1717,7 @@
           htr: t.htr || [],
           xy: t.xy || [],
           gearEvents: t.gearEvents || [],
+          liveryEvents: t.liveryEvents || [],
           _nodeNames: t._nodeNames || []
         }, 1);
         initTrackRuntime(tr);
@@ -1539,6 +1754,7 @@
             name: t.name || 'Imported',
             description: t.description || '',
             createdAt: t.createdAt,
+            aircraftId: t.aircraftId,
             modelUrl: t.modelUrl,
             sampleMs: Number(t.sampleMs) || 16,
             base: t.base,
@@ -1546,6 +1762,7 @@
             htr: t.htr || [],
             xy: t.xy || [],
             gearEvents: t.gearEvents || [],
+            liveryEvents: t.liveryEvents || [],
             _nodeNames: t._nodeNames || []
           }, nextTrackNumber++);
           initTrackRuntime(tr);
