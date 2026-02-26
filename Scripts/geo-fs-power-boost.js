@@ -23,12 +23,12 @@
         let aircraftId = geofs?.aircraft?.instance?.id ?? '27';
         normalRpm = aircraftId == '12' ? 6000 : 10000;
         engineModes =
-            [
-                { "name": "Normal", "maxRpm": normalRpm },
-                { "name": "Boost", "maxRpm": normalRpm * 1.5 },
-                { "name": "Overdrive", "maxRpm": normalRpm * 2.5 },
-                { "name": "Warp", "maxRpm": normalRpm * 5 },
-            ];
+        [
+            { "name": "Normal", "maxRpm": normalRpm },
+            { "name": "Boost", "maxRpm": normalRpm * 1.5 },
+            { "name": "Overdrive", "maxRpm": normalRpm * 2.5 },
+            { "name": "Warp", "maxRpm": normalRpm * 5 },
+        ];
     }
 
     function changeEngineMode(mode) {
