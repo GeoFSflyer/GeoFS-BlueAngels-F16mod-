@@ -34,15 +34,16 @@
         counter++;
         counter = counter % 10;
 
+        let airSpeedKnots = geofs.animation.values.airspeedms * msToKnots;
         let groundSpeed = "GS: " + geofs.animation.values.groundSpeedKnt.toLocaleString('en-US', { maximumFractionDigits: 0 }) + " kn";
-        let trueAirSpeed = (geofs.animation.values.airspeedms * msToKnots).toLocaleString('en-US', { maximumFractionDigits: 0 }) + " kn";
+        let trueAirSpeed = airSpeedKnots.toLocaleString('en-US', { maximumFractionDigits: 0 }) + " kn";
         let mach = Math.round(geofs.animation.values.mach * 100) / 100;
         if (mach > minMachNumber) {
             mach = "M" + mach;
         } else {
             mach = "";
         }
-        let inLandingConfig = geofs.animation.values.airspeedms * msToKnots < 200 && geofs.animation.values.altitude < 1000 && geofs.animation.values.climbrate < 0;
+        let inLandingConfig = airSpeedKnots < 200 && airSpeedKnots > 50 && geofs.animation.values.haglFeet < 1000 && geofs.animation.values.climbrate < 0 && geofs.animation.values.haglFeet > 10;
         let altAboveGround = geofs.animation.values.altitude.toLocaleString('en-US', { maximumFractionDigits: 0 }) + " ft";
         let radioAltimeter = geofs.animation.values.haglFeet.toLocaleString('en-US', { maximumFractionDigits: 0 }) + " ft";
 
