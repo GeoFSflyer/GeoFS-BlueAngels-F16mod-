@@ -1,3 +1,5 @@
+![GeoFS Blue Angels](Images/BA.png)
+
 # GeoFS Blue Angels
 Welcome to the main GeoFS Blue Angels hub. This space provides everything we need to operate.
 
