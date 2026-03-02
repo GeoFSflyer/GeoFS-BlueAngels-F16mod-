@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoFS Flight Recorder
 // @namespace    https://github.com/ArjanKw/GeoFS-BlueAngels/
-// @version      1.1.3
+// @version      1.1.4
 // @description  Record and replay GeoFS flights with lightweight gear state playback.
 // @match        https://www.geo-fs.com/*
 // @grant        none
@@ -25,6 +25,12 @@
     const n = Number(v);
     return Number.isFinite(n) ? n : fallback;
   };
+  const sanitizeCallsign = (value) => {
+    return String(value || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 24);
+  };
   const isWheelLikeName = (name) => {
     const s = String(name || '').toLowerCase();
     return s.includes('wheel') || s.includes('bogie') || s.includes('truck') || s.includes('tire') || s.includes('tyre');
@@ -45,18 +51,10 @@
     return out;
   }
 
-  function catmullRom3(p0, p1, p2, p3, t, out) {
-    const t2 = t * t;
-    const t3 = t2 * t;
-    out[0] = 0.5 * ((2 * p1[0]) + (-p0[0] + p2[0]) * t + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3);
-    out[1] = 0.5 * ((2 * p1[1]) + (-p0[1] + p2[1]) * t + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3);
-    out[2] = 0.5 * ((2 * p1[2]) + (-p0[2] + p2[2]) * t + (2 * p0[2] - 5 * p1[2] + 4 * p2[2] - p3[2]) * t2 + (-p0[2] + 3 * p1[2] - 3 * p2[2] + p3[2]) * t3);
-    return out;
-  }
-
   /* ---------- Config ---------- */
-  const VERSION = '1.1.3';
+  const VERSION = '1.1.4';
   const LS_KEY = 'FlightRecorder100';
+  const LS_CALLSIGN_KEY = 'FlightRecorder100Callsign';
   const MAX_DT_CAP = 120;
   const MAX_STEPS = 10;
   const MAX_RECORD_STEPS_PER_FRAME = 800;
@@ -82,23 +80,11 @@
 
   let defaultSampleMs = 16; // 60 Hz
   let easingOn = false;
-  let planeSplineOn = true;
   let ultraStrength = 35; // 0..100
-  let animDebugOn = false;
-  let animDebugLastLogT = 0;
-  const ANIM_DEBUG_LOG_EVERY_MS = 2000;
-
-  const animDebugStats = {
-    startedAt: 0,
-    frames: 0,
-    lastTrack: '',
-    lastIndex: 0,
-    lastState: null,
-    lastReport: null,
-    methods: Object.create(null),
-    errors: Object.create(null),
-    probe: null
-  };
+  let recordCallsign = '';
+  let showCallsign = true;
+  let playbackSliderDragging = false;
+  let lastSliderSeekTs = 0;
 
   /* ---------- State machines ---------- */
   let recordState = 'IDLE'; // IDLE | RECORDING
@@ -113,31 +99,8 @@
   let guiWin = null;
   const gui = {};
 
-  function animDbgReset() {
-    animDebugStats.startedAt = now();
-    animDebugStats.frames = 0;
-    animDebugStats.lastTrack = '';
-    animDebugStats.lastIndex = 0;
-    animDebugStats.lastState = null;
-    animDebugStats.lastReport = null;
-    animDebugStats.methods = Object.create(null);
-    animDebugStats.errors = Object.create(null);
-    animDebugStats.probe = null;
-    animDebugLastLogT = 0;
-  }
-
-  function animDbgCount(map, key, add = 1) {
-    map[key] = (map[key] || 0) + add;
-  }
-
-  function animDbgError(where, e) {
-    if (!animDebugOn) return;
-    const msg = `${where}: ${String(e?.message || e || 'unknown')}`;
-    animDbgCount(animDebugStats.errors, msg, 1);
-  }
-
   /* ---------- Track helpers ---------- */
-  function makeTrackBase(ac, sampleMs) {
+  function makeTrackBase(ac, sampleMs, callsign = '') {
     const orderId = nextTrackNumber++;
     const id = `T${String(orderId).padStart(4, '0')}`;
     const createdAt = Date.now();
@@ -149,6 +112,7 @@
       orderId,
       id,
       name: `${ac.aircraftRecord?.name || 'Unknown'} ${id}`,
+      callsign: sanitizeCallsign(callsign),
       description: '',
       createdAt,
       aircraftId: String(ac?.id ?? ac?.aircraftRecord?.id ?? ''),
@@ -165,6 +129,7 @@
 
   function initTrackRuntime(tr) {
     tr._ghost = null;
+    tr._ghostLabel = null;
     tr._nodeNames = Array.isArray(tr._nodeNames) ? tr._nodeNames : [];
     tr._nodeNameSet = new Set(tr._nodeNames);
     tr._nodeCache = { ready: false, all: [], gear: [], wheels: [], doors: [], ladder: [] };
@@ -195,8 +160,62 @@
     tr._livery = {
       applying: false,
       lastSig: null,
-      vaCache: Object.create(null)
+      appliedSig: null,
+      resetSig: null,
+      pendingId: null,
+      pendingSnapshot: null,
+      pendingSig: null,
+      vaCache: Object.create(null),
+      debug: {
+        seq: 0,
+        lastLine: '',
+        lastApplyLine: '',
+        lastTextureLine: '',
+        lastRequestLine: '',
+        history: []
+      }
     };
+  }
+
+  function toDebugSafe(v) {
+    return String(v == null ? '' : v).replace(/[|\n\r]/g, '_');
+  }
+
+  function pushLiveryDebug(track, payload = {}) {
+    const lv = track?._livery;
+    if (!lv) return '';
+    if (!lv.debug) {
+      lv.debug = { seq: 0, lastLine: '', lastApplyLine: '', lastTextureLine: '', lastRequestLine: '', history: [] };
+    }
+    lv.debug.seq = (Number(lv.debug.seq) || 0) + 1;
+
+    const line = [
+      'FRDBG',
+      `seq=${lv.debug.seq}`,
+      `track=${toDebugSafe(track?.id || '')}`,
+      `aircraft=${toDebugSafe(track?.aircraftId || '')}`,
+      `event=${toDebugSafe(payload.event || '')}`,
+      `sig=${toDebugSafe(payload.sig || '')}`,
+      `prefer=${toDebugSafe(payload.prefer || '')}`,
+      `idxPot=${toDebugSafe(payload.indexPotential || 0)}`,
+      `mpPot=${toDebugSafe(payload.mpPotential || 0)}`,
+      `first=${toDebugSafe(payload.firstPath || '')}`,
+      `firstOps=${toDebugSafe(payload.firstOps || 0)}`,
+      `second=${toDebugSafe(payload.secondPath || '')}`,
+      `secondOps=${toDebugSafe(payload.secondOps || 0)}`,
+      `ok=${toDebugSafe(payload.ok === true ? 1 : 0)}`,
+      `reason=${toDebugSafe(payload.reason || '')}`
+    ].join('|');
+
+    lv.debug.lastLine = line;
+    if (payload.event === 'apply') lv.debug.lastApplyLine = line;
+    if (payload.event === 'texture_api') lv.debug.lastTextureLine = line;
+    if (payload.event === 'request_result') lv.debug.lastRequestLine = line;
+    lv.debug.history.push(line);
+    if (lv.debug.history.length > 30) lv.debug.history.splice(0, lv.debug.history.length - 30);
+
+    try { console.log(line); } catch { }
+    return line;
   }
 
   function buildProject() {
@@ -206,6 +225,7 @@
         orderId: t.orderId,
         id: t.id,
         name: t.name,
+        callsign: sanitizeCallsign(t.callsign || ''),
         description: t.description || '',
         createdAt: t.createdAt,
         aircraftId: t.aircraftId,
@@ -239,6 +259,7 @@
     const orderId = Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackOrder;
     tr.orderId = orderId;
     tr.id = String(tr.id || `T${String(orderId).padStart(4, '0')}`);
+    tr.callsign = sanitizeCallsign(tr.callsign || '');
     tr.createdAt = Number(tr.createdAt) || Date.now();
     tr.aircraftId = String(tr.aircraftId || '');
     return tr;
@@ -289,30 +310,10 @@
     const low = String(name || '').toLowerCase();
     return low.includes('ladder');
   }
-  function isGlobalLikeNodeName(name) {
-    const s = String(name || '').toLowerCase();
-    return s.includes('root') || s.includes('body') || s.includes('fuselage') || s.includes('aircraft') || s.includes('plane');
-  }
 
   function shouldTrackToken(name) {
     const low = String(name || '').toLowerCase();
     return TOKENS.some((t) => low.includes(t));
-  }
-
-  function matrixFromNode(node) {
-    const m = node?.matrix || node?._matrix;
-    if (!m) return null;
-    const out = new Array(16);
-    for (let i = 0; i < 16; i++) out[i] = Number(m[i]);
-    return out;
-  }
-
-  function matrixChanged(a16, b16, eps = EPS) {
-    if (!a16 || !b16) return true;
-    for (let i = 0; i < 16; i++) {
-      if (Math.abs(a16[i] - b16[i]) > eps) return true;
-    }
-    return false;
   }
 
   function readAnimState(ac) {
@@ -329,305 +330,6 @@
       spoilers: pick('spoilers', 'spoiler', 'spoilersPosition'),
       airbrake: pick('airbrake', 'airBrake', 'airbrakes')
     };
-  }
-
-  function animChanged(a, b, eps = 1e-3) {
-    if (!a || !b) return true;
-    for (const k of ['gear', 'flaps', 'spoilers', 'airbrake']) {
-      const va = a[k];
-      const vb = b[k];
-      if (va == null && vb == null) continue;
-      if (va == null || vb == null) return true;
-      if (Math.abs(Number(va) - Number(vb)) > eps) return true;
-    }
-    return false;
-  }
-
-  function blendAnimState(a, b, f) {
-    const aa = a || {};
-    const bb = b || aa;
-    const out = {};
-    for (const k of ['gear', 'flaps', 'spoilers', 'airbrake']) {
-      const va = aa[k];
-      const vb = bb[k];
-      if (va == null && vb == null) continue;
-      if (va == null) out[k] = vb;
-      else if (vb == null) out[k] = va;
-      else out[k] = lerp(va, vb, f);
-    }
-    return out;
-  }
-
-  function probeActiveGhost(track) {
-    const g = track?._ghost;
-    if (!g) return null;
-    const targets = [
-      ['ghost', g],
-      ['ghost._model', g._model],
-      ['ghost.object3d', g.object3d],
-      ['ghost._entity', g._entity]
-    ];
-    const out = [];
-    for (const [name, tgt] of targets) {
-      if (!tgt) continue;
-      let keys = [];
-      try { keys = Object.keys(tgt).slice(0, 80); } catch { }
-      out.push({
-        name,
-        hasSetAnimationValues: typeof tgt.setAnimationValues === 'function',
-        hasSetAnimationValue: typeof tgt.setAnimationValue === 'function',
-        hasSetAnimations: typeof tgt.setAnimations === 'function',
-        hasApplyAnimationValues: typeof tgt.applyAnimationValues === 'function',
-        hasControlsObject: !!tgt.controls,
-        hasAnimationValuesObject: !!tgt.animationValues,
-        hasAnimationsObject: !!tgt.animations,
-        sampleKeys: keys
-      });
-    }
-    return out;
-  }
-
-  function hasDirectAnimSupport(probe) {
-    if (!Array.isArray(probe)) return false;
-    return probe.some((p) => (
-      p?.hasSetAnimationValues ||
-      p?.hasSetAnimationValue ||
-      p?.hasSetAnimations ||
-      p?.hasApplyAnimationValues ||
-      p?.hasControlsObject ||
-      p?.hasAnimationValuesObject ||
-      p?.hasAnimationsObject
-    ));
-  }
-
-  function printAnimDebugReport() {
-    const toLines = (obj) => {
-      if (!obj || typeof obj !== 'object') return ['(none)'];
-      const keys = Object.keys(obj);
-      if (!keys.length) return ['(none)'];
-      return keys.sort().map((k) => `${k}=${obj[k]}`);
-    };
-
-    const probeLines = (probe) => {
-      if (!Array.isArray(probe) || !probe.length) return ['(none)'];
-      const lines = [];
-      for (const p of probe) {
-        lines.push(
-          `${p.name} | setAnimationValues=${!!p.hasSetAnimationValues} | setAnimationValue=${!!p.hasSetAnimationValue} | setAnimations=${!!p.hasSetAnimations} | applyAnimationValues=${!!p.hasApplyAnimationValues} | controls=${!!p.hasControlsObject} | animationValues=${!!p.hasAnimationValuesObject} | animations=${!!p.hasAnimationsObject}`
-        );
-      }
-      return lines;
-    };
-
-    const elapsed = Math.max(0, now() - (animDebugStats.startedAt || now()));
-    const text = [
-      '=== FR098 Animation Debug Report ===',
-      `elapsedMs=${Math.round(elapsed)}`,
-      `frames=${animDebugStats.frames}`,
-      `lastTrack=${animDebugStats.lastTrack || ''}`,
-      `lastIndex=${animDebugStats.lastIndex}`,
-      `lastState=${JSON.stringify(animDebugStats.lastState || {})}`,
-      `lastReport=${JSON.stringify(animDebugStats.lastReport || {})}`,
-      'methodCounts:',
-      ...toLines(animDebugStats.methods).map((x) => `  ${x}`),
-      'errorCounts:',
-      ...toLines(animDebugStats.errors).map((x) => `  ${x}`),
-      'probe:',
-      ...probeLines(animDebugStats.probe).map((x) => `  ${x}`),
-      '=== /FR098 Animation Debug Report ==='
-    ].join('\n');
-
-    return text;
-  }
-
-  function applyAnimFallback(track, state) {
-    const g = track?._ghost;
-    if (!g || !state) return null;
-    const targets = [g, g._model, g.object3d, g._entity].filter(Boolean);
-    const report = {
-      setAnimationValues: 0,
-      setAnimationValue: 0,
-      setAnimations: 0,
-      applyAnimationValues: 0,
-      assignAnimationValues: 0,
-      assignAnimations: 0,
-      assignControls: 0,
-      assignKnownFields: 0,
-      errors: 0
-    };
-
-    const aliases = {
-      gear: ['gear', 'landingGear', 'gearPosition', 'landing_gear'],
-      flaps: ['flaps', 'flapsValue', 'flapsPosition', 'flaps_value'],
-      spoilers: ['spoilers', 'spoiler', 'spoilersPosition'],
-      airbrake: ['airbrake', 'airBrake', 'airbrakes']
-    };
-
-    for (const tgt of targets) {
-      try {
-        if (typeof tgt.setAnimationValues === 'function') {
-          tgt.setAnimationValues(state);
-          report.setAnimationValues++;
-        }
-      } catch (e) { report.errors++; animDbgError('setAnimationValues', e); }
-      try {
-        if (typeof tgt.setAnimationValue === 'function') {
-          for (const [k, v] of Object.entries(state)) {
-            if (v != null) {
-              tgt.setAnimationValue(k, v);
-              report.setAnimationValue++;
-            }
-          }
-        }
-      } catch (e) { report.errors++; animDbgError('setAnimationValue', e); }
-      try {
-        if (typeof tgt.setAnimations === 'function') {
-          tgt.setAnimations(state);
-          report.setAnimations++;
-        }
-      } catch (e) { report.errors++; animDbgError('setAnimations', e); }
-      try {
-        if (typeof tgt.applyAnimationValues === 'function') {
-          tgt.applyAnimationValues(state);
-          report.applyAnimationValues++;
-        }
-      } catch (e) { report.errors++; animDbgError('applyAnimationValues', e); }
-      try {
-        if (tgt.animationValues && typeof tgt.animationValues === 'object') {
-          Object.assign(tgt.animationValues, state);
-          report.assignAnimationValues++;
-        }
-      } catch (e) { report.errors++; animDbgError('assign animationValues', e); }
-      try {
-        if (tgt.animations && typeof tgt.animations === 'object') {
-          Object.assign(tgt.animations, state);
-          report.assignAnimations++;
-        }
-      } catch (e) { report.errors++; animDbgError('assign animations', e); }
-
-      try {
-        if (tgt.controls && typeof tgt.controls === 'object') {
-          for (const [k, v] of Object.entries(state)) {
-            if (v != null) {
-              tgt.controls[k] = v;
-              report.assignControls++;
-            }
-          }
-        }
-      } catch (e) { report.errors++; animDbgError('assign controls', e); }
-
-      try {
-        for (const [baseKey, names] of Object.entries(aliases)) {
-          const v = state[baseKey];
-          if (v == null) continue;
-          for (const nm of names) {
-            if (nm in tgt) {
-              tgt[nm] = v;
-              report.assignKnownFields++;
-            }
-          }
-          if (tgt.animationValues && typeof tgt.animationValues === 'object') {
-            for (const nm of names) {
-              tgt.animationValues[nm] = v;
-              report.assignKnownFields++;
-            }
-          }
-          if (tgt.animations && typeof tgt.animations === 'object') {
-            for (const nm of names) {
-              tgt.animations[nm] = v;
-              report.assignKnownFields++;
-            }
-          }
-        }
-      } catch (e) { report.errors++; animDbgError('assign aliases', e); }
-    }
-
-    if (animDebugOn) {
-      for (const [k, v] of Object.entries(report)) animDbgCount(animDebugStats.methods, k, v);
-    }
-
-    return report;
-  }
-
-  function applyMatrix(node, mat16) {
-    try {
-      if (!node || !mat16 || mat16.length !== 16) return;
-      const writeField = (obj, key) => {
-        if (!obj || !(key in obj)) return;
-        const cur = obj[key];
-        if (cur && typeof cur.length === 'number' && cur.length >= 16) {
-          for (let i = 0; i < 16; i++) cur[i] = mat16[i];
-        } else if (window.Cesium?.Matrix4?.fromArray) {
-          obj[key] = window.Cesium.Matrix4.fromArray(mat16);
-        } else {
-          obj[key] = mat16;
-        }
-      };
-
-      const targets = [
-        node,
-        node.node,
-        node.runtimeNode,
-        node._runtimeNode,
-        node.transformNode,
-        node._transformNode
-      ].filter(Boolean);
-
-      const fields = [
-        'matrix', '_matrix',
-        'localMatrix', '_localMatrix',
-        'transform', '_transform',
-        'computedMatrix', '_computedMatrix',
-        'modelMatrix', '_modelMatrix'
-      ];
-
-      for (const t of targets) {
-        for (const f of fields) writeField(t, f);
-        if (typeof t.setMatrix === 'function') {
-          try { t.setMatrix(mat16); } catch { }
-        }
-        if (typeof t.setLocalMatrix === 'function') {
-          try { t.setLocalMatrix(mat16); } catch { }
-        }
-        if ('matrixDirty' in t) t.matrixDirty = true;
-        if ('_matrixDirty' in t) t._matrixDirty = true;
-      }
-    } catch {
-      // no-op
-    }
-  }
-
-  function setForcedGearMatrices(track, nodes, stateMap) {
-    if (!track) return;
-    const mats = new Map();
-    for (const name of nodes || []) {
-      const m = stateMap?.get?.(name);
-      if (m) mats.set(name, m);
-    }
-    track._forcedGear = {
-      enabled: mats.size > 0,
-      nodes: [...mats.keys()],
-      mats
-    };
-  }
-
-  function clearForcedGearMatrices(track) {
-    if (!track) return;
-    track._forcedGear = { enabled: false, nodes: [], mats: new Map() };
-  }
-
-  function applyForcedGearMatrices(track) {
-    const fg = track?._forcedGear;
-    if (!fg?.enabled || !fg.nodes?.length) return;
-    if (!track?._ghost?._model?.ready) return;
-    if (!track._nodeCache?.size) buildNodeCache(track);
-    for (const name of fg.nodes) {
-      const node = track._nodeCache.get(name);
-      const mat = fg.mats.get(name);
-      if (!node || !mat) continue;
-      applyMatrix(node, mat);
-      track._lastApplied.set(name, mat);
-    }
   }
 
   function detectNodeNames(ac) {
@@ -695,18 +397,35 @@
     const wheels = [];
     const doors = [];
     const ladder = [];
+    const seen = new Set();
+
+    const pushNode = (node, nameHint = '') => {
+      if (!node) return;
+      const key = String(node?.name || node?._name || node?.id || nameHint || '').toLowerCase();
+      if (key && seen.has(key)) return;
+      if (key) seen.add(key);
+
+      all.push(node);
+
+      const low = String(nameHint || node?.name || node?._name || node?.id || '').toLowerCase();
+      if (low.includes('ladder') || low.includes('stairs') || low.includes('boarding')) ladder.push(node);
+      if (low.includes('door') || low.includes('hatch') || low.includes('bay')) doors.push(node);
+      if (low.includes('wheel') || low.includes('bogie') || low.includes('truck') || low.includes('tire') || low.includes('tyre')) wheels.push(node);
+      if (low.includes('gear') || low.includes('strut') || low.includes('oleo') || low.includes('shock')) gear.push(node);
+    };
 
     for (const p of parts) {
       const nm = String(p?.name || p?.node || '');
       if (!nm) continue;
       const node = getNode(model, nm);
-      if (!node) continue;
-      all.push(node);
-      const low = nm.toLowerCase();
-      if (low.includes('ladder') || low.includes('stairs') || low.includes('boarding')) ladder.push(node);
-      if (low.includes('door') || low.includes('hatch') || low.includes('bay')) doors.push(node);
-      if (low.includes('wheel') || low.includes('bogie') || low.includes('truck') || low.includes('tire') || low.includes('tyre')) wheels.push(node);
-      if (low.includes('gear') || low.includes('strut') || low.includes('oleo') || low.includes('shock')) gear.push(node);
+      pushNode(node, nm);
+    }
+
+    const runtimeNames = collectModelNodeNames(model);
+    for (const nm of runtimeNames) {
+      if (!nm) continue;
+      const node = getNode(model, nm);
+      pushNode(node, nm);
     }
 
     track._nodeCache = { ready: true, all, gear, wheels, doors, ladder };
@@ -733,18 +452,25 @@
       setCategoryVisible(track, 'doors', false);
       setCategoryVisible(track, 'wheels', false);
       setCategoryVisible(track, 'gear', false);
-      hideLadderNodes(track);
     } else {
       setCategoryVisible(track, 'doors', true);
       setCategoryVisible(track, 'gear', true);
       setCategoryVisible(track, 'wheels', true);
-      hideLadderNodes(track);
     }
+    // Keep this last so ladder never reappears after any gear visibility changes.
+    hideLadderNodes(track);
   }
 
   function readGearUp(ac) {
-    const s = readAnimState(ac);
-    const g = Number(s?.gear);
+    const av = ac?.animationValues || geofs?.animation?.values;
+    if (!av) return false;
+    const raw = (
+      av.gear ??
+      av.landingGear ??
+      av.gearPosition ??
+      av.landing_gear
+    );
+    const g = Number(raw);
     return Number.isFinite(g) ? g > 0.5 : false;
   }
 
@@ -785,12 +511,50 @@
     return cloneLiveryId(ac?.liveryId ?? null);
   }
 
+  function readTextureUrl(tex) {
+    const candidates = [
+      tex?._source?._url,
+      tex?._url,
+      tex?.url,
+      tex?._image?._url,
+      tex?._image?.src,
+      tex?.source?.url
+    ];
+    for (const c of candidates) {
+      if (typeof c === 'string' && c.trim()) return c.trim();
+    }
+    return '';
+  }
+
+  function readCurrentLiverySnapshot(ac) {
+    const textures = ac?.object3d?.model?._model?._rendererResources?.textures;
+    if (!Array.isArray(textures) || !textures.length) return null;
+    const out = [];
+    for (let i = 0; i < textures.length; i++) {
+      const url = readTextureUrl(textures[i]);
+      if (!url) continue;
+      out.push({ index: i, url });
+    }
+    return out.length ? { textures: out } : null;
+  }
+
   function liveryAtIndex(track, idx) {
     const ev = track?.liveryEvents || [];
     let current = null;
     for (let i = 0; i < ev.length; i++) {
       if ((ev[i]?.t ?? -1) > idx) break;
       current = cloneLiveryId(ev[i]?.id ?? null);
+    }
+    return current;
+  }
+
+  function liverySnapshotAtIndex(track, idx) {
+    const ev = track?.liveryEvents || [];
+    let current = null;
+    for (let i = 0; i < ev.length; i++) {
+      if ((ev[i]?.t ?? -1) > idx) break;
+      const snap = ev[i]?.snapshot;
+      current = snap ? JSON.parse(JSON.stringify(snap)) : null;
     }
     return current;
   }
@@ -838,6 +602,57 @@
 
     // Use per-instance texture path (same strategy as LiverySelector multiplayer)
     // so we don't mutate shared model textures used by the player's own aircraft.
+    const applyTextureData = (dataUrl) => {
+      let didApply = false;
+      let used = '';
+      const failed = [];
+      const hasGhostChange = typeof ghost?.changeTexture === 'function';
+      const hasModelChange = typeof model?.changeTexture === 'function';
+      const protoChange = geofs?.api?.Model?.prototype?.changeTexture;
+      const hasProtoChange = typeof protoChange === 'function';
+      const hasApiChange = typeof geofs?.api?.changeModelTexture === 'function';
+
+      const tryApply = (label, fn) => {
+        if (didApply) return;
+        try {
+          fn();
+          didApply = true;
+          used = label;
+        } catch {
+          failed.push(label);
+        }
+      };
+
+      if (hasGhostChange) {
+        tryApply('ghost_obj', () => ghost.changeTexture(dataUrl, { index }));
+        tryApply('ghost_num', () => ghost.changeTexture(dataUrl, index));
+      }
+      if (hasModelChange) {
+        tryApply('model_obj', () => model.changeTexture(dataUrl, { index }));
+        tryApply('model_num', () => model.changeTexture(dataUrl, index));
+      }
+      if (hasProtoChange) {
+        tryApply('proto_num', () => protoChange.call(ghost, dataUrl, index, ghost));
+        tryApply('proto_obj', () => protoChange.call(ghost, dataUrl, { index }, ghost));
+      }
+      if (hasApiChange) {
+        tryApply('api_num', () => geofs.api.changeModelTexture(model, dataUrl, index));
+        tryApply('api_obj', () => geofs.api.changeModelTexture(model, dataUrl, { index }));
+      }
+
+      pushLiveryDebug(track, {
+        event: 'texture_api',
+        sig: track?._livery?.pendingSig || track?._livery?.appliedSig || '',
+        prefer: used || 'none',
+        firstPath: `idx_${Number(index)}`,
+        firstOps: didApply ? 1 : 0,
+        ok: didApply,
+        reason: `g${hasGhostChange ? 1 : 0}m${hasModelChange ? 1 : 0}p${hasProtoChange ? 1 : 0}a${hasApiChange ? 1 : 0};fail=${failed.join(',') || '-'}`
+      });
+
+      return didApply;
+    };
+
     Cesium.Resource.fetchImage({ url: textureUrl })
       .then((img) => {
         const canvas = document.createElement('canvas');
@@ -847,27 +662,18 @@
         if (!ctx) return;
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         const dataUrl = canvas.toDataURL('image/png');
-
-        try {
-          if (typeof ghost.changeTexture === 'function') {
-            ghost.changeTexture(dataUrl, { index });
-            return;
-          }
-        } catch {
-          // fallback below
-        }
-
-        try {
-          if (typeof model.changeTexture === 'function') {
-            model.changeTexture(dataUrl, { index });
-            return;
-          }
-        } catch {
-          // fallback below
-        }
+        applyTextureData(dataUrl);
       })
       .catch(() => {
-        // ignore remote texture fetch errors
+        pushLiveryDebug(track, {
+          event: 'texture_api',
+          sig: track?._livery?.pendingSig || track?._livery?.appliedSig || '',
+          prefer: 'fetch_image',
+          firstPath: `idx_${Number(index)}`,
+          firstOps: 0,
+          ok: false,
+          reason: 'fetch_failed'
+        });
       });
   }
 
@@ -883,10 +689,116 @@
     }
   }
 
-  async function applyTrackLivery(track, liveryId) {
-    if (!track?._ghost?._model?.ready) return;
+  async function generateMosaicTexture(baseUrl, tiles, textures) {
+    try {
+      if (!baseUrl || !Array.isArray(tiles) || !tiles.length || !Array.isArray(textures)) return null;
+      const baseImage = await Cesium.Resource.fetchImage({ url: baseUrl });
+      if (!baseImage) return null;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = Number(baseImage.width) || 1024;
+      canvas.height = Number(baseImage.height) || 1024;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+
+      ctx.drawImage(baseImage, 0, 0, canvas.width, canvas.height);
+
+      for (const tile of tiles) {
+        const src = textures?.[tile?.textureIndex];
+        if (!src || typeof src !== 'string') continue;
+        const img = await Cesium.Resource.fetchImage({ url: src });
+        if (!img) continue;
+        ctx.drawImage(
+          img,
+          Number(tile?.sx) || 0,
+          Number(tile?.sy) || 0,
+          Number(tile?.sw) || img.width,
+          Number(tile?.sh) || img.height,
+          Number(tile?.dx) || 0,
+          Number(tile?.dy) || 0,
+          Number(tile?.dw) || img.width,
+          Number(tile?.dh) || img.height
+        );
+      }
+
+      return canvas.toDataURL('image/png');
+    } catch {
+      return null;
+    }
+  }
+
+  function applyTrackLiverySnapshot(track, snapshot) {
+    const items = Array.isArray(snapshot?.textures) ? snapshot.textures : [];
+    let ops = 0;
+    for (const item of items) {
+      const idx = Number(item?.index);
+      const url = String(item?.url || '');
+      if (!Number.isFinite(idx) || !url) continue;
+      changeGhostModelTexture(track, url, idx);
+      ops++;
+    }
+    return ops;
+  }
+
+  async function applyTrackLivery(track, liveryId, snapshot) {
+    const reqSig = liverySig(liveryId);
+    const lastAppliedSig = track?._livery?.appliedSig || null;
+    if (
+      track?._livery &&
+      lastAppliedSig &&
+      reqSig &&
+      lastAppliedSig !== reqSig &&
+      track._livery.resetSig !== reqSig
+    ) {
+      track._livery.resetSig = reqSig;
+      resetGhostForNewLivery(track);
+      pushLiveryDebug(track, {
+        event: 'apply',
+        sig: reqSig,
+        ok: false,
+        reason: 'ghost_reset_for_new_livery'
+      });
+      return false;
+    }
+
+    if (!track?._ghost?._model?.ready) {
+      pushLiveryDebug(track, {
+        event: 'apply',
+        sig: reqSig,
+        ok: false,
+        reason: 'model_not_ready'
+      });
+      return false;
+    }
+
+    const snapshotOps = applyTrackLiverySnapshot(track, snapshot);
+    if (snapshotOps > 0) {
+      pushLiveryDebug(track, {
+        event: 'apply',
+        sig: reqSig,
+        prefer: 'snapshot',
+        indexPotential: snapshotOps,
+        mpPotential: 0,
+        firstPath: 'snapshot',
+        firstOps: snapshotOps,
+        secondPath: '',
+        secondOps: 0,
+        ok: true,
+        reason: 'applied_recorded_snapshot'
+      });
+      return true;
+    }
+
     const entry = getLiverySelectorAircraftEntry(track);
-    if (!entry) return;
+    if (!entry) {
+      pushLiveryDebug(track, {
+        event: 'apply',
+        sig: reqSig,
+        ok: false,
+        reason: 'no_livery_entry'
+      });
+      return false;
+    }
 
     let livery = null;
     if (typeof liveryId === 'object' && liveryId) {
@@ -894,40 +806,245 @@
       livery = va?.livery || null;
     } else {
       const idNum = Number(liveryId);
-      if (!Number.isFinite(idNum)) return;
+      if (!Number.isFinite(idNum)) {
+        pushLiveryDebug(track, {
+          event: 'apply',
+          sig: reqSig,
+          ok: false,
+          reason: 'invalid_livery_id'
+        });
+        return false;
+      }
       const idx = idNum >= LIVERY_ID_OFFSET ? idNum - LIVERY_ID_OFFSET : idNum;
       livery = entry?.liveries?.[idx] || null;
     }
-    if (!livery) return;
+    if (!livery) {
+      pushLiveryDebug(track, {
+        event: 'apply',
+        sig: reqSig,
+        ok: false,
+        reason: 'livery_not_found'
+      });
+      return false;
+    }
 
-    const parts = Array.isArray(entry.parts) ? entry.parts : [];
     const indices = Array.isArray(entry.index) ? entry.index : [];
     const textures = Array.isArray(livery.texture) ? livery.texture : [];
     const mats = livery.materials || {};
     const model = track._ghost._model;
 
-    for (let i = 0; i < textures.length; i++) {
-      const tx = textures[i];
-      if (tx && typeof tx === 'object' && tx.material != null) {
-        const mat = mats?.[tx.material];
-        if (mat) applyGhostMaterial(model, mat);
-        continue;
+    const mpMap = Array.isArray(entry.mp) ? entry.mp : [];
+
+    const applyByIndex = (skipModelIndices) => {
+      let ops = 0;
+      const touchedModelIndices = new Set();
+      for (let i = 0; i < textures.length; i++) {
+        const tx = textures[i];
+        if (tx && typeof tx === 'object' && tx.material != null) {
+          const mat = mats?.[tx.material];
+          if (mat) {
+            applyGhostMaterial(model, mat);
+            ops++;
+          }
+          continue;
+        }
+        if (typeof tx !== 'string' || !tx) continue;
+        const modelIndex = Number(indices[i]);
+        if (!Number.isFinite(modelIndex)) continue;
+        if (skipModelIndices?.has(modelIndex)) continue;
+        changeGhostModelTexture(track, tx, modelIndex);
+        ops++;
+        touchedModelIndices.add(modelIndex);
       }
-      if (typeof tx !== 'string' || !tx) continue;
-      const modelIndex = Number(indices[i]);
-      if (!Number.isFinite(modelIndex)) continue;
-      changeGhostModelTexture(track, tx, modelIndex);
+      return { ops, touchedModelIndices };
+    };
+
+    const applyByMp = async (skipModelIndices) => {
+      let ops = 0;
+      const touchedModelIndices = new Set();
+      for (const mapItem of mpMap) {
+        if (mapItem?.textureIndex != null && mapItem?.modelIndex != null) {
+          const tx = textures[Number(mapItem.textureIndex)];
+          const modelIndex = Number(mapItem.modelIndex);
+          if (skipModelIndices?.has(modelIndex)) continue;
+          if (typeof tx === 'string' && tx && Number.isFinite(modelIndex)) {
+            changeGhostModelTexture(track, tx, modelIndex);
+            ops++;
+            touchedModelIndices.add(modelIndex);
+          }
+          continue;
+        }
+        if (mapItem?.mosaic && mapItem?.modelIndex != null) {
+          const mosaicUrl = await generateMosaicTexture(
+            mapItem.mosaic.base,
+            mapItem.mosaic.tiles,
+            textures
+          );
+          const modelIndex = Number(mapItem.modelIndex);
+          if (skipModelIndices?.has(modelIndex)) continue;
+          if (mosaicUrl && Number.isFinite(modelIndex)) {
+            changeGhostModelTexture(track, mosaicUrl, modelIndex);
+            ops++;
+            touchedModelIndices.add(modelIndex);
+          }
+          continue;
+        }
+        if (mapItem?.material != null) {
+          const mat = mats?.[mapItem.material];
+          if (mat) {
+            applyGhostMaterial(model, mat);
+            ops++;
+          }
+        }
+      }
+      return { ops, touchedModelIndices };
+    };
+
+    const indexPotential = textures.reduce((n, tx, i) => {
+      if (tx && typeof tx === 'object' && tx.material != null) return n + (mats?.[tx.material] ? 1 : 0);
+      if (typeof tx === 'string' && tx && Number.isFinite(Number(indices[i]))) return n + 1;
+      return n;
+    }, 0);
+
+    const mpPotential = mpMap.reduce((n, mapItem) => {
+      if (mapItem?.textureIndex != null && mapItem?.modelIndex != null) {
+        const tx = textures[Number(mapItem.textureIndex)];
+        return n + (typeof tx === 'string' && tx && Number.isFinite(Number(mapItem.modelIndex)) ? 1 : 0);
+      }
+      if (mapItem?.mosaic && mapItem?.modelIndex != null) {
+        return n + (Number.isFinite(Number(mapItem.modelIndex)) ? 1 : 0);
+      }
+      if (mapItem?.material != null) {
+        return n + (mats?.[mapItem.material] ? 1 : 0);
+      }
+      return n;
+    }, 0);
+
+    const texLabelIdx = Array.isArray(entry.labels)
+      ? entry.labels.findIndex((x) => String(x || '').toLowerCase() === 'texture')
+      : -1;
+    const indexTextureHint = texLabelIdx >= 0 && Number.isFinite(Number(indices[texLabelIdx])) ? 1 : 0;
+    const mpTextureHint = texLabelIdx >= 0 && mpMap.some((m) => Number(m?.textureIndex) === texLabelIdx) ? 1 : 0;
+
+    const indexScore = indexPotential + indexTextureHint;
+    const mpScore = mpPotential + mpTextureHint;
+    const preferMp = mpScore > indexScore;
+
+    const firstPath = preferMp ? 'mp' : 'index';
+    const secondPath = preferMp ? 'index' : 'mp';
+    const decisionReason = preferMp
+      ? (mpTextureHint > indexTextureHint ? 'prefer_mp_texture_hint' : 'prefer_mp_score')
+      : (indexTextureHint > mpTextureHint ? 'prefer_index_texture_hint' : 'prefer_index_score');
+
+    let firstOps = 0;
+    let secondOps = 0;
+    let ok = false;
+
+    if (preferMp) {
+      const mpRes = await applyByMp();
+      firstOps = mpRes.ops;
+      if (firstOps > 0) {
+        ok = true;
+      } else {
+        const indexRes = applyByIndex();
+        secondOps = indexRes.ops;
+        ok = secondOps > 0;
+      }
+    } else {
+      const indexRes = applyByIndex();
+      firstOps = indexRes.ops;
+      if (firstOps > 0) {
+        ok = true;
+      } else {
+        const mpRes = await applyByMp();
+        secondOps = mpRes.ops;
+        ok = secondOps > 0;
+      }
     }
+
+    if (ok && firstOps > 0) {
+      pushLiveryDebug(track, {
+        event: 'apply',
+        sig: reqSig,
+        prefer: firstPath,
+        indexPotential,
+        mpPotential,
+        firstPath,
+        firstOps,
+        secondPath,
+        secondOps,
+        ok: true,
+        reason: `applied_first_path_${decisionReason}`
+      });
+      return true;
+    }
+
+    pushLiveryDebug(track, {
+      event: 'apply',
+      sig: reqSig,
+      prefer: firstPath,
+      indexPotential,
+      mpPotential,
+      firstPath,
+      firstOps,
+      secondPath,
+      secondOps,
+      ok,
+      reason: ok ? `applied_second_path_${decisionReason}` : `no_ops_applied_${decisionReason}`
+    });
+    return ok;
   }
 
-  function requestApplyTrackLivery(track, liveryId) {
+  function requestApplyTrackLivery(track, liveryId, snapshot) {
     if (!track?._livery || track._livery.applying) return;
+    const reqSig = liverySig(liveryId);
+    if (reqSig && track._livery.appliedSig === reqSig) return;
     track._livery.applying = true;
-    Promise.resolve(applyTrackLivery(track, liveryId))
+    Promise.resolve(applyTrackLivery(track, liveryId, snapshot))
+      .then((ok) => {
+        if (!track?._livery) return;
+        pushLiveryDebug(track, {
+          event: 'request_result',
+          sig: reqSig,
+          ok: !!ok,
+          reason: ok ? 'request_ok' : 'request_failed'
+        });
+        if (!ok) return;
+        track._livery.appliedSig = reqSig || null;
+        track._livery.resetSig = reqSig || null;
+        if (!reqSig || track._livery.pendingSig === reqSig) {
+          track._livery.pendingId = null;
+          track._livery.pendingSnapshot = null;
+          track._livery.pendingSig = null;
+        }
+      })
       .catch(() => { })
       .finally(() => {
         if (track?._livery) track._livery.applying = false;
       });
+  }
+
+  function updateLiveryDebugUi() {
+    if (!guiWin || guiWin.closed || !gui.liveryDbg) return;
+    const active = tracks.filter((t) => t?._play?.playing);
+    if (!active.length) {
+      gui.liveryDbg.textContent = 'FRDBG|info=no_active_playback';
+      return;
+    }
+    const lines = [];
+    for (const tr of active) {
+      const dbg = tr?._livery?.debug;
+      const applyLine = dbg?.lastApplyLine || '';
+      const texLine = dbg?.lastTextureLine || '';
+      const requestLine = dbg?.lastRequestLine || '';
+      if (applyLine) lines.push(applyLine);
+      if (texLine) lines.push(texLine);
+      if (requestLine) lines.push(requestLine);
+      if (!applyLine && !texLine && !requestLine) {
+        lines.push(`FRDBG|track=${toDebugSafe(tr?.id || '')}|aircraft=${toDebugSafe(tr?.aircraftId || '')}|event=none|reason=no_debug_yet`);
+      }
+    }
+    gui.liveryDbg.textContent = lines.join('\n');
   }
 
   /* ---------- Recording ---------- */
@@ -975,6 +1092,21 @@
     }
 
     const strength01 = clamp(Number(ultraStrength) || 0, 0, 100) / 100;
+    if (strength01 <= 0) {
+      const i1 = clamp(Math.floor(idxFloat), 0, n - 1);
+      const i2 = clamp(i1 + 1, 0, n - 1);
+      const f = clamp(idxFloat - i1, 0, 1);
+      const outL = track._pool.tmpA;
+      interpLLA(track.lla[i1], track.lla[i2], f, outL);
+      return {
+        lla: [outL[0], outL[1], outL[2]],
+        htr: [
+          lerpAngleDeg(track.htr[i1][0], track.htr[i2][0], f),
+          lerpAngleDeg(track.htr[i1][1], track.htr[i2][1], f),
+          lerpAngleDeg(track.htr[i1][2], track.htr[i2][2], f)
+        ]
+      };
+    }
     const strengthEff = strength01 * 2; // 0..2 (50% ~= old 100%)
     const key = `${n}|${Math.max(1, track.sampleMs)}|${Math.round(strengthEff * 1000)}`;
 
@@ -1091,49 +1223,14 @@
     };
   }
 
-  function warmupTrackNodes(track, liveModel, dtStep) {
-    const rec = track._rec;
-    rec.warmAcc += dtStep;
-    if (rec.warmAcc < DISCOVERY_STEP_MS) return;
-    rec.warmAcc = 0;
-
-    const dynamicNames = collectModelNodeNames(liveModel);
-    if (dynamicNames.length) {
-      const warmSet = new Set(rec.warmNames);
-      for (const n of dynamicNames) {
-        if (isLadderName(n)) continue;
-        if (track._nodeNameSet.has(n)) continue;
-        if (!warmSet.has(n)) {
-          rec.warmNames.push(n);
-          warmSet.add(n);
-        }
-      }
-    }
-
-    for (const name of rec.warmNames) {
-      const node = getNode(liveModel, name);
-      if (!node || isLadderName(name)) continue;
-      const mat = matrixFromNode(node);
-      if (!mat) continue;
-
-      const prev = rec.warmPrev.get(name);
-      if (prev && matrixChanged(mat, prev)) {
-        if (!track._nodeNameSet.has(name)) {
-          track._nodeNameSet.add(name);
-          track._nodeNames.push(name);
-        }
-      }
-      rec.warmPrev.set(name, mat);
-    }
-  }
-
   function startRecordingInternal(t0) {
     const ac = geofs?.aircraft?.instance;
     if (!ac) return alert('No active aircraft.');
     const modelUrl = ac?.object3d?.model?._model?._resource?.url;
     if (!modelUrl) return alert('No model URL found.');
 
-    const tr = makeTrackBase(ac, defaultSampleMs);
+    const fallbackCallsign = sanitizeCallsign(geofs?.userRecord?.callsign || geofs?.callsign || '');
+    const tr = makeTrackBase(ac, defaultSampleMs, recordCallsign || fallbackCallsign);
     initTrackRuntime(tr);
     tr.modelUrl = modelUrl;
 
@@ -1156,17 +1253,13 @@
     tr._rec.lastT = t0;
     tr._rec.recording = true;
     const initialLivery = readCurrentLiveryId(ac);
+    const initialSnapshot = readCurrentLiverySnapshot(ac);
     tr._rec.lastLiverySig = liverySig(initialLivery);
-    tr.liveryEvents.push({ t: 0, id: initialLivery });
+    tr.liveryEvents.push({ t: 0, id: initialLivery, snapshot: initialSnapshot });
 
     currentRec = tr;
     recordState = 'RECORDING';
     updateUi();
-  }
-
-  function startRecording() {
-    if (!canStartRecording()) return;
-    startRecordingInternal(now());
   }
 
   function startRecordingAt(t0) {
@@ -1182,6 +1275,7 @@
       orderId: currentRec.orderId,
       id: currentRec.id,
       name: currentRec.name,
+      callsign: sanitizeCallsign(currentRec.callsign || ''),
       description: currentRec.description || '',
       createdAt: currentRec.createdAt,
       aircraftId: currentRec.aircraftId,
@@ -1202,11 +1296,6 @@
     recordState = 'IDLE';
     saveToLocalStorage();
     updateUi();
-  }
-
-  function getStoredDeltaStats(track) {
-    const gearChanges = (track?.gearEvents || []).length;
-    return { frames: gearChanges, nodeWrites: 0, topNodes: '-', topNonWheel: '-' };
   }
 
   function recordFixedStep(track, dt) {
@@ -1246,20 +1335,78 @@
         rec.lastGearUp = upNow;
       }
 
-      const liveryNow = readCurrentLiveryId(ac);
-      const sigNow = liverySig(liveryNow);
-      if (rec.lastLiverySig == null || rec.lastLiverySig !== sigNow) {
-        track.liveryEvents.push({ t: rec.sampleCount, id: liveryNow });
-        rec.lastLiverySig = sigNow;
-      }
-
       rec.sampleCount++;
     }
   }
 
   /* ---------- Playback ---------- */
-  function canStartPlayback() {
-    return recordState === 'IDLE' && playState === 'IDLE';
+  function getTrackCallsign(track) {
+    return sanitizeCallsign(track?.callsign || '');
+  }
+
+  function destroyGhostCallsignLabel(track) {
+    const entity = track?._ghostLabel;
+    if (!entity) return;
+    try {
+      const viewer = geofs?.api?.viewer;
+      viewer?.entities?.remove?.(entity);
+    } catch {
+      // ignore cleanup failures
+    }
+    track._ghostLabel = null;
+  }
+
+  function ensureGhostCallsignLabel(track, lla) {
+    if (!showCallsign) {
+      destroyGhostCallsignLabel(track);
+      return;
+    }
+    const callsign = getTrackCallsign(track);
+    if (!callsign) {
+      destroyGhostCallsignLabel(track);
+      return;
+    }
+
+    const viewer = geofs?.api?.viewer;
+    const entities = viewer?.entities;
+    if (!entities || !window.Cesium?.Cartesian3?.fromDegrees) return;
+
+    const lat = Number(lla?.[0]);
+    const lon = Number(lla?.[1]);
+    const alt = Number(lla?.[2]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(alt)) return;
+
+    const pos = window.Cesium.Cartesian3.fromDegrees(lon, lat, alt + 4);
+    if (!track._ghostLabel) {
+      try {
+        track._ghostLabel = entities.add({
+          position: pos,
+          label: {
+            text: callsign,
+            fillColor: window.Cesium.Color.WHITE,
+            outlineColor: window.Cesium.Color.BLACK,
+            outlineWidth: 3,
+            style: window.Cesium.LabelStyle.FILL_AND_OUTLINE,
+            showBackground: false,
+            backgroundColor: new window.Cesium.Color(0, 0, 0, 0.35),
+            horizontalOrigin: window.Cesium.HorizontalOrigin.CENTER,
+            verticalOrigin: window.Cesium.VerticalOrigin.TOP,
+            pixelOffset: new window.Cesium.Cartesian2(0, -8),
+            scale: 0.55,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY
+          }
+        });
+      } catch {
+        track._ghostLabel = null;
+      }
+    } else {
+      try {
+        track._ghostLabel.position = pos;
+        if (track._ghostLabel.label) track._ghostLabel.label.text = callsign;
+      } catch {
+        // ignore runtime failures
+      }
+    }
   }
 
   function spawnGhost(track) {
@@ -1279,54 +1426,15 @@
     }
   }
 
-  function resetDeltaCursor(track) {
-    track._play.deltaCursor = { b: 0, s: 0, next: null };
-    advanceDeltaCursor(track);
-  }
-
-  function advanceDeltaCursor(track) {
-    const c = track._play.deltaCursor;
-    while (c.b < track.blocks.length) {
-      const blk = track.blocks[c.b] || [];
-      if (c.s < blk.length) {
-        c.next = blk[c.s];
-        return;
-      }
-      c.b++;
-      c.s = 0;
+  function resetGhostForNewLivery(track) {
+    if (!track) return;
+    if (track._ghost) {
+      try { track._ghost.destroy(); } catch { }
     }
-    c.next = null;
-  }
-
-  function applyDeltasUntil(track, idx) {
-    const c = track._play.deltaCursor;
-    while (c.next && c.next.t <= idx) {
-      const delta = c.next;
-      const changes = delta.m || {};
-
-      if (!track._nodeCache?.size) buildNodeCache(track);
-
-      for (const nodeName of Object.keys(changes)) {
-        if (isLadderName(nodeName)) continue;
-        const node = track._nodeCache.get(nodeName);
-        if (!node) continue;
-        const mat = changes[nodeName];
-        applyMatrix(node, mat);
-        track._lastApplied.set(nodeName, mat);
-      }
-
-      c.s++;
-      advanceDeltaCursor(track);
-    }
-  }
-
-  function applyLastMatrices(track) {
-    if (!track._nodeCache?.size) buildNodeCache(track);
-    for (const [nodeName, mat] of track._lastApplied) {
-      const node = track._nodeCache.get(nodeName);
-      if (!node) continue;
-      applyMatrix(node, mat);
-    }
+    track._ghost = null;
+    track._nodeCache = { ready: false, all: [], gear: [], wheels: [], doors: [], ladder: [] };
+    track._lastGearUp = null;
+    spawnGhost(track);
   }
 
   function setGhostPose(track, lla, htr) {
@@ -1343,10 +1451,28 @@
     H[1] = finiteOr(htr?.[1], finiteOr(htr0[1], 0));
     H[2] = finiteOr(htr?.[2], finiteOr(htr0[2], 0));
     try { g.setPositionOrientationAndScale(L, H, null); } catch { }
+    ensureGhostCallsignLabel(track, L);
   }
 
   function poseAt(track, i1, i2, f, dt) {
     const idxFloat = i1 + clamp(f, 0, 1);
+    if (playbackSliderDragging) {
+      const aL = track?.lla?.[i1] || track?.lla?.[0] || [0, 0, 0];
+      const bL = track?.lla?.[i2] || aL;
+      const aH = track?.htr?.[i1] || track?.htr?.[0] || [0, 0, 0];
+      const bH = track?.htr?.[i2] || aH;
+      const ff = clamp(f, 0, 1);
+      const outL = track._pool.tmpB;
+      interpLLA(aL, bL, ff, outL);
+      return {
+        lla: [outL[0], outL[1], outL[2]],
+        htr: [
+          lerpAngleDeg(aH[0], bH[0], ff),
+          lerpAngleDeg(aH[1], bH[1], ff),
+          lerpAngleDeg(aH[2], bH[2], ff)
+        ]
+      };
+    }
     return applyPrecisionVisualFilter(track, idxFloat);
   }
 
@@ -1364,15 +1490,22 @@
     track._lastGearUp = null;
     if (track._livery) {
       track._livery.lastSig = null;
+      track._livery.appliedSig = null;
+      track._livery.resetSig = null;
+      track._livery.pendingId = null;
+      track._livery.pendingSnapshot = null;
+      track._livery.pendingSig = null;
       track._livery.applying = false;
+      const initialLivery = liveryAtIndex(track, 0);
+      const initialSnapshot = liverySnapshotAtIndex(track, 0);
+      const initialSig = liverySig(initialLivery);
+      track._livery.lastSig = initialSig;
+      track._livery.pendingId = initialLivery;
+      track._livery.pendingSnapshot = initialSnapshot;
+      track._livery.pendingSig = initialSig;
+      if (initialLivery != null) requestApplyTrackLivery(track, initialLivery, initialSnapshot);
     }
     updatePlayState();
-  }
-
-  function startPlayback(track) {
-    if (!canStartPlayback()) return;
-    startPlaybackInternal(track, now());
-    updateUi();
   }
 
   function startPlaybackAt(track, t0) {
@@ -1403,11 +1536,17 @@
     if (track._ghost) {
       try { track._ghost.destroy(); } catch { }
     }
+    destroyGhostCallsignLabel(track);
     track._ghost = null;
     track._nodeCache = { ready: false, all: [], gear: [], wheels: [], doors: [], ladder: [] };
     track._lastGearUp = null;
     if (track._livery) {
       track._livery.lastSig = null;
+      track._livery.appliedSig = null;
+      track._livery.resetSig = null;
+      track._livery.pendingId = null;
+      track._livery.pendingSnapshot = null;
+      track._livery.pendingSig = null;
       track._livery.applying = false;
     }
     updatePlayState();
@@ -1436,51 +1575,29 @@
 
     setGhostPose(track, pose.lla, pose.htr);
 
-    const liveryNow = liveryAtIndex(track, i1);
-    const sigNow = liverySig(liveryNow);
-    if (track._livery && track._livery.lastSig !== sigNow) {
-      track._livery.lastSig = sigNow;
-      requestApplyTrackLivery(track, liveryNow);
+    if (track._livery && !track._livery.applying && track._livery.pendingId != null) {
+      const ps = track._livery.pendingSig || liverySig(track._livery.pendingId);
+      if (!ps || track._livery.appliedSig !== ps) {
+        requestApplyTrackLivery(track, track._livery.pendingId, track._livery.pendingSnapshot);
+      } else {
+        track._livery.pendingId = null;
+        track._livery.pendingSnapshot = null;
+        track._livery.pendingSig = null;
+      }
     }
 
     const upNow = gearUpAtIndex(track, i1);
     if (track._lastGearUp == null || track._lastGearUp !== upNow) {
       applyGearState(track, upNow);
       track._lastGearUp = upNow;
+      // Enforce hidden as the final step after every gear change.
+      hideLadderNodes(track);
     }
     hideLadderNodes(track);
 
     if (i1 >= last) {
       p.paused = true;
     }
-  }
-
-  function applyTrackAtIndex(track, idx) {
-    if (!track?._ghost?._model?.ready) return false;
-    const last = (track.lla?.length || 0) - 1;
-    if (last < 0) return false;
-
-    const targetIdx = clamp(Math.floor(idx), 0, last);
-    if (!track._nodeCache?.size) buildNodeCache(track);
-
-    if (track._play?.idx > targetIdx) {
-      track._lastApplied = new Map();
-      resetDeltaCursor(track);
-    }
-
-    applyDeltasUntil(track, targetIdx);
-
-    const i1 = targetIdx;
-    const i2 = clamp(i1 + 1, 0, last);
-    const pose = poseAt(track, i1, i2, 0, 16);
-    if (pose?.lla && pose?.htr) {
-      setGhostPose(track, pose.lla, pose.htr);
-    }
-
-    applyLastMatrices(track);
-    hideLadderNodes(track);
-    if (track._play) track._play.idx = targetIdx;
-    return true;
   }
 
   function findClosestGearSampleIndex(track, target) {
@@ -1497,34 +1614,6 @@
       }
     }
     return { idx: bestIdx, err: bestErr };
-  }
-  function applyGearStateFromSample(track, sampleIdx) {
-    if (!track?._ghost?._model?.ready) return false;
-    const idx = clamp(Math.floor(sampleIdx), 0, Math.max(0, (track?.lla?.length || 1) - 1));
-
-    if (!track._gearProfile) track._gearProfile = buildGearProfile(track);
-    const nodes = track?._gearProfile?.nodes || [];
-    if (!nodes.length) return false;
-
-    if (!track._nodeCache?.size) buildNodeCache(track);
-
-    const state = buildMatrixStateAt(track, idx);
-    setForcedGearMatrices(track, nodes, state);
-    let cacheHits = 0;
-    let appliedNow = 0;
-    for (const name of nodes) {
-      const mat = state.get(name);
-      if (!mat) continue;
-      const node = track._nodeCache.get(name);
-      if (!node) continue;
-      cacheHits++;
-      applyMatrix(node, mat);
-      appliedNow++;
-      track._lastApplied.set(name, mat);
-    }
-
-    hideLadderNodes(track);
-    return { ok: true, cacheHits, appliedNow, forcedNodes: track._forcedGear?.nodes?.length || 0 };
   }
 
   function testGhostGearState(target) {
@@ -1575,117 +1664,23 @@
     return STRICT_GEAR_NODE_HINTS.some((h) => s.includes(h));
   }
 
-  function buildGearProfile(track) {
-    if (!track?.blocks?.length) return null;
-
-    const targets = [0, 0.5, 1];
-    const keyframes = [];
-    for (const t of targets) {
-      const m = findClosestGearSampleIndex(track, t);
-      if (m.idx < 0) continue;
-      keyframes.push({
-        gear: t,
-        idx: m.idx,
-        err: m.err,
-        state: buildMatrixStateAt(track, m.idx)
-      });
-    }
-    if (!keyframes.length) return null;
-
-    // Use in/out diff to determine meaningful candidate nodes.
-    const inK = keyframes.find((k) => k.gear === 0) || keyframes[0];
-    const outK = keyframes.find((k) => k.gear === 1) || keyframes[keyframes.length - 1];
-    const names = new Set([...(inK?.state?.keys?.() || []), ...(outK?.state?.keys?.() || [])]);
-    const strictNodes = [];
-    const relaxedNodes = [];
-    for (const n of names) {
-      if (isLadderName(n) || isNoiseNodeName(n)) continue;
-      if (isGlobalLikeNodeName(n)) continue;
-      if (!isGearCandidateName(n)) continue;
-      const score = matrixDiffScore(inK.state.get(n), outK.state.get(n));
-      if (!Number.isFinite(score) || score <= EPS) continue;
-      if (isStrictGearNodeName(n)) strictNodes.push({ name: n, score });
-      else relaxedNodes.push({ name: n, score });
-    }
-    strictNodes.sort((a, b) => b.score - a.score);
-    relaxedNodes.sort((a, b) => b.score - a.score);
-    const nodes = strictNodes.length >= 3
-      ? strictNodes
-      : [...strictNodes, ...relaxedNodes];
-    if (!nodes.length) return null;
-
-    return {
-      nodes: nodes.slice(0, 24).map((n) => n.name),
-      keyframes
-    };
-  }
-
-  function applyGearProfile(track, gearValue) {
-    const profile = track?._gearProfile;
-    if (!profile?.nodes?.length || !profile?.keyframes?.length) return;
-    if (!track._nodeCache?.size) buildNodeCache(track);
-
-    const g = clamp(Number(gearValue) || 0, 0, 1);
-    let best = profile.keyframes[0];
-    let bestErr = Math.abs(g - best.gear);
-    for (const k of profile.keyframes) {
-      const e = Math.abs(g - k.gear);
-      if (e < bestErr) {
-        best = k;
-        bestErr = e;
-      }
-    }
-
-    for (const name of profile.nodes) {
-      const mat = best.state.get(name);
-      if (!mat) continue;
-      const node = track._nodeCache.get(name);
-      if (!node) continue;
-      applyMatrix(node, mat);
-      track._lastApplied.set(name, mat);
-    }
-  }
-
-  function analyzeGearNodes() {
-    const active = tracks.find((t) => t._play?.playing && t._ghost?._model?.ready);
-    if (!active) {
-      alert('No active ghost playback. Start a playback first.');
-      return;
-    }
-
-    const inMatch = findClosestGearSampleIndex(active, 0);
-    const outMatch = findClosestGearSampleIndex(active, 1);
-    if (inMatch.idx < 0 || outMatch.idx < 0) {
-      alert('Could not find both gear-in and gear-out samples in this track.');
-      return;
-    }
-
-    const inState = buildMatrixStateAt(active, inMatch.idx);
-    const outState = buildMatrixStateAt(active, outMatch.idx);
-    const names = new Set([...inState.keys(), ...outState.keys()]);
-    const diffs = [];
-    for (const n of names) {
-      if (isLadderName(n) || isNoiseNodeName(n)) continue;
-      const score = matrixDiffScore(inState.get(n), outState.get(n));
-      if (!Number.isFinite(score) || score <= EPS) continue;
-      diffs.push({ name: n, score });
-    }
-    diffs.sort((a, b) => b.score - a.score);
-    const top = diffs.slice(0, 10);
-
-    const summary = top.length
-      ? top.map((x) => `${x.name}:${x.score.toFixed(4)}`).join(', ')
-      : '(none)';
-
-    gui.mtInfo.textContent = `Gear node analysis • inIdx=${inMatch.idx} outIdx=${outMatch.idx} • candidates=${top.length} • ${summary}`;
-    const profile = buildGearProfile(active);
-    active._gearProfile = profile;
-    if (profile?.nodes?.length) {
-      gui.mtInfo.textContent += ` • profileNodes=${profile.nodes.length} • profileKeys=${profile.keyframes.length}`;
-    }
-  }
-
   /* ---------- Storage ---------- */
+  function saveRecorderPrefs() {
+    try {
+      localStorage.setItem(LS_CALLSIGN_KEY, sanitizeCallsign(recordCallsign || ''));
+    } catch {
+      // ignore storage failures
+    }
+  }
+
+  function loadRecorderPrefs() {
+    try {
+      recordCallsign = sanitizeCallsign(localStorage.getItem(LS_CALLSIGN_KEY) || '');
+    } catch {
+      recordCallsign = '';
+    }
+  }
+
   function saveToLocalStorage() {
     try {
       localStorage.setItem(LS_KEY, JSON.stringify(buildProject()));
@@ -1707,6 +1702,7 @@
           orderId: t.orderId,
           id: t.id,
           name: t.name,
+          callsign: t.callsign || '',
           description: t.description || '',
           createdAt: t.createdAt,
           aircraftId: t.aircraftId,
@@ -1752,6 +1748,7 @@
             orderId: t.orderId,
             id: t.id,
             name: t.name || 'Imported',
+            callsign: t.callsign || '',
             description: t.description || '',
             createdAt: t.createdAt,
             aircraftId: t.aircraftId,
@@ -1791,15 +1788,6 @@
       if (tr?.lla?.length) out.push(tr);
     }
     return out;
-  }
-
-  function startFormationSelected() {
-    if (!(recordState === 'IDLE' && playState === 'IDLE')) return;
-    const selected = getSelectedTracks();
-    if (!selected.length) return alert('Select at least one track.');
-    const t0 = now();
-    for (const tr of selected) startPlaybackAt(tr, t0);
-    updateUi();
   }
 
   function playSelectedTracks() {
@@ -1849,6 +1837,96 @@
     updateUi();
   }
 
+  function getPlaybackUiMode() {
+    if (playState === 'IDLE') return 'IDLE';
+    const hasActive = tracks.some((t) => t._play?.playing && !t._play?.paused);
+    return hasActive ? 'PLAYING' : 'PAUSED';
+  }
+
+  function getSliderTracks() {
+    const selected = getSelectedTracks().filter((t) => t._play?.playing);
+    if (selected.length) return selected;
+    return tracks.filter((t) => t._play?.playing);
+  }
+
+  function getTrackDurationMs(track) {
+    const last = Math.max(0, (track?.lla?.length || 1) - 1);
+    return last * Math.max(1, track?.sampleMs || 16);
+  }
+
+  function getLongestTimelineTrack(targets) {
+    if (!targets?.length) return null;
+    let best = targets[0];
+    let bestMs = getTrackDurationMs(best);
+    for (let i = 1; i < targets.length; i++) {
+      const t = targets[i];
+      const ms = getTrackDurationMs(t);
+      if (ms > bestMs) {
+        best = t;
+        bestMs = ms;
+      }
+    }
+    return best;
+  }
+
+  function seekTrackToIndex(track, targetIdx, options = {}) {
+    const applyHeavy = options.applyHeavy !== false;
+    if (!track?._play?.playing) return;
+    const last = Math.max(0, (track.lla?.length || 1) - 1);
+    const idx = clamp(Math.round(targetIdx), 0, last);
+    track._play.idx = idx;
+
+    if (!track._ghost) spawnGhost(track);
+    if (track._ghost?._model?.ready) {
+      const i1 = idx;
+      const i2 = clamp(i1 + 1, 0, last);
+      const pose = poseAt(track, i1, i2, 0, 16);
+      if (pose?.lla && pose?.htr) setGhostPose(track, pose.lla, pose.htr);
+
+      if (applyHeavy) {
+        const upNow = gearUpAtIndex(track, i1);
+        if (track._lastGearUp == null || track._lastGearUp !== upNow) {
+          applyGearState(track, upNow);
+          track._lastGearUp = upNow;
+        }
+        hideLadderNodes(track);
+      }
+    }
+
+    if (!track._play.paused) {
+      track._play.startT = now() - (idx * Math.max(1, track.sampleMs));
+    } else {
+      track._play.lastT = now();
+    }
+  }
+
+  function seekPlaybackByRatio(ratio, options = {}) {
+    const r = clamp(Number(ratio) || 0, 0, 1);
+    const targets = getSliderTracks();
+    if (!targets.length) return;
+    const longest = getLongestTimelineTrack(targets);
+    const longestDurationMs = Math.max(0, getTrackDurationMs(longest));
+    const targetTimeMs = r * longestDurationMs;
+    for (const tr of targets) {
+      const idxFromTime = targetTimeMs / Math.max(1, tr.sampleMs || 16);
+      seekTrackToIndex(tr, idxFromTime, options);
+    }
+    if (options.updateUi !== false) updateLiveStatus();
+  }
+
+  function updateGhostCallsignVisibility() {
+    for (const tr of tracks) {
+      if (!tr?._play?.playing) continue;
+      if (!showCallsign) {
+        destroyGhostCallsignLabel(tr);
+        continue;
+      }
+      const idx = clamp(Math.floor(tr._play?.idx || 0), 0, Math.max(0, (tr.lla?.length || 1) - 1));
+      const lla = tr.lla?.[idx] || tr.lla?.[0] || null;
+      if (lla) ensureGhostCallsignLabel(tr, lla);
+    }
+  }
+
   function renameTrack(id, name) {
     const tr = tracks.find((t) => t.id === id);
     if (!tr) return;
@@ -1860,6 +1938,18 @@
     const tr = tracks.find((t) => t.id === id);
     if (!tr) return;
     tr.description = String(description || '');
+    saveToLocalStorage();
+  }
+
+  function setTrackCallsign(id, callsign) {
+    const tr = tracks.find((t) => t.id === id);
+    if (!tr) return;
+    tr.callsign = sanitizeCallsign(callsign || '');
+    if (tr._play?.playing) {
+      const idx = clamp(Math.floor(tr._play?.idx || 0), 0, Math.max(0, (tr.lla?.length || 1) - 1));
+      const lla = tr.lla?.[idx] || tr.lla?.[0] || null;
+      if (lla) ensureGhostCallsignLabel(tr, lla);
+    }
     saveToLocalStorage();
   }
 
@@ -1899,22 +1989,16 @@
               <option value="16" selected>60 Hz</option>
             </select>
           </div>
+          <div style="text-align:center; color:#555; margin-top:8px;">
+            <label for="callsignIn">Callsign</label>
+            <input id="callsignIn" type="text" maxlength="24" placeholder="bijv. BA01" style="margin-left:6px; width:180px;">
+          </div>
           <div id="recStatus" style="text-align:center; color:#777; margin-top:10px; font-size:14px;">REC • 0 • ${(1000 / defaultSampleMs).toFixed(1)} Hz</div>
           <div id="recHint" style="text-align:center; color:#777; margin-top:4px; min-height:18px;"></div>
         </fieldset>
 
         <fieldset style="margin-bottom:10px;">
-          <legend>Playback</legend>
-          <div style="margin-bottom:10px; display:flex; justify-content:center; gap:14px; flex-wrap:wrap; align-items:center;">
-            <button id="playSelBtn" title="Play selected" style="width:62px; height:62px; border-radius:50%; border:1px solid #0a7f2e; background:#16a34a; color:#fff; font-size:26px; font-weight:700; cursor:pointer;">▶</button>
-            <button id="pauseSelBtn" title="Pause selected" style="width:62px; height:62px; border-radius:50%; border:1px solid #0a4f97; background:#2563eb; color:#fff; font-size:24px; font-weight:700; cursor:pointer;">❚❚</button>
-            <button id="stopSelBtn" title="Stop selected" style="width:62px; height:62px; border-radius:50%; border:1px solid #991b1b; background:#dc2626; color:#fff; font-size:22px; font-weight:700; cursor:pointer;">■</button>
-          </div>
-          <div style="text-align:center; color:#555; margin-bottom:10px;">
-            <label for="ultraStrength">Smoothing</label>
-            <input id="ultraStrength" type="range" min="0" max="100" step="1" value="${ultraStrength}" style="width:220px; vertical-align:middle;">
-            <span id="ultraStrengthVal">${ultraStrength}</span>
-          </div>
+          <legend>Storage</legend>
           <div style="margin-bottom:6px; display:flex; gap:8px; flex-wrap:wrap; justify-content:center;">
             <button id="saveBtn">Save (to Browser)</button>
             <button id="loadBtn">Load (from Browser)</button>
@@ -1922,10 +2006,31 @@
             <button id="importBtn">Import JSON</button>
             <input type="file" id="importFile" accept="application/json" style="display:none;">
           </div>
-          <small style="display:block; color:#555; text-align:center; margin-bottom:8px;">
+          <small style="display:block; color:#555; text-align:center; margin-bottom:2px;">
             <b>Save/Load</b> = local browser storage on this PC.<br>
             <b>Export/Import</b> = JSON file backup/share.
           </small>
+        </fieldset>
+
+        <fieldset style="margin-bottom:10px;">
+          <legend>Playback</legend>
+          <div style="display:flex; justify-content:center; gap:14px; flex-wrap:wrap; align-items:center;">
+            <button id="playSelBtn" title="Play selected" style="width:62px; height:62px; border-radius:50%; border:1px solid #0a7f2e; background:#16a34a; color:#fff; font-size:26px; font-weight:700; cursor:pointer;">▶</button>
+            <button id="pauseSelBtn" title="Pause selected" style="width:62px; height:62px; border-radius:50%; border:1px solid #0a4f97; background:#2563eb; color:#fff; font-size:24px; font-weight:700; cursor:pointer;">❚❚</button>
+            <button id="stopSelBtn" title="Stop selected" style="width:62px; height:62px; border-radius:50%; border:1px solid #991b1b; background:#dc2626; color:#fff; font-size:22px; font-weight:700; cursor:pointer;">■</button>
+          </div>
+          <div style="text-align:center; margin-top:10px; padding-bottom:20px;">
+            <input id="playbackPos" type="range" min="0" max="1000" step="1" value="0" style="width:min(760px, 95%);">
+            <div id="playbackPosInfo" style="color:#666; font-size:12px; margin-top:3px;">Playback position: 0%</div>
+          </div>
+          <div style="text-align:center; color:#555; margin-bottom:10px;">
+            <label for="ultraStrength">Smoothing</label>
+            <input id="ultraStrength" type="range" min="0" max="100" step="1" value="${ultraStrength}" style="width:220px; vertical-align:middle;">
+            <span id="ultraStrengthVal">${ultraStrength}</span>
+          </div>
+          <div style="text-align:center; color:#555; margin-bottom:10px;">
+            <label style="cursor:pointer;"><input id="showCallsignCb" type="checkbox" ${showCallsign ? 'checked' : ''}> Show Callsign</label>
+          </div>
           <div style="text-align:center; color:#666; margin-bottom:8px;">Playback controls for selected tracks</div>
           <div id="tracks"></div>
         </fieldset>
@@ -1944,19 +2049,28 @@
           <small id="mtInfo" style="display:block; margin-top:6px; color:#666;"></small>
         </fieldset>
 
+        <fieldset style="margin-top:10px;">
+          <legend>Livery Debug</legend>
+          <pre id="liveryDbg" style="white-space:pre-wrap; font-size:11px; line-height:1.25; max-height:180px; overflow:auto; background:#111; color:#9fe8a1; padding:8px; border-radius:6px;">FRDBG|info=idle</pre>
+        </fieldset>
+
         <div style="margin-top:10px;"><small id="info" style="color:#444;"></small></div>
       </div>
     `;
 
     gui.recBtn = guiWin.document.getElementById('recBtn');
     gui.rateSel = guiWin.document.getElementById('rateSel');
+    gui.callsignIn = guiWin.document.getElementById('callsignIn');
     gui.recStatus = guiWin.document.getElementById('recStatus');
     gui.recHint = guiWin.document.getElementById('recHint');
     gui.ultraStrength = guiWin.document.getElementById('ultraStrength');
     gui.ultraStrengthVal = guiWin.document.getElementById('ultraStrengthVal');
+    gui.showCallsignCb = guiWin.document.getElementById('showCallsignCb');
     gui.playSelBtn = guiWin.document.getElementById('playSelBtn');
     gui.pauseSelBtn = guiWin.document.getElementById('pauseSelBtn');
     gui.stopSelBtn = guiWin.document.getElementById('stopSelBtn');
+    gui.playbackPos = guiWin.document.getElementById('playbackPos');
+    gui.playbackPosInfo = guiWin.document.getElementById('playbackPosInfo');
     gui.tracksDiv = guiWin.document.getElementById('tracks');
     gui.saveBtn = guiWin.document.getElementById('saveBtn');
     gui.loadBtn = guiWin.document.getElementById('loadBtn');
@@ -1969,6 +2083,7 @@
     gui.mtGearIn = guiWin.document.getElementById('mtGearIn');
     gui.mtGearOut = guiWin.document.getElementById('mtGearOut');
     gui.mtInfo = guiWin.document.getElementById('mtInfo');
+    gui.liveryDbg = guiWin.document.getElementById('liveryDbg');
     gui.info = guiWin.document.getElementById('info');
 
     gui.recBtn.onclick = () => {
@@ -1977,10 +2092,19 @@
       updateUi();
     };
     gui.rateSel.value = String(defaultSampleMs);
+    if (gui.callsignIn) gui.callsignIn.value = recordCallsign;
     gui.rateSel.onchange = (e) => {
       defaultSampleMs = Number(e.target.value) || 16;
       updateLiveStatus();
     };
+    if (gui.callsignIn) {
+      gui.callsignIn.oninput = (e) => {
+        const clean = sanitizeCallsign(e.target.value || '');
+        recordCallsign = clean;
+        if (e.target.value !== clean) e.target.value = clean;
+        saveRecorderPrefs();
+      };
+    }
     gui.ultraStrength.value = String(ultraStrength);
     gui.ultraStrengthVal.textContent = String(ultraStrength);
     gui.ultraStrength.oninput = (e) => {
@@ -1990,6 +2114,36 @@
       }
       gui.ultraStrengthVal.textContent = String(ultraStrength);
     };
+    if (gui.showCallsignCb) {
+      gui.showCallsignCb.checked = !!showCallsign;
+      gui.showCallsignCb.onchange = (e) => {
+        showCallsign = !!e.target.checked;
+        updateGhostCallsignVisibility();
+      };
+    }
+
+    if (gui.playbackPos) {
+      const seekFromSlider = () => {
+        const ratio = clamp((Number(gui.playbackPos.value) || 0) / 1000, 0, 1);
+        seekPlaybackByRatio(ratio);
+      };
+      gui.playbackPos.oninput = () => {
+        playbackSliderDragging = true;
+        const t = now();
+        if (t - lastSliderSeekTs < 33) return;
+        lastSliderSeekTs = t;
+        const ratio = clamp((Number(gui.playbackPos.value) || 0) / 1000, 0, 1);
+        seekPlaybackByRatio(ratio, { applyHeavy: false, updateUi: false });
+        updatePlaybackSliderUi();
+      };
+      gui.playbackPos.onchange = () => {
+        lastSliderSeekTs = 0;
+        seekFromSlider();
+        playbackSliderDragging = false;
+      };
+      gui.playbackPos.onmousedown = () => { playbackSliderDragging = true; };
+      gui.playbackPos.onmouseup = () => { playbackSliderDragging = false; };
+    }
 
     gui.playSelBtn.onclick = () => playSelectedTracks();
     gui.pauseSelBtn.onclick = () => pauseSelectedTracks();
@@ -2036,6 +2190,7 @@
     const previousSelected = guiWin && !guiWin.closed
       ? new Set([...guiWin.document.querySelectorAll('input.track-select[type="checkbox"]:checked')].map((cb) => cb.dataset.id))
       : new Set();
+    const hasPriorSelection = previousSelected.size > 0;
 
     if (!tracks.length) {
       gui.tracksDiv.innerHTML = '<p><i>No flights recorded/loaded yet.</i></p>';
@@ -2048,7 +2203,8 @@
       const seconds = Math.round((t.lla.length * t.sampleMs) / 1000);
       const rateHz = (1000 / t.sampleMs).toFixed(1);
       const gearChanges = (t.gearEvents || []).length;
-      const checked = previousSelected.has(t.id) ? 'checked' : '';
+      const callsign = sanitizeCallsign(t.callsign || '');
+      const checked = (hasPriorSelection ? previousSelected.has(t.id) : true) ? 'checked' : '';
       const recDate = formatTrackDate(t.createdAt);
       const orderLabel = String(t.orderId || 0).padStart(4, '0');
 
@@ -2063,12 +2219,15 @@
             <input class="nameIn" data-id="${escapeHtml(t.id)}" value="${escapeHtml(t.name || 'Unnamed')}" style="width:min(720px, 95%); text-align:center; font-size:18px; font-weight:700; padding:6px 8px; box-sizing:border-box;">
           </div>
           <div style="display:flex; justify-content:center; margin-bottom:8px;">
+            <input class="trackCallsignIn" data-id="${escapeHtml(t.id)}" maxlength="24" placeholder="Callsign" value="${escapeHtml(callsign)}" style="width:min(320px, 95%); text-align:center; font-size:14px; padding:5px 8px; box-sizing:border-box;">
+          </div>
+          <div style="display:flex; justify-content:center; margin-bottom:8px;">
             <div style="width:min(720px, 95%);">
               <textarea class="descIn" data-id="${escapeHtml(t.id)}" rows="3" placeholder="Description" style="width:100%; box-sizing:border-box; resize:vertical;">${escapeHtml(t.description || '')}</textarea>
             </div>
           </div>
           <div style="display:flex; justify-content:center; margin-bottom:8px;">
-            <span style="color:#666; text-align:center; width:min(720px, 95%); overflow-wrap:anywhere;">• ID: #${orderLabel} • Date: ${escapeHtml(recDate)} • Duration: ${seconds}s • Rate: ${rateHz} Hz • Gear changes: ${gearChanges}<br>• Model: ${escapeHtml(t.modelUrl || '-')}</span>
+            <span style="color:#666; text-align:center; width:min(720px, 95%); overflow-wrap:anywhere;">• ID: #${orderLabel} • Date: ${escapeHtml(recDate)} • Duration: ${seconds}s • Rate: ${rateHz} Hz • Gear changes: ${gearChanges}<br>• Callsign: ${escapeHtml(callsign || '-')} • Model: ${escapeHtml(t.modelUrl || '-')}</span>
           </div>
           <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; justify-content:center;">
             <button class="delBtn" data-id="${escapeHtml(t.id)}">Delete</button>
@@ -2097,6 +2256,16 @@
       };
     }
 
+    for (const input of guiWin.document.querySelectorAll('.trackCallsignIn')) {
+      input.oninput = () => {
+        const id = input.dataset.id;
+        if (!id) return;
+        const clean = sanitizeCallsign(input.value || '');
+        if (input.value !== clean) input.value = clean;
+        setTrackCallsign(id, clean);
+      };
+    }
+
     for (const cb of guiWin.document.querySelectorAll('input.track-select[type="checkbox"]')) {
       cb.onchange = () => updateRecordingHint();
     }
@@ -2110,6 +2279,51 @@
     gui.recHint.textContent = selectedCount > 0 ? 'With selected playbacks' : '';
   }
 
+  function updatePlaybackControlsUi() {
+    if (!guiWin || guiWin.closed) return;
+    const mode = getPlaybackUiMode();
+    const canInteract = recordState === 'IDLE';
+
+    if (gui.playSelBtn) {
+      gui.playSelBtn.style.display = (mode === 'IDLE' || mode === 'PAUSED') ? '' : 'none';
+      gui.playSelBtn.disabled = !canInteract;
+    }
+    if (gui.pauseSelBtn) {
+      gui.pauseSelBtn.style.display = (mode === 'PLAYING') ? '' : 'none';
+      gui.pauseSelBtn.disabled = !canInteract;
+    }
+    if (gui.stopSelBtn) {
+      gui.stopSelBtn.style.display = (mode === 'IDLE') ? 'none' : '';
+      gui.stopSelBtn.disabled = !canInteract;
+    }
+  }
+
+  function updatePlaybackSliderUi() {
+    if (!guiWin || guiWin.closed || !gui.playbackPos || !gui.playbackPosInfo) return;
+    const targets = getSliderTracks();
+    if (!targets.length) {
+      gui.playbackPos.disabled = true;
+      if (!playbackSliderDragging) gui.playbackPos.value = '0';
+      gui.playbackPosInfo.textContent = 'Playback position: -';
+      return;
+    }
+
+    const longest = getLongestTimelineTrack(targets);
+    const longestDurationMs = Math.max(0, getTrackDurationMs(longest));
+    const last = Math.max(0, (longest?.lla?.length || 1) - 1);
+    const idx = clamp(Math.floor(longest?._play?.idx || 0), 0, last);
+    const elapsedMs = idx * Math.max(1, longest?.sampleMs || 16);
+    const ratio = longestDurationMs > 0 ? elapsedMs / longestDurationMs : 0;
+    gui.playbackPos.disabled = false;
+    if (!playbackSliderDragging) {
+      gui.playbackPos.value = String(Math.round(ratio * 1000));
+    }
+
+    const elapsedSec = elapsedMs / 1000;
+    const totalSec = longestDurationMs / 1000;
+    gui.playbackPosInfo.textContent = `Playback position: ${Math.round(ratio * 100)}% (${elapsedSec.toFixed(1)}s / ${totalSec.toFixed(1)}s)`;
+  }
+
   function updateUi() {
     if (!guiWin || guiWin.closed) return;
 
@@ -2118,26 +2332,29 @@
     gui.recBtn.style.background = recActive ? '#0b5ed7' : '#c92a2a';
 
     const canRec = recordState === 'IDLE';
-    const canPlay = recordState === 'IDLE' && playState === 'IDLE';
 
     if (!recActive) gui.recBtn.disabled = !canRec;
     else gui.recBtn.disabled = false;
 
-    gui.playSelBtn.disabled = !canRec;
-    if (gui.pauseSelBtn) gui.pauseSelBtn.disabled = !canRec;
-    if (gui.stopSelBtn) gui.stopSelBtn.disabled = !canRec;
+    updatePlaybackControlsUi();
     if (gui.ultraStrength) {
       gui.ultraStrength.value = String(ultraStrength);
     }
     if (gui.ultraStrengthVal) gui.ultraStrengthVal.textContent = String(ultraStrength);
+    if (gui.showCallsignCb) gui.showCallsignCb.checked = !!showCallsign;
     if (gui.rateSel) gui.rateSel.value = String(defaultSampleMs);
+    if (gui.callsignIn && gui.callsignIn.value !== recordCallsign) gui.callsignIn.value = recordCallsign;
 
     renderFlightsList();
+    updatePlaybackSliderUi();
     updateLiveStatus();
   }
 
   function updateLiveStatus() {
     if (!guiWin || guiWin.closed) return;
+    updatePlaybackControlsUi();
+    updatePlaybackSliderUi();
+    updateLiveryDebugUi();
     const samples = currentRec?.lla?.length || 0;
     const hz = currentRec ? (1000 / currentRec.sampleMs).toFixed(1) : (1000 / defaultSampleMs).toFixed(1);
     if (gui.recStatus) gui.recStatus.textContent = `REC • ${samples} • ${hz} Hz`;
@@ -2175,6 +2392,7 @@
     document.body.appendChild(b);
   }
 
+  loadRecorderPrefs();
   loadFromLocalStorage();
   addLauncherButton();
   requestAnimationFrame(mainRAF);
