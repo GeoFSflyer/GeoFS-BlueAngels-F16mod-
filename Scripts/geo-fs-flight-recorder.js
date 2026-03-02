@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoFS Flight Recorder
 // @namespace    https://github.com/ArjanKw/GeoFS-BlueAngels/
-// @version      1.1.4
+// @version      1.1.5
 // @description  Record and replay GeoFS flights with lightweight gear state playback.
 // @match        https://www.geo-fs.com/*
 // @grant        none
@@ -52,7 +52,7 @@
   }
 
   /* ---------- Config ---------- */
-  const VERSION = '1.1.4';
+  const VERSION = '1.1.5';
   const LS_KEY = 'FlightRecorder100';
   const LS_CALLSIGN_KEY = 'FlightRecorder100Callsign';
   const MAX_DT_CAP = 120;
@@ -98,6 +98,8 @@
 
   let guiWin = null;
   const gui = {};
+  const FR_PANEL_ID = 'flight-recorder-panel';
+  const FR_BUTTON_ID = 'flight-recorder-button';
 
   /* ---------- Track helpers ---------- */
   function makeTrackBase(ac, sampleMs, callsign = '') {
@@ -1963,15 +1965,35 @@
   }
 
   /* ---------- UI ---------- */
-  function openGui() {
-    if (guiWin && !guiWin.closed) {
-      guiWin.focus();
-      return;
+  function ensureEmbeddedPanel() {
+    const host = document.querySelector('.geofs-ui-left');
+    if (!host) {
+      console.warn('Flight Recorder: Embedded panel not found, returning...');
+      return null;
     }
 
-    guiWin = window.open('', '_blank', 'width=980,height=820');
-    guiWin.document.title = `Flight Recorder ${VERSION}`;
-    guiWin.document.body.innerHTML = `
+    let panel = document.getElementById(FR_PANEL_ID);
+    if (!panel) {
+      console.warn('Flight Recorder: Embedded panel found.');
+      panel = document.createElement('div');
+      panel.id = FR_PANEL_ID;
+      panel.className = 'geofs-list geofs-toggle-panel flight-recorder-list geofs-stopMousePropagation geofs-stopKeyupPropagation';
+      panel.setAttribute('data-noblur', 'true');
+      panel.setAttribute('data-onshow', '{geofs.initializePreferencesPanel()}');
+      panel.setAttribute('data-onhide', '{geofs.savePreferencesPanel()}');
+      host.appendChild(panel);
+    }
+
+    return panel;
+  }
+
+  function mountGuiIntoPanel() {
+    const panel = ensureEmbeddedPanel();
+    if (!panel) return null;
+
+    if (gui.panelEl === panel && gui.recBtn) return panel;
+
+    panel.innerHTML = `
       <div style="font-family: Segoe UI, sans-serif; padding:14px;">
         <h2 style="margin:0 0 12px; text-align: center;">Flight Recorder ${VERSION}</h2>
 
@@ -2057,6 +2079,90 @@
         <div style="margin-top:10px;"><small id="info" style="color:#444;"></small></div>
       </div>
     `;
+
+    gui.panelEl = panel;
+    guiWin = {
+      closed: false,
+      document,
+      focus: () => {
+        panel.classList.add('geofs-visible');
+      }
+    };
+
+    return panel;
+  }
+
+  function setPanelVisible(show) {
+    const panel = mountGuiIntoPanel();
+    if (!panel) return;
+    panel.classList.toggle('geofs-visible', !!show);
+    const leftHost = document.querySelector('.geofs-ui-left');
+    if (leftHost) leftHost.classList.toggle('geofs-visible', !!show);
+    try {
+      if (show) geofs?.initializePreferencesPanel?.();
+      else geofs?.savePreferencesPanel?.();
+    } catch { }
+    if (show) updateUi();
+  }
+
+  function togglePanel() {
+    openGui();
+  }
+
+  function ensureBottomButton() {
+    const bar = document.querySelector('.geofs-ui-bottom');
+    if (!bar) return null;
+
+    let button = document.getElementById(FR_BUTTON_ID);
+    if (!button) {
+      button = document.createElement('button');
+      button.id = FR_BUTTON_ID;
+      button.className = 'mdl-button mdl-js-button geofs-f-standard-ui geofs-mediumScreenOnly';
+      button.textContent = 'REC';
+
+      const insertPos = geofs?.version >= 3.6 ? 4 : 3;
+      if (bar.children.length > insertPos) bar.insertBefore(button, bar.children[insertPos]);
+      else bar.appendChild(button);
+    }
+
+    button.title = 'Flight Recorder';
+    button.setAttribute('data-toggle-panel', '.flight-recorder-list');
+    button.setAttribute('data-tooltip-classname', 'mdl-tooltip--top');
+    button.setAttribute('data-upgraded', ',MaterialButton');
+    button.setAttribute('onclick', 'FlightRecorder.togglePanel()');
+    if (!button.dataset.frClickBound) {
+      button.addEventListener('click', () => {
+        togglePanel();
+      });
+      button.dataset.frClickBound = '1';
+    }
+
+    return button;
+  }
+
+  function initEmbeddedUi() {
+    window.FlightRecorder = window.FlightRecorder || {};
+    window.FlightRecorder.togglePanel = togglePanel;
+
+    const tryInit = () => {
+      const panelHost = document.querySelector('.geofs-ui-left');
+      const buttonHost = document.querySelector('.geofs-ui-bottom');
+      if (!panelHost || !buttonHost) return false;
+      ensureBottomButton();
+      mountGuiIntoPanel();
+      return true;
+    };
+
+    if (tryInit()) return;
+    const timer = setInterval(() => {
+      if (tryInit()) clearInterval(timer);
+    }, 500);
+  }
+
+  function openGui() {
+    const panel = mountGuiIntoPanel();
+    if (!panel) return;
+    try { geofs?.initializePreferencesPanel?.(); } catch { }
 
     gui.recBtn = guiWin.document.getElementById('recBtn');
     gui.rateSel = guiWin.document.getElementById('rateSel');
@@ -2326,6 +2432,7 @@
 
   function updateUi() {
     if (!guiWin || guiWin.closed) return;
+    if (!gui.recBtn) return;
 
     const recActive = recordState === 'RECORDING';
     gui.recBtn.textContent = recActive ? 'STOP RECORDING' : 'START RECORDING';
@@ -2384,16 +2491,8 @@
   }
 
   /* ---------- Boot ---------- */
-  function addLauncherButton() {
-    const b = document.createElement('button');
-    b.textContent = `Flight Recorder ${VERSION}`;
-    b.style.cssText = 'position:absolute;top:20px;right:20px;padding:6px 10px;z-index:999999;cursor:pointer;';
-    b.onclick = openGui;
-    document.body.appendChild(b);
-  }
-
   loadRecorderPrefs();
   loadFromLocalStorage();
-  addLauncherButton();
+  initEmbeddedUi();
   requestAnimationFrame(mainRAF);
 })();
