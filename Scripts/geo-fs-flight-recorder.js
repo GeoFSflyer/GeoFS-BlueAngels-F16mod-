@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoFS Flight Recorder
 // @namespace    https://github.com/ArjanKw/GeoFS-BlueAngels/
-// @version      1.1.5
+// @version      1.1.7
 // @description  Record and replay GeoFS flights with lightweight gear state playback.
 // @match        https://www.geo-fs.com/*
 // @grant        none
@@ -9,6 +9,103 @@
 
 (function () {
   'use strict';
+
+  /* ---------- Config ---------- */
+  const VERSION = '1.1.7';
+  const LS_KEY = 'FlightRecorder100';
+  const LS_CALLSIGN_KEY = 'FlightRecorder100Callsign';
+  const MAX_DT_CAP = 120;
+  const MAX_RECORD_STEPS_PER_FRAME = 800;
+  const HIDE_NODE_HINTS = ['ladder', 'stairs', 'boarding'];
+  const DOOR_NODE_HINTS = ['door', 'hatch', 'bay'];
+  const WHEEL_NODE_HINTS = ['wheel', 'bogie', 'truck', 'tire', 'tyre'];
+  const BASE_GEAR_NODE_HINTS = ['gear', 'strut', 'oleo', 'shock'];
+  const EXTRA_GEAR_NODE_HINTS = [
+    'leftgear', 'rightgear', 'frontgear', 'nosegear', 'maingear',
+    'geardoor', 'gear_door',
+    'leftgeardoor', 'rightgeardoor', 'frontgeardoor', 'nosegeardoor', 'susF', 'susR', 'susL',
+    'gearactuator',
+    'gearstrut'
+  ];
+  const AIRCRAFT_NODE_OVERRIDES = [
+    {
+      aircraftId: "4",
+      ignoreNodes: [],
+      gearNodes: ["nose_damper_lower", "nose_damper_upper", "nose_leg"],
+      hideNodes: []
+    },
+    {
+      aircraftId: "18",
+      ignoreNodes: [],
+      gearNodes: ["RG_Holder_L", "RG_Holder_R", "RG_Main_L", "RG_Main_R"],
+      hideNodes: []
+    },
+    {
+      aircraftId: "20",
+      ignoreNodes: ["door_cargo", "door_passenger", "door_passenger_hinge", "door_svc_hinge"],
+      gearNodes: [],
+      hideNodes: []
+    },
+    {
+      aircraftId: "24",
+      ignoreNodes: ["CargoDoor1", "CargoDoor2", "DoorL1", "DoorL2", "DoorL3", "DoorL4", "DoorR1", "DoorR2", "DoorR3", "DoorR4", "frontGearDoor1", "frontGearDoor2", "gearLeftDoorMain", "gearRightDoorMain"],
+      gearNodes: [],
+      hideNodes: []
+    },
+    {
+      aircraftId: "25",
+      ignoreNodes: ["frontDoorLeft1", "frontDoorRight1", "gearLeftDoor", "gearRightDoor"],
+      gearNodes: [],
+      hideNodes: ["knot", "ribbon"]
+    },
+    {
+      aircraftId: "29",
+      ignoreNodes: ["frontGearDoor1"],
+      gearNodes: [],
+      hideNodes: []
+    },
+    {
+      aircraftId: "32",
+      ignoreNodes: ["leftGearDoor2", "rightGearDoor2"],
+      gearNodes: [],
+      hideNodes: []
+    },
+    {
+      aircraftId: "3591",
+      ignoreNodes: ["doorLFront", "gearDoorFrontFar"],
+      gearNodes: ["actuatorL1", "actuatorR1", "Cylinder.023", "Cylinder.031", "frontPivot", "hubL", "hubR", "susF", "susL", "susR", "tlpivotmoverL"],
+      hideNodes: []
+    },
+  ];
+  const LIVERY_ID_OFFSET = 10000;
+
+  let defaultSampleMs = 16; // 60 Hz
+  let easingOn = false;
+  let ultraStrength = 50; // 0..100
+  let recordCallsign = '';
+  let showCallsign = true;
+  let playbackSliderDragging = false;
+  let lastSliderSeekTs = 0;
+  const UI_UPDATE_INTERVAL_MS = 100;
+
+  /* ---------- State machines ---------- */
+  let recordState = 'IDLE'; // IDLE | RECORDING
+  let playState = 'IDLE';   // IDLE | PLAYING
+
+  /* ---------- Runtime ---------- */
+  let tracks = [];
+  let currentRec = null; // draft, hidden from list until stop
+  let lastMainT = 0;
+  let lastUiUpdateT = 0;
+  let nextTrackNumber = 1;
+
+  let guiWin = null;
+  const gui = {};
+  const FR_PANEL_ID = 'flight-recorder-panel';
+  const FR_BUTTON_ID = 'flight-recorder-button';
+  const trackSelectionState = new Map();
+  let activePilotTrackId = null;
+  let frKeyboardShieldBound = false;
 
   /* ---------- Utils ---------- */
   const now = () => performance.now();
@@ -31,10 +128,8 @@
       .trim()
       .slice(0, 24);
   };
-  const isWheelLikeName = (name) => {
-    const s = String(name || '').toLowerCase();
-    return s.includes('wheel') || s.includes('bogie') || s.includes('truck') || s.includes('tire') || s.includes('tyre');
-  };
+
+  lastMainT = now();
 
   function metersPerDeg(latDeg) {
     return {
@@ -50,56 +145,6 @@
     out[2] = lerp(a[2], b[2], f);
     return out;
   }
-
-  /* ---------- Config ---------- */
-  const VERSION = '1.1.5';
-  const LS_KEY = 'FlightRecorder100';
-  const LS_CALLSIGN_KEY = 'FlightRecorder100Callsign';
-  const MAX_DT_CAP = 120;
-  const MAX_STEPS = 10;
-  const MAX_RECORD_STEPS_PER_FRAME = 800;
-  const EPS = 1e-6;
-  const BLOCK_SIZE = 3000;
-  const WARMUP_MS = 2500;
-  const WARMUP_STEP_MS = 100;
-  const DISCOVERY_STEP_MS = 250;
-  const FULL_SCAN_ON_ANIM_CHANGE_MS = 2500;
-  const TOKENS = [
-    'gear', 'door', 'flap', 'slat', 'aileron', 'elevator', 'rudder',
-    'brake', 'airbrake', 'canopy', 'hook', 'piston', 'leg', 'suspension',
-    'wheel', 'bogie', 'truck', 'hatch', 'bay', 'oleo', 'shock', 'ladder', 'ladderdoor'
-  ];
-  const STRICT_GEAR_NODE_HINTS = [
-    'leftgear', 'rightgear', 'frontgear', 'nosegear', 'maingear',
-    'geardoor', 'gear_door',
-    'leftgeardoor', 'rightgeardoor', 'frontgeardoor', 'nosegeardoor',
-    'gearactuator', 'actuator',
-    'gearstrut', 'strut', 'oleo'
-  ];
-  const LIVERY_ID_OFFSET = 10000;
-
-  let defaultSampleMs = 16; // 60 Hz
-  let easingOn = false;
-  let ultraStrength = 35; // 0..100
-  let recordCallsign = '';
-  let showCallsign = true;
-  let playbackSliderDragging = false;
-  let lastSliderSeekTs = 0;
-
-  /* ---------- State machines ---------- */
-  let recordState = 'IDLE'; // IDLE | RECORDING
-  let playState = 'IDLE';   // IDLE | PLAYING
-
-  /* ---------- Runtime ---------- */
-  let tracks = [];
-  let currentRec = null; // draft, hidden from list until stop
-  let lastMainT = now();
-  let nextTrackNumber = 1;
-
-  let guiWin = null;
-  const gui = {};
-  const FR_PANEL_ID = 'flight-recorder-panel';
-  const FR_BUTTON_ID = 'flight-recorder-button';
 
   /* ---------- Track helpers ---------- */
   function makeTrackBase(ac, sampleMs, callsign = '') {
@@ -132,9 +177,7 @@
   function initTrackRuntime(tr) {
     tr._ghost = null;
     tr._ghostLabel = null;
-    tr._nodeNames = Array.isArray(tr._nodeNames) ? tr._nodeNames : [];
-    tr._nodeNameSet = new Set(tr._nodeNames);
-    tr._nodeCache = { ready: false, all: [], gear: [], wheels: [], doors: [], ladder: [] };
+    tr._nodeCache = { ready: false, all: [], gear: [], wheels: [], doors: [], hideNodes: [] };
     tr._precision = null;
     tr._pool = {
       lla: [0, 0, 0],
@@ -150,6 +193,10 @@
       startT: now(),
       lastT: now()
     };
+    tr._state = { mode: 'ghost', gearUp: null };
+    tr._pilotFollow = false;
+    tr._pilotNextSyncAt = 0;
+    tr._pilotOwnLiveryKey = '';
     tr._lastGearUp = null;
     tr._rec = {
       recording: false,
@@ -242,6 +289,51 @@
     nextTrackNumber = maxId + 1;
   }
 
+  function ensureSelectionStateForTracks() {
+    const existingIds = new Set(tracks.map((t) => t.id));
+    for (const id of [...trackSelectionState.keys()]) {
+      if (!existingIds.has(id)) trackSelectionState.delete(id);
+    }
+    for (const tr of tracks) {
+      if (!trackSelectionState.has(tr.id)) trackSelectionState.set(tr.id, true);
+    }
+  }
+
+  function isTrackSelected(trackId) {
+    return trackSelectionState.get(trackId) !== false;
+  }
+
+  function setTrackSelected(trackId, selected) {
+    trackSelectionState.set(trackId, !!selected);
+  }
+
+  function isEditableElement(el) {
+    if (!el) return false;
+    const tag = String(el.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+    if (el.isContentEditable) return true;
+    return false;
+  }
+
+  function bindKeyboardShield() {
+    if (frKeyboardShieldBound) return;
+    frKeyboardShieldBound = true;
+
+    const blockIfTyping = (ev) => {
+      const panel = gui.panelEl || document.getElementById(FR_PANEL_ID);
+      if (!panel) return;
+      const active = document.activeElement;
+      if (!active || !panel.contains(active)) return;
+      if (!isEditableElement(active)) return;
+      ev.stopPropagation();
+      if (typeof ev.stopImmediatePropagation === 'function') ev.stopImmediatePropagation();
+    };
+
+    window.addEventListener('keydown', blockIfTyping, true);
+    window.addEventListener('keyup', blockIfTyping, true);
+    window.addEventListener('keypress', blockIfTyping, true);
+  }
+
   /* ---------- Node/matrix helpers ---------- */
   function getNode(model, name) {
     if (!model || !name) return null;
@@ -274,14 +366,101 @@
     return null;
   }
 
-  function isLadderName(name) {
+  function classifyNodeName(name) {
     const low = String(name || '').toLowerCase();
-    return low.includes('ladder');
+    return {
+      hideNodes: HIDE_NODE_HINTS.some((t) => low.includes(t)),
+      doors: DOOR_NODE_HINTS.some((t) => low.includes(t)),
+      wheels: WHEEL_NODE_HINTS.some((t) => low.includes(t)),
+      gear: BASE_GEAR_NODE_HINTS.some((t) => low.includes(t)) || EXTRA_GEAR_NODE_HINTS.some((t) => low.includes(t))
+    };
   }
 
-  function shouldTrackToken(name) {
-    const low = String(name || '').toLowerCase();
-    return TOKENS.some((t) => low.includes(t));
+  function nodeNameKey(name) {
+    return String(name || '').trim().toLowerCase();
+  }
+
+  function getAircraftOverrideEntry(aircraftId) {
+    const id = String(aircraftId || '').trim();
+    if (!id) return null;
+    return AIRCRAFT_NODE_OVERRIDES.find((entry) => String(entry?.aircraftId || '').trim() === id) || null;
+  }
+
+  function getAircraftOverrideSets(aircraftId) {
+    const entry = getAircraftOverrideEntry(aircraftId);
+    const ignore = new Set((entry?.ignoreNodes || []).map((n) => nodeNameKey(n)).filter(Boolean));
+    const gear = new Set((entry?.gearNodes || []).map((n) => nodeNameKey(n)).filter(Boolean));
+    const hideNodes = new Set((entry?.hideNodes || []).map((n) => nodeNameKey(n)).filter(Boolean));
+    return { ignore, gear, hideNodes };
+  }
+
+  function getNodeOverrideMode(aircraftId, name) {
+    const key = nodeNameKey(name);
+    if (!key) return 'default';
+    const sets = getAircraftOverrideSets(aircraftId);
+    if (sets.ignore.has(key)) return 'ignore';
+    if (sets.hideNodes.has(key)) return 'hide';
+    if (sets.gear.has(key)) return 'gear';
+    return 'default';
+  }
+
+  function classifyNodeNameForAircraft(name, aircraftId) {
+    const base = classifyNodeName(name);
+    const mode = getNodeOverrideMode(aircraftId, name);
+    if (mode === 'ignore') {
+      return {
+        ...base,
+        gear: false,
+        ignored: true,
+        overrideMode: 'ignore'
+      };
+    }
+    if (mode === 'gear') {
+      return {
+        ...base,
+        gear: true,
+        ignored: false,
+        overrideMode: 'gear'
+      };
+    }
+    if (mode === 'hide') {
+      return {
+        ...base,
+        hideNodes: true,
+        ignored: false,
+        overrideMode: 'hide'
+      };
+    }
+    return {
+      ...base,
+      ignored: false,
+      overrideMode: 'default'
+    };
+  }
+
+  function collectPartNodeNames(ac) {
+    const parts = ac?.definition?.parts || [];
+    const out = [];
+    const seen = new Set();
+    for (const p of parts) {
+      const a = String(p?.name || '').trim();
+      const b = String(p?.node || '').trim();
+      if (a) {
+        const k = a.toLowerCase();
+        if (!seen.has(k)) {
+          seen.add(k);
+          out.push(a);
+        }
+      }
+      if (b) {
+        const k = b.toLowerCase();
+        if (!seen.has(k)) {
+          seen.add(k);
+          out.push(b);
+        }
+      }
+    }
+    return out;
   }
 
   function readAnimState(ac) {
@@ -300,28 +479,51 @@
     };
   }
 
-  function detectNodeNames(ac) {
-    const parts = ac?.definition?.parts || [];
-    const allNames = [];
-    for (const p of parts) {
-      if (p?.name) allNames.push(String(p.name));
-      if (p?.node && p.node !== p.name) allNames.push(String(p.node));
-    }
-
-    const tokenNames = [];
-    const warmNames = [];
+  function buildNodeDiscoverySummary(ac, model) {
+    const aircraftId = String(ac?.id ?? ac?.aircraftRecord?.id ?? '');
+    const combined = [];
     const seen = new Set();
-
-    for (const name of allNames) {
-      const key = name.toLowerCase();
-      if (seen.has(key)) continue;
+    const add = (name) => {
+      const s = String(name || '').trim();
+      if (!s) return;
+      const key = s.toLowerCase();
+      if (seen.has(key)) return;
       seen.add(key);
-      if (isLadderName(name)) continue;
-      if (shouldTrackToken(name)) tokenNames.push(name);
-      else warmNames.push(name);
+      combined.push(s);
+    };
+
+    for (const n of collectPartNodeNames(ac)) add(n);
+    for (const n of collectModelNodeNames(model)) add(n);
+
+    const gear = [];
+    const wheels = [];
+    const doors = [];
+    const hideNodes = [];
+    const other = [];
+    const ignored = [];
+
+    for (const name of combined) {
+      const c = classifyNodeNameForAircraft(name, aircraftId);
+      if (c.ignored) {
+        ignored.push(name);
+        continue;
+      }
+      if (c.hideNodes) hideNodes.push(name);
+      if (c.doors) doors.push(name);
+      if (c.wheels) wheels.push(name);
+      if (c.gear) gear.push(name);
+      if (!c.hideNodes && !c.doors && !c.wheels && !c.gear) other.push(name);
     }
 
-    return { tokenNames, warmNames };
+    return {
+      total: combined.length,
+      gear,
+      wheels,
+      doors,
+      hideNodes,
+      other,
+      ignored
+    };
   }
 
   function collectModelNodeNames(model) {
@@ -364,7 +566,7 @@
     const gear = [];
     const wheels = [];
     const doors = [];
-    const ladder = [];
+    const hideNodes = [];
     const seen = new Set();
 
     const pushNode = (node, nameHint = '') => {
@@ -375,11 +577,13 @@
 
       all.push(node);
 
-      const low = String(nameHint || node?.name || node?._name || node?.id || '').toLowerCase();
-      if (low.includes('ladder') || low.includes('stairs') || low.includes('boarding')) ladder.push(node);
-      if (low.includes('door') || low.includes('hatch') || low.includes('bay')) doors.push(node);
-      if (low.includes('wheel') || low.includes('bogie') || low.includes('truck') || low.includes('tire') || low.includes('tyre')) wheels.push(node);
-      if (low.includes('gear') || low.includes('strut') || low.includes('oleo') || low.includes('shock')) gear.push(node);
+      const nodeName = String(nameHint || node?.name || node?._name || node?.id || '');
+      const c = classifyNodeNameForAircraft(nodeName, track?.aircraftId);
+      if (c.ignored) return;
+      if (c.hideNodes) hideNodes.push(node);
+      if (c.doors) doors.push(node);
+      if (c.wheels) wheels.push(node);
+      if (c.gear) gear.push(node);
     };
 
     for (const p of parts) {
@@ -396,7 +600,7 @@
       pushNode(node, nm);
     }
 
-    track._nodeCache = { ready: true, all, gear, wheels, doors, ladder };
+    track._nodeCache = { ready: true, all, gear, wheels, doors, hideNodes };
 
     return true;
   }
@@ -409,13 +613,15 @@
     }
   }
 
-  function hideLadderNodes(track) {
+  function hideConfiguredNodes(track) {
     if (!track?._ghost?._model?.ready) return;
-    setCategoryVisible(track, 'ladder', false);
+    setCategoryVisible(track, 'hideNodes', false);
   }
 
   function applyGearState(track, isUp) {
-    if (!buildNodeCache(track)) return;
+    if (!buildNodeCache(track)) {
+      return;
+    }
     if (isUp) {
       setCategoryVisible(track, 'doors', false);
       setCategoryVisible(track, 'wheels', false);
@@ -425,8 +631,20 @@
       setCategoryVisible(track, 'gear', true);
       setCategoryVisible(track, 'wheels', true);
     }
-    // Keep this last so ladder never reappears after any gear visibility changes.
-    hideLadderNodes(track);
+    // Keep this last so always-hidden nodes never reappear after gear visibility changes.
+    hideConfiguredNodes(track);
+  }
+
+  function applyGhostGearStateWhenReady(track, isUp, attempt = 0) {
+    if (!track?._play?.playing) return;
+    if (!track?._ghost?._model?.ready) {
+      if (attempt >= 80) return;
+      setTimeout(() => applyGhostGearStateWhenReady(track, isUp, attempt + 1), 50);
+      return;
+    }
+    applyGearState(track, !!isUp);
+    hideConfiguredNodes(track);
+    track._lastGearUp = !!isUp;
   }
 
   function readGearUp(ac) {
@@ -443,13 +661,164 @@
   }
 
   function gearUpAtIndex(track, idx) {
-    const ev = track?.gearEvents || [];
-    let up = false;
-    for (let i = 0; i < ev.length; i++) {
-      if ((ev[i]?.t ?? -1) > idx) break;
-      up = !!ev[i]?.up;
+    const events = Array.isArray(track?.gearEvents) ? track.gearEvents : [];
+    const tNow = Number(idx);
+    if (!Number.isFinite(tNow) || !events.length) return false;
+
+    let found = false;
+    let bestT = -Infinity;
+    let bestUp = false;
+
+    for (const e of events) {
+      const te = Number(e?.t);
+      if (!Number.isFinite(te) || te > tNow) continue;
+      if (!found || te >= bestT) {
+        found = true;
+        bestT = te;
+        bestUp = !!e?.up;
+      }
     }
-    return up;
+
+    return found ? bestUp : false;
+  }
+
+  function nodeCategoryFromName(name, aircraftId = '') {
+    const c = classifyNodeNameForAircraft(name, aircraftId);
+    if (c.ignored) return 'other';
+    if (c.hideNodes) return 'hideNodes';
+    if (c.doors) return 'doors';
+    if (c.wheels) return 'wheels';
+    if (c.gear) return 'gear';
+    return 'other';
+  }
+
+  function getTrackNodeDebugItems(track) {
+    const model = track?._ghost?._model;
+    if (!model) return [];
+    const names = collectModelNodeNames(model);
+    const out = [];
+    const seen = new Set();
+    for (const raw of names) {
+      const name = String(raw || '').trim();
+      if (!name) continue;
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const node = getNode(model, name);
+      const overrideMode = getNodeOverrideMode(track?.aircraftId, name);
+      out.push({
+        name,
+        category: nodeCategoryFromName(name, track?.aircraftId),
+        visible: node ? node.show !== false : true,
+        found: !!node,
+        overrideMode
+      });
+    }
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    return out;
+  }
+
+  function setTrackNodeVisibility(trackId, nodeName, visible) {
+    const tr = tracks.find((t) => String(t?.id || '') === String(trackId || ''));
+    const model = tr?._ghost?._model;
+    if (!tr || !model || !nodeName) return false;
+    const node = getNode(model, nodeName);
+    if (!node) return false;
+    try {
+      node.show = !!visible;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function setTrackCategoryVisibility(trackId, category, visible) {
+    const tr = tracks.find((t) => String(t?.id || '') === String(trackId || ''));
+    if (!tr) return false;
+
+    if (category === 'hideNodes' || category === 'doors' || category === 'wheels' || category === 'gear') {
+      setCategoryVisible(tr, category, visible);
+      return true;
+    }
+
+    if (category !== 'other') return false;
+    const model = tr?._ghost?._model;
+    if (!model) return false;
+    const names = collectModelNodeNames(model);
+    for (const raw of names) {
+      const name = String(raw || '').trim();
+      if (!name || nodeCategoryFromName(name, tr?.aircraftId) !== 'other') continue;
+      const node = getNode(model, name);
+      if (!node) continue;
+      try { node.show = !!visible; } catch { }
+    }
+    return true;
+  }
+
+  function getPlaybackDebugData() {
+    const playing = tracks.filter((t) => t?._play?.playing);
+    return playing.map((tr) => {
+      const items = getTrackNodeDebugItems(tr);
+      const groups = { hideNodes: [], doors: [], wheels: [], gear: [], other: [] };
+      for (const item of items) {
+        const key = groups[item.category] ? item.category : 'other';
+        groups[key].push(item);
+      }
+      return {
+        id: tr.id,
+        name: tr.name,
+        aircraftId: String(tr.aircraftId || ''),
+        callsign: sanitizeCallsign(tr.callsign || ''),
+        modelUrl: tr.modelUrl || '',
+        modelReady: !!tr?._ghost?._model?.ready,
+        totalParts: items.length,
+        groups,
+        overrideConfig: {
+          ignoreNodes: [...(getAircraftOverrideEntry(tr.aircraftId)?.ignoreNodes || [])],
+          gearNodes: [...(getAircraftOverrideEntry(tr.aircraftId)?.gearNodes || [])],
+          hideNodes: [...(getAircraftOverrideEntry(tr.aircraftId)?.hideNodes || [])]
+        }
+      };
+    });
+  }
+
+  function emitRecorderDebugEvent() {
+    try {
+      window.dispatchEvent(new CustomEvent('fr:ui-updated'));
+    } catch { }
+  }
+
+  function exposeDebugApi() {
+    window.FlightRecorder = window.FlightRecorder || {};
+    window.FlightRecorder.debugApi = {
+      version: VERSION,
+      getPanelElement: () => document.getElementById(FR_PANEL_ID),
+      getPlaybackDebugData,
+      getAircraftNodeOverrideConfig: (aircraftId) => {
+        const entry = getAircraftOverrideEntry(aircraftId);
+        return {
+          aircraftId: String(aircraftId || ''),
+          ignoreNodes: [...(entry?.ignoreNodes || [])],
+          gearNodes: [...(entry?.gearNodes || [])],
+          hideNodes: [...(entry?.hideNodes || [])]
+        };
+      },
+      setTrackNodeVisibility,
+      setTrackCategoryVisibility,
+      hideTrackHideNodes: (trackId) => {
+        const tr = tracks.find((t) => String(t?.id || '') === String(trackId || ''));
+        if (!tr) return false;
+        hideConfiguredNodes(tr);
+        return true;
+      },
+      hideTrackLadder: (trackId) => {
+        const tr = tracks.find((t) => String(t?.id || '') === String(trackId || ''));
+        if (!tr) return false;
+        hideConfiguredNodes(tr);
+        return true;
+      }
+    };
   }
 
   function cloneLiveryId(value) {
@@ -473,6 +842,14 @@
     }
     const n = Number(value);
     return Number.isFinite(n) ? `id:${n}` : '';
+  }
+
+  function liverySnapshotSig(snapshot) {
+    const textures = Array.isArray(snapshot?.textures) ? snapshot.textures : [];
+    if (!textures.length) return '';
+    const first = textures[0] || {};
+    const last = textures[textures.length - 1] || {};
+    return `snap:${textures.length}:${Number(first.index) || 0}:${String(first.url || '')}:${Number(last.index) || 0}:${String(last.url || '')}`;
   }
 
   function readCurrentLiveryId(ac) {
@@ -633,6 +1010,22 @@
       });
   }
 
+  function applyGhostLiverySnapshot(track, snapshot, applyRunId = 0) {
+    const textures = Array.isArray(snapshot?.textures) ? snapshot.textures : [];
+    if (!textures.length) return false;
+    if (!track?._ghost?._model?.ready) return false;
+
+    let applied = false;
+    for (const item of textures) {
+      const idx = Number(item?.index);
+      const url = String(item?.url || '').trim();
+      if (!url || !Number.isFinite(idx)) continue;
+      changeGhostModelTexture(track, url, idx, applyRunId);
+      applied = true;
+    }
+    return applied;
+  }
+
   function applyGhostMaterial(model, mat) {
     if (!model || !mat?.name) return;
     const key = Object.keys(mat).find((k) => k !== 'name');
@@ -645,57 +1038,6 @@
     }
   }
 
-  async function generateMosaicTexture(baseUrl, tiles, textures) {
-    try {
-      if (!baseUrl || !Array.isArray(tiles) || !tiles.length || !Array.isArray(textures)) return null;
-      const baseImage = await Cesium.Resource.fetchImage({ url: baseUrl });
-      if (!baseImage) return null;
-
-      const canvas = document.createElement('canvas');
-      canvas.width = Number(baseImage.width) || 1024;
-      canvas.height = Number(baseImage.height) || 1024;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return null;
-
-      ctx.drawImage(baseImage, 0, 0, canvas.width, canvas.height);
-
-      for (const tile of tiles) {
-        const src = textures?.[tile?.textureIndex];
-        if (!src || typeof src !== 'string') continue;
-        const img = await Cesium.Resource.fetchImage({ url: src });
-        if (!img) continue;
-        ctx.drawImage(
-          img,
-          Number(tile?.sx) || 0,
-          Number(tile?.sy) || 0,
-          Number(tile?.sw) || img.width,
-          Number(tile?.sh) || img.height,
-          Number(tile?.dx) || 0,
-          Number(tile?.dy) || 0,
-          Number(tile?.dw) || img.width,
-          Number(tile?.dh) || img.height
-        );
-      }
-
-      return canvas.toDataURL('image/png');
-    } catch {
-      return null;
-    }
-  }
-
-  function applyTrackLiverySnapshot(track, snapshot, applyRunId = 0) {
-    const items = Array.isArray(snapshot?.textures) ? snapshot.textures : [];
-    let ops = 0;
-    for (const item of items) {
-      const idx = Number(item?.index);
-      const url = String(item?.url || '');
-      if (!Number.isFinite(idx) || !url) continue;
-      changeGhostModelTexture(track, url, idx, applyRunId);
-      ops++;
-    }
-    return ops;
-  }
-
   async function applyTrackLivery(track, liveryId, snapshot) {
     const reqSig = liverySig(liveryId);
     const runId = track?._livery
@@ -705,6 +1047,10 @@
 
     if (!track?._ghost?._model?.ready) {
       return false;
+    }
+
+    if (applyGhostLiverySnapshot(track, snapshot, runId)) {
+      return true;
     }
 
     const entry = getLiverySelectorAircraftEntry(track);
@@ -756,12 +1102,6 @@
       }
       return { ops, touchedModelIndices };
     };
-
-    const indexPotential = textures.reduce((n, tx, i) => {
-      if (tx && typeof tx === 'object' && tx.material != null) return n + (mats?.[tx.material] ? 1 : 0);
-      if (typeof tx === 'string' && tx && Number.isFinite(Number(indices[i]))) return n + 1;
-      return n;
-    }, 0);
 
     const indexRes = applyByIndex();
     const ok = indexRes.ops > 0;
@@ -913,7 +1253,7 @@
         ]
       };
     }
-    const strengthEff = strength01 * 2; // 0..2 (50% ~= old 100%)
+    const strengthEff = strength01 * 4; // 0..4 (50% ~= previous 100%)
     const key = `${n}|${Math.max(1, track.sampleMs)}|${Math.round(strengthEff * 1000)}`;
 
     if (!track._precision || track._precision.key !== key) {
@@ -1040,21 +1380,24 @@
     initTrackRuntime(tr);
     tr.modelUrl = modelUrl;
 
-    const detected = detectNodeNames(ac);
     const liveModel = ac?.object3d?.model?._model;
-    const modelNames = collectModelNodeNames(liveModel);
-
-    const combined = [...detected.tokenNames];
-    const combinedWarm = [...detected.warmNames];
-    for (const name of modelNames) {
-      if (isLadderName(name)) continue;
-      if (shouldTrackToken(name)) combined.push(name);
-      else combinedWarm.push(name);
+    const summary = buildNodeDiscoverySummary(ac, liveModel);
+    console.log(
+      `Node discovery -> total=${summary.total}, gear=${summary.gear.length}, wheels=${summary.wheels.length}, doors=${summary.doors.length}, hideNodes=${summary.hideNodes.length}, other=${summary.other.length}, ignored=${summary.ignored.length}`
+    );
+    console.log('Node discovery gear candidates:', summary.gear);
+    console.log('Node discovery wheel candidates:', summary.wheels);
+    console.log('Node discovery door candidates:', summary.doors);
+    if (summary.other.length) {
+      console.log('Node discovery other (not auto-managed):', summary.other);
+    }
+    if (summary.ignored.length) {
+      console.log('Node discovery ignored by aircraft override:', summary.ignored);
+    }
+    if (summary.hideNodes.length) {
+      console.log('Node discovery always-hidden candidates:', summary.hideNodes);
     }
 
-    tr._nodeNames = [...new Set(combined.map((n) => String(n)))];
-    tr._nodeNameSet = new Set(tr._nodeNames);
-    tr._rec.warmNames = [...new Set(combinedWarm.map((n) => String(n)))];
     tr._rec.startT = t0;
     tr._rec.lastT = t0;
     tr._rec.recording = true;
@@ -1092,8 +1435,7 @@
       htr: currentRec.htr,
       xy: currentRec.xy,
       gearEvents: currentRec.gearEvents,
-      liveryEvents: currentRec.liveryEvents,
-      _nodeNames: currentRec._nodeNames
+      liveryEvents: currentRec.liveryEvents
     };
     initTrackRuntime(finalized);
     tracks.push(finalized);
@@ -1218,6 +1560,7 @@
   function spawnGhost(track) {
     if (!track?.lla?.length || !track?.htr?.length) return null;
     try {
+      track._nodeCache = { ready: false, all: [], gear: [], wheels: [], doors: [], hideNodes: [] };
       const ghostModelUrl = makeUniqueGhostModelUrl(track);
       const ghost = new geofs.api.Model(null, {
         url: ghostModelUrl,
@@ -1238,7 +1581,8 @@
       try { track._ghost.destroy(); } catch { }
     }
     track._ghost = null;
-    track._nodeCache = { ready: false, all: [], gear: [], wheels: [], doors: [], ladder: [] };
+    track._nodeCache = { ready: false, all: [], gear: [], wheels: [], doors: [], hideNodes: [] };
+    ensureTrackState(track).gearUp = null;
     track._lastGearUp = null;
     spawnGhost(track);
   }
@@ -1258,6 +1602,327 @@
     H[2] = finiteOr(htr?.[2], finiteOr(htr0[2], 0));
     try { g.setPositionOrientationAndScale(L, H, null); } catch { }
     ensureGhostCallsignLabel(track, L);
+  }
+
+  function applyOwnAircraftGearState(isUp) {
+    const v = isUp ? 1 : 0;
+    let applied = false;
+    const targets = [
+      window.controls,
+      geofs?.controls,
+      geofs?.aircraft?.instance?.controls
+    ];
+    for (const tgt of targets) {
+      if (!tgt?.gear) continue;
+      try {
+        tgt.gear.position = v;
+        if ('target' in tgt.gear) tgt.gear.target = v;
+        applied = true;
+      } catch { }
+    }
+    return applied;
+  }
+
+  function ensureTrackState(track) {
+    if (!track) return { mode: 'ghost', gearUp: null };
+    if (!track._state || typeof track._state !== 'object') {
+      track._state = { mode: track._pilotFollow ? 'pilot' : 'ghost', gearUp: null };
+    }
+    return track._state;
+  }
+
+  function isPilotMode(track) {
+    return ensureTrackState(track).mode === 'pilot';
+  }
+
+  function setTrackMode(track, mode) {
+    const st = ensureTrackState(track);
+    st.mode = mode === 'pilot' ? 'pilot' : 'ghost';
+    track._pilotFollow = st.mode === 'pilot';
+  }
+
+  function setTrackGearUp(track, up) {
+    ensureTrackState(track).gearUp = !!up;
+    track._lastGearUp = !!up;
+    return !!up;
+  }
+
+  function syncTrackGearUp(track, idx, force = false) {
+    const upNow = gearUpAtIndex(track, idx);
+    const st = ensureTrackState(track);
+    const changed = st.gearUp == null || st.gearUp !== upNow;
+    if (force || changed) {
+      st.gearUp = !!upNow;
+      track._lastGearUp = !!upNow;
+      return { upNow: !!upNow, changed: true };
+    }
+    return { upNow: !!upNow, changed: false };
+  }
+
+  function getTrackGearUp(track, idx) {
+    return setTrackGearUp(track, gearUpAtIndex(track, idx));
+  }
+
+  function getOwnAircraftId() {
+    return String(
+      geofs?.aircraft?.instance?.id ??
+      geofs?.aircraft?.instance?.aircraftRecord?.id ??
+      ''
+    ).trim();
+  }
+
+  function isOwnAircraftModelReady() {
+    const model = geofs?.aircraft?.instance?.object3d?.model?._model;
+    if (!model) return false;
+    const readyFlag = model.ready !== false;
+    return !!readyFlag;
+  }
+
+  function requestOwnAircraftSwitch(aircraftId) {
+    const raw = String(aircraftId || '').trim();
+    if (!raw) return false;
+    const asNum = Number(raw);
+    const arg = Number.isFinite(asNum) ? asNum : raw;
+    const calls = [
+      () => geofs?.switchAircraft?.(arg),
+      () => geofs?.changeAircraft?.(arg),
+      () => geofs?.aircraft?.change?.(arg),
+      () => geofs?.aircraft?.instance?.change?.(arg),
+      () => geofs?.api?.changeAircraft?.(arg)
+    ];
+    for (const fn of calls) {
+      try {
+        const res = fn();
+        if (res !== undefined) return true;
+      } catch { }
+    }
+    return false;
+  }
+
+  function applyOwnAircraftLiverySnapshot(snapshot) {
+    const textures = Array.isArray(snapshot?.textures) ? snapshot.textures : [];
+    if (!textures.length) return false;
+    const model = geofs?.aircraft?.instance?.object3d?.model?._model;
+    if (!model) return false;
+
+    let applied = false;
+    for (const item of textures) {
+      const idx = Number(item?.index);
+      const url = String(item?.url || '').trim();
+      if (!url || !Number.isFinite(idx)) continue;
+      try {
+        geofs?.api?.changeModelTexture?.(model, url, { index: idx });
+        applied = true;
+      } catch {
+        try {
+          geofs?.api?.changeModelTexture?.(model, url, idx);
+          applied = true;
+        } catch { }
+      }
+    }
+    return applied;
+  }
+
+  async function applyOwnAircraftResolvedLivery(track, liveryId) {
+    const model = geofs?.aircraft?.instance?.object3d?.model?._model;
+    if (!model) return false;
+
+    const entry = getLiverySelectorAircraftEntry(track);
+    if (!entry) return false;
+
+    let livery = null;
+    if (typeof liveryId === 'object' && liveryId) {
+      const va = await getVALivery(track, liveryId);
+      livery = va?.livery || null;
+    } else {
+      const idNum = Number(liveryId);
+      if (!Number.isFinite(idNum)) return false;
+      const idx = idNum >= LIVERY_ID_OFFSET ? idNum - LIVERY_ID_OFFSET : idNum;
+      livery = entry?.liveries?.[idx] || null;
+    }
+    if (!livery) return false;
+
+    const indices = Array.isArray(entry.index) ? entry.index : [];
+    const textures = Array.isArray(livery.texture) ? livery.texture : [];
+    const mats = livery.materials || {};
+    let applied = false;
+
+    for (let i = 0; i < textures.length; i++) {
+      const tx = textures[i];
+      if (tx && typeof tx === 'object' && tx.material != null) {
+        const mat = mats?.[tx.material];
+        if (mat) {
+          applyGhostMaterial(model, mat);
+          applied = true;
+        }
+        continue;
+      }
+      if (typeof tx !== 'string' || !tx) continue;
+      const modelIndex = Number(indices[i]);
+      if (!Number.isFinite(modelIndex)) continue;
+      try {
+        geofs?.api?.changeModelTexture?.(model, tx, { index: modelIndex });
+        applied = true;
+      } catch {
+        try {
+          geofs?.api?.changeModelTexture?.(model, tx, modelIndex);
+          applied = true;
+        } catch { }
+      }
+    }
+
+    return applied;
+  }
+
+  async function applyOwnAircraftLiveryFromTrack(track, idx) {
+    const snap = liverySnapshotAtIndex(track, idx);
+    if (applyOwnAircraftLiverySnapshot(snap)) return true;
+
+    const liv = cloneLiveryId(liveryAtIndex(track, idx));
+    if (liv == null) return false;
+
+    if (await applyOwnAircraftResolvedLivery(track, liv)) return true;
+
+    try {
+      geofs.aircraft.instance.liveryId = liv;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function syncOwnAircraftTypeAndLiveryForTrack(track, idx) {
+    if (!track) return;
+    if (!isPilotMode(track) || activePilotTrackId !== track.id) return;
+
+    const targetAircraftId = String(track.aircraftId || '').trim();
+    if (targetAircraftId && getOwnAircraftId() !== targetAircraftId) {
+      requestOwnAircraftSwitch(targetAircraftId);
+      track._pilotOwnLiveryKey = '';
+      return;
+    }
+
+    if (!isOwnAircraftModelReady()) return;
+
+    const i = clamp(Math.floor(Number(idx) || 0), 0, Math.max(0, (track?.lla?.length || 1) - 1));
+    const liv = liveryAtIndex(track, i);
+    const snap = liverySnapshotAtIndex(track, i);
+    const desired = `${getOwnAircraftId()}|${liverySig(liv) || liverySnapshotSig(snap) || 'none'}`;
+    if (track._pilotOwnLiveryKey === desired) return;
+
+    Promise.resolve(applyOwnAircraftLiveryFromTrack(track, i))
+      .then((ok) => {
+        if (ok) track._pilotOwnLiveryKey = desired;
+      })
+      .catch(() => { });
+  }
+
+  function restoreGhostVisualState(track, idx) {
+    if (!track?._play?.playing) return;
+    const last = Math.max(0, (track.lla?.length || 1) - 1);
+    const i1 = clamp(Number.isFinite(Number(idx)) ? Number(idx) : Math.floor(track?._play?.idx || 0), 0, last);
+    const i2 = clamp(i1 + 1, 0, last);
+    if (!track._ghost) spawnGhost(track);
+    const pose = poseAt(track, i1, i2, 0, 16);
+    if (pose?.lla && pose?.htr) setGhostPose(track, pose.lla, pose.htr);
+    const upNow = getTrackGearUp(track, i1);
+    applyGhostGearStateWhenReady(track, upNow);
+  }
+
+  function switchTrackToGhostMode(track, options = {}) {
+    if (!track) return;
+    const syncOwnAircraft = options.syncOwnAircraft !== false;
+    const last = Math.max(0, (track.lla?.length || 1) - 1);
+    const idx = clamp(Math.floor(track?._play?.idx || 0), 0, last);
+    const upNow = getTrackGearUp(track, idx);
+    if (syncOwnAircraft) applyOwnAircraftGearState(upNow);
+    setTrackMode(track, 'ghost');
+    track._pilotNextSyncAt = 0;
+    track._pilotOwnLiveryKey = '';
+    if (activePilotTrackId === track.id) activePilotTrackId = null;
+    restoreGhostVisualState(track, idx);
+    applyCurrentLiveryForTrack(track);
+  }
+
+  function switchTrackToPilotMode(track) {
+    if (!track) return;
+    for (const tr of tracks) {
+      if (tr && tr !== track && isPilotMode(tr)) {
+        switchTrackToGhostMode(tr, { syncOwnAircraft: false });
+      }
+    }
+    setTrackMode(track, 'pilot');
+    activePilotTrackId = track.id;
+    destroyGhostCallsignLabel(track);
+    if (track._ghost) {
+      try { track._ghost.destroy(); } catch { }
+    }
+    track._ghost = null;
+    track._nodeCache = { ready: false, all: [], gear: [], wheels: [], doors: [], hideNodes: [] };
+
+    const last = Math.max(0, (track.lla?.length || 1) - 1);
+    const idx = clamp(Math.floor(track?._play?.idx || 0), 0, last);
+    ensureTrackState(track).gearUp = null;
+    track._pilotNextSyncAt = 0;
+    track._pilotOwnLiveryKey = '';
+    track._lastGearUp = null;
+    syncOwnAircraftTypeAndLiveryForTrack(track, idx);
+    const upNow = getTrackGearUp(track, idx);
+    applyOwnAircraftGearState(upNow);
+  }
+
+  function syncOwnAircraftToPose(lla, htr) {
+    const ac = geofs?.aircraft?.instance;
+    if (!ac) return false;
+
+    const lat = finiteOr(lla?.[0], finiteOr(ac?.llaLocation?.[0], 0));
+    const lon = finiteOr(lla?.[1], finiteOr(ac?.llaLocation?.[1], 0));
+    const alt = finiteOr(lla?.[2], finiteOr(ac?.llaLocation?.[2], 0));
+    const hdg = finiteOr(htr?.[0], 0);
+    const pit = finiteOr(htr?.[1], 0);
+    const rol = finiteOr(htr?.[2], 0);
+
+    try {
+      if (Array.isArray(ac.llaLocation) && ac.llaLocation.length >= 3) {
+        ac.llaLocation[0] = lat;
+        ac.llaLocation[1] = lon;
+        ac.llaLocation[2] = alt;
+      } else {
+        ac.llaLocation = [lat, lon, alt];
+      }
+    } catch { }
+
+    const DEG = Math.PI / 180;
+    try {
+      const rot = ac.__frRotBuf || (ac.__frRotBuf = [0, 0, 0]);
+      rot[0] = pit * DEG;
+      rot[1] = rol * DEG;
+      rot[2] = hdg * DEG;
+      ac.object3d?.setInitialRotation?.(rot);
+    } catch { }
+
+    const rb = ac?.rigidBody;
+    const zeroVec = (key) => {
+      try {
+        const v = rb?.[key];
+        if (Array.isArray(v) && v.length >= 3) {
+          v[0] = 0; v[1] = 0; v[2] = 0;
+        } else if (rb) {
+          rb[key] = [0, 0, 0];
+        }
+      } catch { }
+    };
+    zeroVec('v_acceleration');
+    zeroVec('v_angularAcceleration');
+    zeroVec('v_linearVelocity');
+    zeroVec('v_angularVelocity');
+    return true;
+  }
+
+  function setTrackPilotFollow(track, enabled) {
+    if (!track) return;
+    if (enabled) switchTrackToPilotMode(track);
+    else switchTrackToGhostMode(track, { syncOwnAircraft: true });
   }
 
   function poseAt(track, i1, i2, f, dt) {
@@ -1285,7 +1950,7 @@
   function startPlaybackInternal(track, t0) {
     if (!track || !track.lla?.length) return;
 
-    if (!track._ghost) spawnGhost(track);
+    if (!isPilotMode(track) && !track._ghost) spawnGhost(track);
 
     track._play.playing = true;
     track._play.paused = false;
@@ -1293,6 +1958,7 @@
     track._play.startT = t0;
     track._play.lastT = t0;
     track._precision = null;
+    ensureTrackState(track).gearUp = null;
     track._lastGearUp = null;
     if (track._livery) {
       if (track._livery.startApplyTimer) {
@@ -1349,15 +2015,30 @@
 
   function stopPlayback(track) {
     if (!track?._play) return;
+    const currentIdx = clamp(
+      Math.floor(track?._play?.idx || 0),
+      0,
+      Math.max(0, (track.lla?.length || 1) - 1)
+    );
+
     track._play.playing = false;
     track._play.paused = true;
     track._play.idx = 0;
     if (track._ghost) {
       try { track._ghost.destroy(); } catch { }
     }
+
+    if (isPilotMode(track)) {
+      const upNow = getTrackGearUp(track, currentIdx);
+      applyOwnAircraftGearState(upNow);
+    }
+
     destroyGhostCallsignLabel(track);
     track._ghost = null;
-    track._nodeCache = { ready: false, all: [], gear: [], wheels: [], doors: [], ladder: [] };
+    setTrackMode(track, 'ghost');
+    if (activePilotTrackId === track.id) activePilotTrackId = null;
+    track._nodeCache = { ready: false, all: [], gear: [], wheels: [], doors: [], hideNodes: [] };
+    ensureTrackState(track).gearUp = null;
     track._lastGearUp = null;
     if (track._livery) {
       if (track._livery.startApplyTimer) {
@@ -1372,13 +2053,18 @@
       track._livery.pendingSig = null;
       track._livery.applying = false;
     }
+    track._pilotNextSyncAt = 0;
+    track._pilotOwnLiveryKey = '';
     updatePlayState();
   }
 
   function playbackFixedStep(track, dt) {
     if (!track?._play?.playing || track._play.paused) return;
-    if (!track._ghost) return;
-    if (!track._ghost._model?.ready) return;
+    const pilotFollow = isPilotMode(track);
+    if (!pilotFollow) {
+      if (!track._ghost) return;
+      if (!track._ghost._model?.ready) return;
+    }
 
     const p = track._play;
     const elapsedMs = Math.max(0, now() - p.startT);
@@ -1396,9 +2082,23 @@
       return;
     }
 
-    setGhostPose(track, pose.lla, pose.htr);
+    if (pilotFollow) {
+      syncOwnAircraftToPose(pose.lla, pose.htr);
 
-    if (track._livery && !track._livery.applying && track._livery.pendingId != null) {
+      const { upNow, changed } = syncTrackGearUp(track, i1);
+      if (changed) applyOwnAircraftGearState(upNow);
+
+      const tNow = now();
+      const nextSyncAt = Number(track._pilotNextSyncAt || 0);
+      if (!Number.isFinite(nextSyncAt) || tNow >= nextSyncAt) {
+        track._pilotNextSyncAt = tNow + 1000;
+        syncOwnAircraftTypeAndLiveryForTrack(track, i1);
+      }
+    } else {
+      setGhostPose(track, pose.lla, pose.htr);
+    }
+
+    if (!pilotFollow && track._livery && !track._livery.applying && track._livery.pendingId != null) {
       const ps = track._livery.pendingSig || liverySig(track._livery.pendingId);
       if (!ps || track._livery.appliedSig !== ps) {
         requestApplyTrackLivery(track, track._livery.pendingId, track._livery.pendingSnapshot);
@@ -1409,82 +2109,17 @@
       }
     }
 
-    const upNow = gearUpAtIndex(track, i1);
-    if (track._lastGearUp == null || track._lastGearUp !== upNow) {
-      applyGearState(track, upNow);
-      track._lastGearUp = upNow;
-      // Enforce hidden as the final step after every gear change.
-      hideLadderNodes(track);
+    if (!pilotFollow) {
+      const { upNow, changed } = syncTrackGearUp(track, i1);
+      if (changed) {
+        applyGearState(track, upNow);
+        hideConfiguredNodes(track);
+      }
     }
-    hideLadderNodes(track);
 
     if (i1 >= last) {
       p.paused = true;
     }
-  }
-
-  function findClosestGearSampleIndex(track, target) {
-    const anim = track?.anim || [];
-    let bestIdx = -1;
-    let bestErr = Infinity;
-    for (let i = 0; i < anim.length; i++) {
-      const g = Number(anim[i]?.gear);
-      if (!Number.isFinite(g)) continue;
-      const err = Math.abs(g - target);
-      if (err < bestErr) {
-        bestErr = err;
-        bestIdx = i;
-      }
-    }
-    return { idx: bestIdx, err: bestErr };
-  }
-
-  function testGhostGearState(target) {
-    const active = tracks.find((t) => t._ghost?._model?.ready && t._play?.playing);
-    if (!active) {
-      alert('No active ghost playback. Start a playback first.');
-      return;
-    }
-
-    const up = Number(target) > 0.5;
-    applyGearState(active, up);
-    hideLadderNodes(active);
-    gui.mtInfo.textContent = `Gear test -> state=${up ? 'UP' : 'DOWN'}`;
-  }
-
-  function buildMatrixStateAt(track, targetIdx) {
-    const state = new Map();
-    const idx = clamp(Math.floor(targetIdx), 0, Math.max(0, (track?.lla?.length || 1) - 1));
-    for (const blk of track?.blocks || []) {
-      for (const d of blk || []) {
-        if ((d?.t ?? 0) > idx) return state;
-        const m = d?.m || {};
-        for (const [name, mat] of Object.entries(m)) state.set(name, mat);
-      }
-    }
-    return state;
-  }
-
-  function matrixDiffScore(a16, b16) {
-    if (!a16 || !b16) return Infinity;
-    let s = 0;
-    for (let i = 0; i < 16; i++) s += Math.abs(Number(a16[i]) - Number(b16[i]));
-    return s;
-  }
-
-  function isNoiseNodeName(name) {
-    const s = String(name || '').toLowerCase();
-    return isWheelLikeName(s) || s.includes('fan') || s.includes('prop') || s.includes('rotor');
-  }
-
-  function isGearCandidateName(name) {
-    const s = String(name || '').toLowerCase();
-    return s.includes('gear') || s.includes('door') || s.includes('actuator') || s.includes('strut') || s.includes('oleo');
-  }
-
-  function isStrictGearNodeName(name) {
-    const s = String(name || '').toLowerCase();
-    return STRICT_GEAR_NODE_HINTS.some((h) => s.includes(h));
   }
 
   /* ---------- Storage ---------- */
@@ -1504,10 +2139,19 @@
     }
   }
 
-  function saveToLocalStorage() {
+  function saveToLocalStorage(notifyOnError = false) {
     try {
       localStorage.setItem(LS_KEY, JSON.stringify(buildProject()));
-    } catch {
+      return true;
+    } catch (e) {
+      if (notifyOnError) {
+        const msg = String(e?.name || e?.message || e || '');
+        const quotaLike = /quota|exceed|storage/i.test(msg);
+        alert(quotaLike
+          ? 'Save failed: browser storage is full for this site. Remove old tracks or export JSON and delete tracks.'
+          : `Save failed: ${msg || 'unknown error'}`);
+      }
+      return false;
     }
   }
 
@@ -1536,14 +2180,14 @@
           htr: t.htr || [],
           xy: t.xy || [],
           gearEvents: t.gearEvents || [],
-          liveryEvents: t.liveryEvents || [],
-          _nodeNames: t._nodeNames || []
+          liveryEvents: t.liveryEvents || []
         }, 1);
         initTrackRuntime(tr);
         return tr;
       });
       tracks.sort((a, b) => (a.orderId || 0) - (b.orderId || 0));
       tracks.forEach((t, i) => normalizeTrackMeta(t, i + 1));
+      ensureSelectionStateForTracks();
       refreshNextTrackNumber();
       updatePlayState();
     } catch {
@@ -1582,14 +2226,14 @@
             htr: t.htr || [],
             xy: t.xy || [],
             gearEvents: t.gearEvents || [],
-            liveryEvents: t.liveryEvents || [],
-            _nodeNames: t._nodeNames || []
+            liveryEvents: t.liveryEvents || []
           }, nextTrackNumber++);
           initTrackRuntime(tr);
           added.push(tr);
         }
         tracks.push(...added);
         tracks.sort((a, b) => (a.orderId || 0) - (b.orderId || 0));
+        ensureSelectionStateForTracks();
         refreshNextTrackNumber();
         saveToLocalStorage();
         updateUi();
@@ -1602,15 +2246,8 @@
 
   /* ---------- Actions ---------- */
   function getSelectedTracks() {
-    if (!guiWin || guiWin.closed) return [];
-    const boxes = [...guiWin.document.querySelectorAll('input.track-select[type="checkbox"]')];
-    const out = [];
-    for (const cb of boxes) {
-      if (!cb.checked) continue;
-      const tr = tracks.find((t) => t.id === cb.dataset.id);
-      if (tr?.lla?.length) out.push(tr);
-    }
-    return out;
+    ensureSelectionStateForTracks();
+    return tracks.filter((t) => isTrackSelected(t.id) && t?.lla?.length);
   }
 
   function playSelectedTracks() {
@@ -1699,20 +2336,24 @@
     const idx = clamp(Math.round(targetIdx), 0, last);
     track._play.idx = idx;
 
-    if (!track._ghost) spawnGhost(track);
-    if (track._ghost?._model?.ready) {
-      const i1 = idx;
-      const i2 = clamp(i1 + 1, 0, last);
-      const pose = poseAt(track, i1, i2, 0, 16);
-      if (pose?.lla && pose?.htr) setGhostPose(track, pose.lla, pose.htr);
+    const i1 = idx;
+    const i2 = clamp(i1 + 1, 0, last);
+    const pose = poseAt(track, i1, i2, 0, 16);
 
-      if (applyHeavy) {
-        const upNow = gearUpAtIndex(track, i1);
-        if (track._lastGearUp == null || track._lastGearUp !== upNow) {
+    if (isPilotMode(track)) {
+      if (pose?.lla && pose?.htr) syncOwnAircraftToPose(pose.lla, pose.htr);
+      const upNow = getTrackGearUp(track, i1);
+      applyOwnAircraftGearState(upNow);
+    } else {
+      if (!track._ghost) spawnGhost(track);
+      if (track._ghost?._model?.ready) {
+        if (pose?.lla && pose?.htr) setGhostPose(track, pose.lla, pose.htr);
+
+        if (applyHeavy) {
+          const upNow = getTrackGearUp(track, i1);
           applyGearState(track, upNow);
-          track._lastGearUp = upNow;
+          hideConfiguredNodes(track);
         }
-        hideLadderNodes(track);
       }
     }
 
@@ -1781,6 +2422,7 @@
     if (idx < 0) return;
     stopPlayback(tracks[idx]);
     tracks.splice(idx, 1);
+    trackSelectionState.delete(id);
     saveToLocalStorage();
     updateUi();
   }
@@ -1802,6 +2444,7 @@
       panel.setAttribute('data-noblur', 'true');
       panel.setAttribute('data-onshow', '{geofs.initializePreferencesPanel()}');
       panel.setAttribute('data-onhide', '{geofs.savePreferencesPanel()}');
+      panel.setAttribute('style', 'max-width: 530px;');
       host.appendChild(panel);
     }
 
@@ -1878,20 +2521,6 @@
           <div id="tracks"></div>
         </fieldset>
 
-        <fieldset>
-          <legend>Model Test</legend>
-          <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            <button id="mtBuild">Build/Refresh Cache</button>
-            <button id="mtLadderShow">Ladder Show</button>
-            <button id="mtLadderHide">Ladder Hide</button>
-          </div>
-          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
-            <button id="mtGearIn">Test Gear IN</button>
-            <button id="mtGearOut">Test Gear OUT</button>
-          </div>
-          <small id="mtInfo" style="display:block; margin-top:6px; color:#666;"></small>
-        </fieldset>
-
         <div style="margin-top:10px;"><small id="info" style="color:#444;"></small></div>
       </div>
     `;
@@ -1959,6 +2588,7 @@
   function initEmbeddedUi() {
     window.FlightRecorder = window.FlightRecorder || {};
     window.FlightRecorder.togglePanel = togglePanel;
+    exposeDebugApi();
 
     const tryInit = () => {
       const panelHost = document.querySelector('.geofs-ui-left');
@@ -1999,13 +2629,8 @@
     gui.exportBtn = guiWin.document.getElementById('exportBtn');
     gui.importBtn = guiWin.document.getElementById('importBtn');
     gui.importFile = guiWin.document.getElementById('importFile');
-    gui.mtBuild = guiWin.document.getElementById('mtBuild');
-    gui.mtLadderShow = guiWin.document.getElementById('mtLadderShow');
-    gui.mtLadderHide = guiWin.document.getElementById('mtLadderHide');
-    gui.mtGearIn = guiWin.document.getElementById('mtGearIn');
-    gui.mtGearOut = guiWin.document.getElementById('mtGearOut');
-    gui.mtInfo = guiWin.document.getElementById('mtInfo');
     gui.info = guiWin.document.getElementById('info');
+    bindKeyboardShield();
 
     gui.recBtn.onclick = () => {
       if (recordState === 'RECORDING') stopRecording();
@@ -2069,7 +2694,7 @@
     gui.playSelBtn.onclick = () => playSelectedTracks();
     gui.pauseSelBtn.onclick = () => pauseSelectedTracks();
     gui.stopSelBtn.onclick = () => stopSelectedTracks();
-    gui.saveBtn.onclick = () => saveToLocalStorage();
+    gui.saveBtn.onclick = () => saveToLocalStorage(true);
     gui.loadBtn.onclick = () => { loadFromLocalStorage(); updateUi(); };
     gui.exportBtn.onclick = () => exportJSON();
     gui.importBtn.onclick = () => gui.importFile.click();
@@ -2079,39 +2704,12 @@
       e.target.value = '';
     };
 
-    gui.mtBuild.onclick = () => {
-      const active = tracks.find((t) => t._play?.playing && t._ghost?._model?.ready);
-      if (!active) {
-        gui.mtInfo.textContent = 'No active ghost ready.';
-        return;
-      }
-      buildNodeCache(active);
-      hideLadderNodes(active);
-      gui.mtInfo.textContent = `Cache: all=${active._nodeCache.all.length} gear=${active._nodeCache.gear.length} wheels=${active._nodeCache.wheels.length} doors=${active._nodeCache.doors.length} ladder=${active._nodeCache.ladder.length}`;
-    };
-    gui.mtLadderShow.onclick = () => {
-      const active = tracks.find((t) => t._play?.playing && t._ghost?._model?.ready);
-      if (!active) return;
-      setCategoryVisible(active, 'ladder', true);
-    };
-    gui.mtLadderHide.onclick = () => {
-      const active = tracks.find((t) => t._play?.playing && t._ghost?._model?.ready);
-      if (!active) return;
-      hideLadderNodes(active);
-    };
-    gui.mtGearIn.onclick = () => testGhostGearState(1);
-    gui.mtGearOut.onclick = () => testGhostGearState(0);
-
     updateUi();
   }
 
   function renderFlightsList() {
     if (!gui.tracksDiv) return;
-
-    const previousSelected = guiWin && !guiWin.closed
-      ? new Set([...guiWin.document.querySelectorAll('input.track-select[type="checkbox"]:checked')].map((cb) => cb.dataset.id))
-      : new Set();
-    const hasPriorSelection = previousSelected.size > 0;
+    ensureSelectionStateForTracks();
 
     if (!tracks.length) {
       gui.tracksDiv.innerHTML = '<p><i>No flights recorded/loaded yet.</i></p>';
@@ -2125,9 +2723,12 @@
       const rateHz = (1000 / t.sampleMs).toFixed(1);
       const gearChanges = (t.gearEvents || []).length;
       const callsign = sanitizeCallsign(t.callsign || '');
-      const checked = (hasPriorSelection ? previousSelected.has(t.id) : true) ? 'checked' : '';
+      const checked = isTrackSelected(t.id) ? 'checked' : '';
       const recDate = formatTrackDate(t.createdAt);
       const orderLabel = String(t.orderId || 0).padStart(4, '0');
+      const pilotFollowOn = !!t._pilotFollow;
+      const pilotBtnLabel = pilotFollowOn ? 'Stop Fly' : 'Fly This Track';
+      const pilotBtnStyle = pilotFollowOn ? 'background:#0b5ed7; color:#fff; border:1px solid #084298;' : '';
 
       return `
         <div style="border:1px solid #ccc; background:#eee; padding:8px; margin-bottom:8px; border-radius:6px;">
@@ -2140,7 +2741,7 @@
             <input class="nameIn" data-id="${escapeHtml(t.id)}" value="${escapeHtml(t.name || 'Unnamed')}" style="width:min(720px, 95%); text-align:center; font-size:18px; font-weight:700; padding:6px 8px; box-sizing:border-box;">
           </div>
           <div style="display:flex; justify-content:center; margin-bottom:8px;">
-            <input class="trackCallsignIn" data-id="${escapeHtml(t.id)}" maxlength="24" placeholder="Callsign" value="${escapeHtml(callsign)}" style="width:min(320px, 95%); text-align:center; font-size:14px; padding:5px 8px; box-sizing:border-box;">
+            <input class="trackCallsignIn" data-id="${escapeHtml(t.id)}" maxlength="24" placeholder="Callsign" value="${escapeHtml(callsign)}" style="width:min(720px, 95%); text-align:center; font-size:14px; padding:5px 8px; box-sizing:border-box;">
           </div>
           <div style="display:flex; justify-content:center; margin-bottom:8px;">
             <div style="width:min(720px, 95%);">
@@ -2151,11 +2752,26 @@
             <span style="color:#666; text-align:center; width:min(720px, 95%); overflow-wrap:anywhere;">• ID: #${orderLabel} • Date: ${escapeHtml(recDate)} • Duration: ${seconds}s • Rate: ${rateHz} Hz • Gear changes: ${gearChanges}<br>• Callsign: ${escapeHtml(callsign || '-')} • Model: ${escapeHtml(t.modelUrl || '-')}</span>
           </div>
           <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; justify-content:center;">
+            <button class="pilotBtn" data-id="${escapeHtml(t.id)}" title="Hide ghost and let your own aircraft follow this playback" style="${pilotBtnStyle}">${pilotBtnLabel}</button>
             <button class="delBtn" data-id="${escapeHtml(t.id)}">Delete</button>
           </div>
         </div>
       `;
     }).join('');
+
+    for (const btn of guiWin.document.querySelectorAll('.pilotBtn')) {
+      btn.onclick = () => {
+        const id = String(btn.dataset.id || '');
+        const tr = tracks.find((t) => t.id === id);
+        if (!tr) return;
+        if (!tr._play?.playing) {
+          alert('Start playback for this track first.');
+          return;
+        }
+        setTrackPilotFollow(tr, !tr._pilotFollow);
+        updateUi();
+      };
+    }
 
     for (const btn of guiWin.document.querySelectorAll('.delBtn')) {
       btn.onclick = () => deleteTrack(btn.dataset.id);
@@ -2188,7 +2804,11 @@
     }
 
     for (const cb of guiWin.document.querySelectorAll('input.track-select[type="checkbox"]')) {
-      cb.onchange = () => updateRecordingHint();
+      cb.onchange = () => {
+        const id = String(cb.dataset.id || '');
+        if (id) setTrackSelected(id, !!cb.checked);
+        updateRecordingHint();
+      };
     }
 
     updateRecordingHint();
@@ -2270,6 +2890,7 @@
     renderFlightsList();
     updatePlaybackSliderUi();
     updateLiveStatus();
+    emitRecorderDebugEvent();
   }
 
   function updateLiveStatus() {
@@ -2301,7 +2922,10 @@
     }
 
     updatePlayState();
-    if (guiWin && !guiWin.closed) updateLiveStatus();
+    if (guiWin && !guiWin.closed && (t - lastUiUpdateT >= UI_UPDATE_INTERVAL_MS)) {
+      lastUiUpdateT = t;
+      updateLiveStatus();
+    }
   }
 
   /* ---------- Boot ---------- */
