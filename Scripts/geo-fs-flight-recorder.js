@@ -164,6 +164,9 @@
       lastSig: null,
       appliedSig: null,
       resetSig: null,
+      applyRunId: 0,
+      activeApplyRunId: 0,
+      startApplyTimer: null,
       pendingId: null,
       pendingSnapshot: null,
       pendingSig: null,
@@ -181,43 +184,6 @@
 
   function toDebugSafe(v) {
     return String(v == null ? '' : v).replace(/[|\n\r]/g, '_');
-  }
-
-  function pushLiveryDebug(track, payload = {}) {
-    const lv = track?._livery;
-    if (!lv) return '';
-    if (!lv.debug) {
-      lv.debug = { seq: 0, lastLine: '', lastApplyLine: '', lastTextureLine: '', lastRequestLine: '', history: [] };
-    }
-    lv.debug.seq = (Number(lv.debug.seq) || 0) + 1;
-
-    const line = [
-      'FRDBG',
-      `seq=${lv.debug.seq}`,
-      `track=${toDebugSafe(track?.id || '')}`,
-      `aircraft=${toDebugSafe(track?.aircraftId || '')}`,
-      `event=${toDebugSafe(payload.event || '')}`,
-      `sig=${toDebugSafe(payload.sig || '')}`,
-      `prefer=${toDebugSafe(payload.prefer || '')}`,
-      `idxPot=${toDebugSafe(payload.indexPotential || 0)}`,
-      `mpPot=${toDebugSafe(payload.mpPotential || 0)}`,
-      `first=${toDebugSafe(payload.firstPath || '')}`,
-      `firstOps=${toDebugSafe(payload.firstOps || 0)}`,
-      `second=${toDebugSafe(payload.secondPath || '')}`,
-      `secondOps=${toDebugSafe(payload.secondOps || 0)}`,
-      `ok=${toDebugSafe(payload.ok === true ? 1 : 0)}`,
-      `reason=${toDebugSafe(payload.reason || '')}`
-    ].join('|');
-
-    lv.debug.lastLine = line;
-    if (payload.event === 'apply') lv.debug.lastApplyLine = line;
-    if (payload.event === 'texture_api') lv.debug.lastTextureLine = line;
-    if (payload.event === 'request_result') lv.debug.lastRequestLine = line;
-    lv.debug.history.push(line);
-    if (lv.debug.history.length > 30) lv.debug.history.splice(0, lv.debug.history.length - 30);
-
-    try { console.log(line); } catch { }
-    return line;
   }
 
   function buildProject() {
@@ -593,7 +559,7 @@
     return { livery, source: airline };
   }
 
-  function changeGhostModelTexture(track, textureUrl, index) {
+  function changeGhostModelTexture(track, textureUrl, index, applyRunId = 0) {
     const ghost = track?._ghost;
     const model = ghost?._model;
     if (!ghost || !model || !textureUrl || !Number.isFinite(Number(index))) return;
@@ -605,6 +571,10 @@
     // Use per-instance texture path (same strategy as LiverySelector multiplayer)
     // so we don't mutate shared model textures used by the player's own aircraft.
     const applyTextureData = (dataUrl) => {
+      if (applyRunId && Number(track?._livery?.activeApplyRunId || 0) !== Number(applyRunId)) {
+        return false;
+      }
+
       let didApply = false;
       let used = '';
       const failed = [];
@@ -616,6 +586,7 @@
 
       const tryApply = (label, fn) => {
         if (didApply) return;
+        if (applyRunId && Number(track?._livery?.activeApplyRunId || 0) !== Number(applyRunId)) return;
         try {
           fn();
           didApply = true;
@@ -642,21 +613,12 @@
         tryApply('api_obj', () => geofs.api.changeModelTexture(model, dataUrl, { index }));
       }
 
-      pushLiveryDebug(track, {
-        event: 'texture_api',
-        sig: track?._livery?.pendingSig || track?._livery?.appliedSig || '',
-        prefer: used || 'none',
-        firstPath: `idx_${Number(index)}`,
-        firstOps: didApply ? 1 : 0,
-        ok: didApply,
-        reason: `g${hasGhostChange ? 1 : 0}m${hasModelChange ? 1 : 0}p${hasProtoChange ? 1 : 0}a${hasApiChange ? 1 : 0};fail=${failed.join(',') || '-'}`
-      });
-
       return didApply;
     };
 
     Cesium.Resource.fetchImage({ url: textureUrl })
       .then((img) => {
+        if (applyRunId && Number(track?._livery?.activeApplyRunId || 0) !== Number(applyRunId)) return;
         const canvas = document.createElement('canvas');
         canvas.width = width || img.width || 1024;
         canvas.height = height || img.height || 1024;
@@ -667,15 +629,7 @@
         applyTextureData(dataUrl);
       })
       .catch(() => {
-        pushLiveryDebug(track, {
-          event: 'texture_api',
-          sig: track?._livery?.pendingSig || track?._livery?.appliedSig || '',
-          prefer: 'fetch_image',
-          firstPath: `idx_${Number(index)}`,
-          firstOps: 0,
-          ok: false,
-          reason: 'fetch_failed'
-        });
+        console.warn(`Failed to load livery texture from ${textureUrl}`);
       });
   }
 
@@ -729,14 +683,14 @@
     }
   }
 
-  function applyTrackLiverySnapshot(track, snapshot) {
+  function applyTrackLiverySnapshot(track, snapshot, applyRunId = 0) {
     const items = Array.isArray(snapshot?.textures) ? snapshot.textures : [];
     let ops = 0;
     for (const item of items) {
       const idx = Number(item?.index);
       const url = String(item?.url || '');
       if (!Number.isFinite(idx) || !url) continue;
-      changeGhostModelTexture(track, url, idx);
+      changeGhostModelTexture(track, url, idx, applyRunId);
       ops++;
     }
     return ops;
@@ -744,61 +698,17 @@
 
   async function applyTrackLivery(track, liveryId, snapshot) {
     const reqSig = liverySig(liveryId);
-    const lastAppliedSig = track?._livery?.appliedSig || null;
-    if (
-      track?._livery &&
-      lastAppliedSig &&
-      reqSig &&
-      lastAppliedSig !== reqSig &&
-      track._livery.resetSig !== reqSig
-    ) {
-      track._livery.resetSig = reqSig;
-      resetGhostForNewLivery(track);
-      pushLiveryDebug(track, {
-        event: 'apply',
-        sig: reqSig,
-        ok: false,
-        reason: 'ghost_reset_for_new_livery'
-      });
-      return false;
-    }
+    const runId = track?._livery
+      ? (track._livery.applyRunId = Number(track._livery.applyRunId || 0) + 1)
+      : 0;
+    if (track?._livery) track._livery.activeApplyRunId = runId;
 
     if (!track?._ghost?._model?.ready) {
-      pushLiveryDebug(track, {
-        event: 'apply',
-        sig: reqSig,
-        ok: false,
-        reason: 'model_not_ready'
-      });
       return false;
-    }
-
-    const snapshotOps = applyTrackLiverySnapshot(track, snapshot);
-    if (snapshotOps > 0) {
-      pushLiveryDebug(track, {
-        event: 'apply',
-        sig: reqSig,
-        prefer: 'snapshot',
-        indexPotential: snapshotOps,
-        mpPotential: 0,
-        firstPath: 'snapshot',
-        firstOps: snapshotOps,
-        secondPath: '',
-        secondOps: 0,
-        ok: true,
-        reason: 'applied_recorded_snapshot'
-      });
-      return true;
     }
 
     const entry = getLiverySelectorAircraftEntry(track);
     if (!entry) {
-      pushLiveryDebug(track, {
-        event: 'apply',
-        sig: reqSig,
-        ok: false,
-        reason: 'no_livery_entry'
-      });
       return false;
     }
 
@@ -809,24 +719,12 @@
     } else {
       const idNum = Number(liveryId);
       if (!Number.isFinite(idNum)) {
-        pushLiveryDebug(track, {
-          event: 'apply',
-          sig: reqSig,
-          ok: false,
-          reason: 'invalid_livery_id'
-        });
         return false;
       }
       const idx = idNum >= LIVERY_ID_OFFSET ? idNum - LIVERY_ID_OFFSET : idNum;
       livery = entry?.liveries?.[idx] || null;
     }
     if (!livery) {
-      pushLiveryDebug(track, {
-        event: 'apply',
-        sig: reqSig,
-        ok: false,
-        reason: 'livery_not_found'
-      });
       return false;
     }
 
@@ -834,8 +732,6 @@
     const textures = Array.isArray(livery.texture) ? livery.texture : [];
     const mats = livery.materials || {};
     const model = track._ghost._model;
-
-    const mpMap = Array.isArray(entry.mp) ? entry.mp : [];
 
     const applyByIndex = (skipModelIndices) => {
       let ops = 0;
@@ -854,50 +750,9 @@
         const modelIndex = Number(indices[i]);
         if (!Number.isFinite(modelIndex)) continue;
         if (skipModelIndices?.has(modelIndex)) continue;
-        changeGhostModelTexture(track, tx, modelIndex);
+        changeGhostModelTexture(track, tx, modelIndex, runId);
         ops++;
         touchedModelIndices.add(modelIndex);
-      }
-      return { ops, touchedModelIndices };
-    };
-
-    const applyByMp = async (skipModelIndices) => {
-      let ops = 0;
-      const touchedModelIndices = new Set();
-      for (const mapItem of mpMap) {
-        if (mapItem?.textureIndex != null && mapItem?.modelIndex != null) {
-          const tx = textures[Number(mapItem.textureIndex)];
-          const modelIndex = Number(mapItem.modelIndex);
-          if (skipModelIndices?.has(modelIndex)) continue;
-          if (typeof tx === 'string' && tx && Number.isFinite(modelIndex)) {
-            changeGhostModelTexture(track, tx, modelIndex);
-            ops++;
-            touchedModelIndices.add(modelIndex);
-          }
-          continue;
-        }
-        if (mapItem?.mosaic && mapItem?.modelIndex != null) {
-          const mosaicUrl = await generateMosaicTexture(
-            mapItem.mosaic.base,
-            mapItem.mosaic.tiles,
-            textures
-          );
-          const modelIndex = Number(mapItem.modelIndex);
-          if (skipModelIndices?.has(modelIndex)) continue;
-          if (mosaicUrl && Number.isFinite(modelIndex)) {
-            changeGhostModelTexture(track, mosaicUrl, modelIndex);
-            ops++;
-            touchedModelIndices.add(modelIndex);
-          }
-          continue;
-        }
-        if (mapItem?.material != null) {
-          const mat = mats?.[mapItem.material];
-          if (mat) {
-            applyGhostMaterial(model, mat);
-            ops++;
-          }
-        }
       }
       return { ops, touchedModelIndices };
     };
@@ -908,92 +763,8 @@
       return n;
     }, 0);
 
-    const mpPotential = mpMap.reduce((n, mapItem) => {
-      if (mapItem?.textureIndex != null && mapItem?.modelIndex != null) {
-        const tx = textures[Number(mapItem.textureIndex)];
-        return n + (typeof tx === 'string' && tx && Number.isFinite(Number(mapItem.modelIndex)) ? 1 : 0);
-      }
-      if (mapItem?.mosaic && mapItem?.modelIndex != null) {
-        return n + (Number.isFinite(Number(mapItem.modelIndex)) ? 1 : 0);
-      }
-      if (mapItem?.material != null) {
-        return n + (mats?.[mapItem.material] ? 1 : 0);
-      }
-      return n;
-    }, 0);
-
-    const texLabelIdx = Array.isArray(entry.labels)
-      ? entry.labels.findIndex((x) => String(x || '').toLowerCase() === 'texture')
-      : -1;
-    const indexTextureHint = texLabelIdx >= 0 && Number.isFinite(Number(indices[texLabelIdx])) ? 1 : 0;
-    const mpTextureHint = texLabelIdx >= 0 && mpMap.some((m) => Number(m?.textureIndex) === texLabelIdx) ? 1 : 0;
-
-    const indexScore = indexPotential + indexTextureHint;
-    const mpScore = mpPotential + mpTextureHint;
-    const preferMp = mpScore > indexScore;
-
-    const firstPath = preferMp ? 'mp' : 'index';
-    const secondPath = preferMp ? 'index' : 'mp';
-    const decisionReason = preferMp
-      ? (mpTextureHint > indexTextureHint ? 'prefer_mp_texture_hint' : 'prefer_mp_score')
-      : (indexTextureHint > mpTextureHint ? 'prefer_index_texture_hint' : 'prefer_index_score');
-
-    let firstOps = 0;
-    let secondOps = 0;
-    let ok = false;
-
-    if (preferMp) {
-      const mpRes = await applyByMp();
-      firstOps = mpRes.ops;
-      if (firstOps > 0) {
-        ok = true;
-      } else {
-        const indexRes = applyByIndex();
-        secondOps = indexRes.ops;
-        ok = secondOps > 0;
-      }
-    } else {
-      const indexRes = applyByIndex();
-      firstOps = indexRes.ops;
-      if (firstOps > 0) {
-        ok = true;
-      } else {
-        const mpRes = await applyByMp();
-        secondOps = mpRes.ops;
-        ok = secondOps > 0;
-      }
-    }
-
-    if (ok && firstOps > 0) {
-      pushLiveryDebug(track, {
-        event: 'apply',
-        sig: reqSig,
-        prefer: firstPath,
-        indexPotential,
-        mpPotential,
-        firstPath,
-        firstOps,
-        secondPath,
-        secondOps,
-        ok: true,
-        reason: `applied_first_path_${decisionReason}`
-      });
-      return true;
-    }
-
-    pushLiveryDebug(track, {
-      event: 'apply',
-      sig: reqSig,
-      prefer: firstPath,
-      indexPotential,
-      mpPotential,
-      firstPath,
-      firstOps,
-      secondPath,
-      secondOps,
-      ok,
-      reason: ok ? `applied_second_path_${decisionReason}` : `no_ops_applied_${decisionReason}`
-    });
+    const indexRes = applyByIndex();
+    const ok = indexRes.ops > 0;
     return ok;
   }
 
@@ -1005,12 +776,6 @@
     Promise.resolve(applyTrackLivery(track, liveryId, snapshot))
       .then((ok) => {
         if (!track?._livery) return;
-        pushLiveryDebug(track, {
-          event: 'request_result',
-          sig: reqSig,
-          ok: !!ok,
-          reason: ok ? 'request_ok' : 'request_failed'
-        });
         if (!ok) return;
         track._livery.appliedSig = reqSig || null;
         track._livery.resetSig = reqSig || null;
@@ -1026,27 +791,66 @@
       });
   }
 
-  function updateLiveryDebugUi() {
-    if (!guiWin || guiWin.closed || !gui.liveryDbg) return;
-    const active = tracks.filter((t) => t?._play?.playing);
-    if (!active.length) {
-      gui.liveryDbg.textContent = 'FRDBG|info=no_active_playback';
+  function applyTrackLiveryWhenReady(track, liv, snap, sig, attempt = 0) {
+    if (!track?._play?.playing) return;
+    const modelReady = !!track?._ghost?._model?.ready;
+    if (modelReady) {
+      requestApplyTrackLivery(track, liv, snap);
       return;
     }
-    const lines = [];
-    for (const tr of active) {
-      const dbg = tr?._livery?.debug;
-      const applyLine = dbg?.lastApplyLine || '';
-      const texLine = dbg?.lastTextureLine || '';
-      const requestLine = dbg?.lastRequestLine || '';
-      if (applyLine) lines.push(applyLine);
-      if (texLine) lines.push(texLine);
-      if (requestLine) lines.push(requestLine);
-      if (!applyLine && !texLine && !requestLine) {
-        lines.push(`FRDBG|track=${toDebugSafe(tr?.id || '')}|aircraft=${toDebugSafe(tr?.aircraftId || '')}|event=none|reason=no_debug_yet`);
-      }
+    if (attempt >= 80) {
+      return;
     }
-    gui.liveryDbg.textContent = lines.join('\n');
+    setTimeout(() => applyTrackLiveryWhenReady(track, liv, snap, sig, attempt + 1), 50);
+  }
+
+  function applyCurrentLiveryForTrack(track) {
+    if (!track?._play?.playing) return false;
+
+    const idx = clamp(Math.floor(track?._play?.idx || 0), 0, Math.max(0, (track?.lla?.length || 1) - 1));
+    const liv = liveryAtIndex(track, idx);
+    const snap = liverySnapshotAtIndex(track, idx);
+    const sig = liverySig(liv);
+
+    if (track._livery) {
+      track._livery.appliedSig = null;
+      track._livery.pendingId = liv;
+      track._livery.pendingSnapshot = snap;
+      track._livery.pendingSig = sig;
+    }
+
+    if (liv == null && !snap) {
+      return false;
+    }
+
+    requestApplyTrackLivery(track, liv, snap);
+    return true;
+  }
+
+  function resetThenApplyLiveryForTrack(track) {
+    if (!track?._play?.playing) return false;
+
+    const idx = clamp(Math.floor(track?._play?.idx || 0), 0, Math.max(0, (track?.lla?.length || 1) - 1));
+    const liv = liveryAtIndex(track, idx);
+    const snap = liverySnapshotAtIndex(track, idx);
+    const sig = liverySig(liv);
+
+    resetGhostForNewLivery(track);
+
+    if (track._livery) {
+      track._livery.appliedSig = null;
+      track._livery.resetSig = null;
+      track._livery.pendingId = liv;
+      track._livery.pendingSnapshot = snap;
+      track._livery.pendingSig = sig;
+    }
+
+    if (liv == null && !snap) {
+      return false;
+    }
+
+    applyTrackLiveryWhenReady(track, liv, snap, sig);
+    return true;
   }
 
   /* ---------- Recording ---------- */
@@ -1491,6 +1295,10 @@
     track._precision = null;
     track._lastGearUp = null;
     if (track._livery) {
+      if (track._livery.startApplyTimer) {
+        clearTimeout(track._livery.startApplyTimer);
+        track._livery.startApplyTimer = null;
+      }
       track._livery.lastSig = null;
       track._livery.appliedSig = null;
       track._livery.resetSig = null;
@@ -1505,7 +1313,16 @@
       track._livery.pendingId = initialLivery;
       track._livery.pendingSnapshot = initialSnapshot;
       track._livery.pendingSig = initialSig;
-      if (initialLivery != null) requestApplyTrackLivery(track, initialLivery, initialSnapshot);
+      if (initialLivery != null || initialSnapshot) {
+        // Exact same flow as UI helper buttons:
+        // 1) "Reset ghost + Apply now"
+        // 2) after delay, "Apply now"
+        resetThenApplyLiveryForTrack(track);
+        track._livery.startApplyTimer = setTimeout(() => {
+          if (!track?._play?.playing) return;
+          applyCurrentLiveryForTrack(track);
+        }, 2000);
+      }
     }
     updatePlayState();
   }
@@ -1543,6 +1360,10 @@
     track._nodeCache = { ready: false, all: [], gear: [], wheels: [], doors: [], ladder: [] };
     track._lastGearUp = null;
     if (track._livery) {
+      if (track._livery.startApplyTimer) {
+        clearTimeout(track._livery.startApplyTimer);
+        track._livery.startApplyTimer = null;
+      }
       track._livery.lastSig = null;
       track._livery.appliedSig = null;
       track._livery.resetSig = null;
@@ -2071,11 +1892,6 @@
           <small id="mtInfo" style="display:block; margin-top:6px; color:#666;"></small>
         </fieldset>
 
-        <fieldset style="margin-top:10px;">
-          <legend>Livery Debug</legend>
-          <pre id="liveryDbg" style="white-space:pre-wrap; font-size:11px; line-height:1.25; max-height:180px; overflow:auto; background:#111; color:#9fe8a1; padding:8px; border-radius:6px;">FRDBG|info=idle</pre>
-        </fieldset>
-
         <div style="margin-top:10px;"><small id="info" style="color:#444;"></small></div>
       </div>
     `;
@@ -2189,7 +2005,6 @@
     gui.mtGearIn = guiWin.document.getElementById('mtGearIn');
     gui.mtGearOut = guiWin.document.getElementById('mtGearOut');
     gui.mtInfo = guiWin.document.getElementById('mtInfo');
-    gui.liveryDbg = guiWin.document.getElementById('liveryDbg');
     gui.info = guiWin.document.getElementById('info');
 
     gui.recBtn.onclick = () => {
@@ -2461,7 +2276,6 @@
     if (!guiWin || guiWin.closed) return;
     updatePlaybackControlsUi();
     updatePlaybackSliderUi();
-    updateLiveryDebugUi();
     const samples = currentRec?.lla?.length || 0;
     const hz = currentRec ? (1000 / currentRec.sampleMs).toFixed(1) : (1000 / defaultSampleMs).toFixed(1);
     if (gui.recStatus) gui.recStatus.textContent = `REC • ${samples} • ${hz} Hz`;
