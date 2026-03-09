@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoFS Flight Recorder
 // @namespace    https://github.com/ArjanKw/GeoFS-BlueAngels/
-// @version      1.1.7
+// @version      1.1.9
 // @description  Record and replay GeoFS flights with lightweight gear state playback.
 // @match        https://www.geo-fs.com/*
 // @grant        none
@@ -11,9 +11,12 @@
   'use strict';
 
   /* ---------- Config ---------- */
-  const VERSION = '1.1.7';
-  const LS_KEY = 'FlightRecorder100';
+  const VERSION = '1.1.9';
   const LS_CALLSIGN_KEY = 'FlightRecorder100Callsign';
+  const IDB_NAME = 'FlightRecorder100DB';
+  const IDB_VERSION = 1;
+  const IDB_STORE = 'projects';
+  const IDB_PROJECT_KEY = 'main';
   const MAX_DT_CAP = 120;
   const MAX_RECORD_STEPS_PER_FRAME = 800;
   const HIDE_NODE_HINTS = ['ladder', 'stairs', 'boarding'];
@@ -79,7 +82,7 @@
   ];
   const LIVERY_ID_OFFSET = 10000;
 
-  let defaultSampleMs = 16; // 60 Hz
+  let defaultSampleMs = 33; // 30 Hz
   let easingOn = false;
   let ultraStrength = 50; // 0..100
   let recordCallsign = '';
@@ -87,6 +90,7 @@
   let playbackSliderDragging = false;
   let lastSliderSeekTs = 0;
   const UI_UPDATE_INTERVAL_MS = 100;
+  let idbOpenPromise = null;
 
   /* ---------- State machines ---------- */
   let recordState = 'IDLE'; // IDLE | RECORDING
@@ -106,6 +110,7 @@
   const trackSelectionState = new Map();
   let activePilotTrackId = null;
   let frKeyboardShieldBound = false;
+  let frToggleHotkeyBound = false;
 
   /* ---------- Utils ---------- */
   const now = () => performance.now();
@@ -127,6 +132,18 @@
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 24);
+  };
+  const getModelDisplayName = (modelUrl) => {
+    const raw = String(modelUrl || '').trim();
+    if (!raw) return '-';
+
+    const noQuery = raw.split('?')[0].split('#')[0];
+    const fileName = noQuery.split(/[\\/]/).pop() || '';
+    if (!fileName) return '-';
+
+    const dot = fileName.lastIndexOf('.');
+    const baseName = dot > 0 ? fileName.slice(0, dot) : fileName;
+    return baseName || '-';
   };
 
   lastMainT = now();
@@ -332,6 +349,50 @@
     window.addEventListener('keydown', blockIfTyping, true);
     window.addEventListener('keyup', blockIfTyping, true);
     window.addEventListener('keypress', blockIfTyping, true);
+  }
+
+  function isPanelVisible() {
+    const panel = gui.panelEl || document.getElementById(FR_PANEL_ID);
+    return !!panel && panel.classList.contains('geofs-visible');
+  }
+
+  function bindPanelToggleHotkey() {
+    if (frToggleHotkeyBound) return;
+    frToggleHotkeyBound = true;
+
+    window.addEventListener('keydown', (ev) => {
+      if (ev.defaultPrevented) return;
+      if (ev.repeat) return;
+      if (ev.altKey || ev.metaKey) return;
+      if (isEditableElement(document.activeElement)) return;
+
+      const isBackquote = ev.code === 'Backquote' || ev.key === '`';
+      if (!isBackquote) return;
+
+      ev.preventDefault();
+
+      // Shift+` => toggle recording
+      if (ev.shiftKey && !ev.ctrlKey) {
+        if (recordState === 'RECORDING') stopRecording();
+        else startRecordingWithSelectedPlaybacks();
+        updateUi();
+        return;
+      }
+
+      // Ctrl+` => toggle playback (selected tracks)
+      if (ev.ctrlKey && !ev.shiftKey) {
+        const selected = getSelectedTracks();
+        const hasPlaying = selected.some((t) => t?._play?.playing);
+        if (hasPlaying) stopSelectedTracks();
+        else playSelectedTracks();
+        return;
+      }
+
+      // ` => toggle panel
+      if (!ev.ctrlKey && !ev.shiftKey) {
+        togglePanel();
+      }
+    });
   }
 
   /* ---------- Node/matrix helpers ---------- */
@@ -1442,7 +1503,7 @@
 
     currentRec = null;
     recordState = 'IDLE';
-    saveToLocalStorage();
+    void saveToIndexedDB();
     updateUi();
   }
 
@@ -2139,66 +2200,132 @@
     }
   }
 
-  function saveToLocalStorage(notifyOnError = false) {
+  function openRecorderDb() {
+    if (idbOpenPromise) return idbOpenPromise;
+    idbOpenPromise = new Promise((resolve, reject) => {
+      if (!window.indexedDB) {
+        reject(new Error('IndexedDB is not available in this browser.'));
+        return;
+      }
+      const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(IDB_STORE)) {
+          db.createObjectStore(IDB_STORE, { keyPath: 'key' });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error('Failed to open IndexedDB.'));
+    }).catch((err) => {
+      idbOpenPromise = null;
+      throw err;
+    });
+    return idbOpenPromise;
+  }
+
+  function applyProjectToTracks(project) {
+    if (!project?.tracks?.length) {
+      tracks = [];
+      ensureSelectionStateForTracks();
+      refreshNextTrackNumber();
+      updatePlayState();
+      return;
+    }
+    tracks = project.tracks.map((t) => {
+      const tr = normalizeTrackMeta({
+        orderId: t.orderId,
+        id: t.id,
+        name: t.name,
+        callsign: t.callsign || '',
+        description: t.description || '',
+        createdAt: t.createdAt,
+        aircraftId: t.aircraftId,
+        modelUrl: t.modelUrl,
+        sampleMs: t.sampleMs,
+        base: t.base,
+        lla: t.lla || [],
+        htr: t.htr || [],
+        xy: t.xy || [],
+        gearEvents: t.gearEvents || [],
+        liveryEvents: t.liveryEvents || []
+      }, 1);
+      initTrackRuntime(tr);
+      return tr;
+    });
+    tracks.sort((a, b) => (a.orderId || 0) - (b.orderId || 0));
+    tracks.forEach((t, i) => normalizeTrackMeta(t, i + 1));
+    ensureSelectionStateForTracks();
+    refreshNextTrackNumber();
+    updatePlayState();
+  }
+
+  async function saveToIndexedDB(notifyOnError = false) {
     try {
-      localStorage.setItem(LS_KEY, JSON.stringify(buildProject()));
+      const db = await openRecorderDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_STORE, 'readwrite');
+        const store = tx.objectStore(IDB_STORE);
+        store.put({ key: IDB_PROJECT_KEY, data: buildProject(), updatedAt: Date.now() });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error || new Error('Failed to write to IndexedDB.'));
+        tx.onabort = () => reject(tx.error || new Error('IndexedDB transaction aborted.'));
+      });
       return true;
     } catch (e) {
       if (notifyOnError) {
         const msg = String(e?.name || e?.message || e || '');
-        const quotaLike = /quota|exceed|storage/i.test(msg);
-        alert(quotaLike
-          ? 'Save failed: browser storage is full for this site. Remove old tracks or export JSON and delete tracks.'
-          : `Save failed: ${msg || 'unknown error'}`);
+        alert(`Save failed: ${msg || 'unknown error'}`);
       }
       return false;
     }
   }
 
-  function loadFromLocalStorage() {
+  async function loadFromIndexedDB() {
     try {
-      const raw = localStorage.getItem(LS_KEY);
-      if (!raw) return;
-      const project = JSON.parse(raw);
-      if (!project?.tracks?.length) {
-        tracks = [];
-        return;
-      }
-      tracks = project.tracks.map((t) => {
-        const tr = normalizeTrackMeta({
-          orderId: t.orderId,
-          id: t.id,
-          name: t.name,
-          callsign: t.callsign || '',
-          description: t.description || '',
-          createdAt: t.createdAt,
-          aircraftId: t.aircraftId,
-          modelUrl: t.modelUrl,
-          sampleMs: t.sampleMs,
-          base: t.base,
-          lla: t.lla || [],
-          htr: t.htr || [],
-          xy: t.xy || [],
-          gearEvents: t.gearEvents || [],
-          liveryEvents: t.liveryEvents || []
-        }, 1);
-        initTrackRuntime(tr);
-        return tr;
+      const db = await openRecorderDb();
+      const record = await new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_STORE, 'readonly');
+        const store = tx.objectStore(IDB_STORE);
+        const req = store.get(IDB_PROJECT_KEY);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error || new Error('Failed to read IndexedDB data.'));
       });
-      tracks.sort((a, b) => (a.orderId || 0) - (b.orderId || 0));
-      tracks.forEach((t, i) => normalizeTrackMeta(t, i + 1));
+
+      const project = record?.data;
+      if (project && typeof project === 'object') {
+        applyProjectToTracks(project);
+        return true;
+      }
+
+      tracks = [];
       ensureSelectionStateForTracks();
       refreshNextTrackNumber();
       updatePlayState();
+      return false;
     } catch {
+      tracks = [];
+      ensureSelectionStateForTracks();
+      refreshNextTrackNumber();
+      updatePlayState();
+      return false;
     }
   }
 
-  function exportJSON() {
+  function exportJSON(fileName) {
+    const baseDefault = `flight-recorder-${VERSION}`;
+    const raw = String(fileName || '').trim();
+    const safeBase = (raw || baseDefault)
+      .replace(/[\\/:*?"<>|]+/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 120);
+    const finalBase = safeBase || baseDefault;
+    const finalName = /\.json$/i.test(finalBase) ? finalBase : `${finalBase}.json`;
+
     const blob = new Blob([JSON.stringify(buildProject())], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `flight-recorder-${VERSION}.json`;
+    a.download = finalName;
     a.click();
     URL.revokeObjectURL(a.href);
   }
@@ -2235,7 +2362,7 @@
         tracks.sort((a, b) => (a.orderId || 0) - (b.orderId || 0));
         ensureSelectionStateForTracks();
         refreshNextTrackNumber();
-        saveToLocalStorage();
+        void saveToIndexedDB();
         updateUi();
       } catch (e) {
         alert(`Import failed: ${e}`);
@@ -2395,14 +2522,14 @@
     const tr = tracks.find((t) => t.id === id);
     if (!tr) return;
     tr.name = name?.trim() || tr.name;
-    saveToLocalStorage();
+    void saveToIndexedDB();
   }
 
   function setTrackDescription(id, description) {
     const tr = tracks.find((t) => t.id === id);
     if (!tr) return;
     tr.description = String(description || '');
-    saveToLocalStorage();
+    void saveToIndexedDB();
   }
 
   function setTrackCallsign(id, callsign) {
@@ -2414,7 +2541,7 @@
       const lla = tr.lla?.[idx] || tr.lla?.[0] || null;
       if (lla) ensureGhostCallsignLabel(tr, lla);
     }
-    saveToLocalStorage();
+    void saveToIndexedDB();
   }
 
   function deleteTrack(id) {
@@ -2423,7 +2550,7 @@
     stopPlayback(tracks[idx]);
     tracks.splice(idx, 1);
     trackSelectionState.delete(id);
-    saveToLocalStorage();
+    void saveToIndexedDB();
     updateUi();
   }
 
@@ -2459,13 +2586,14 @@
 
     panel.innerHTML = `
       <div style="font-family: Segoe UI, sans-serif; padding:14px;">
-        <h2 style="margin:0 0 12px; text-align: center;">Flight Recorder ${VERSION}</h2>
+        <img src="https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Images/scripts/geo-fs-flight-recorder-horizontal.png" alt="Flight Recorder" style="display:block; max-width:100%; height:auto; margin:0 auto 12px;">
+        <p style="margin: 10px 0 12px; text-align: center;">Version ${VERSION}</p>
 
-        <fieldset style="margin-bottom:10px;">
-          <legend>Recording</legend>
+        <fieldset style="background: #ccc; padding: 20px; border-radius: 20px; margin-bottom: 20px;">
           <div style="display:flex; justify-content:center; align-items:center;">
-            <button id="recBtn" style="font-size:18px; font-weight:700; min-width:260px; padding:12px 14px; border:none; border-radius:8px; cursor:pointer; color:#fff;"></button>
+            <button id="recBtn" style="font-size:18px; font-weight:700; min-width:260px; padding:12px 14px; border:none; border-radius:80px; cursor:pointer; color:#fff;"></button>
           </div>
+          <div id="recHint" style="text-align:center; color:#777; margin-top:4px; border-bottom: 1px solid #333; padding-bottom: 10px;"></div>
           <div style="text-align:center; color:#555; margin-top:8px;">
             <label for="rateSel">Rate</label>
             <select id="rateSel" style="margin-left:6px;">
@@ -2480,29 +2608,20 @@
             <input id="callsignIn" type="text" maxlength="24" placeholder="bijv. BA01" style="margin-left:6px; width:180px;">
           </div>
           <div id="recStatus" style="text-align:center; color:#777; margin-top:10px; font-size:14px;">REC • 0 • ${(1000 / defaultSampleMs).toFixed(1)} Hz</div>
-          <div id="recHint" style="text-align:center; color:#777; margin-top:4px; min-height:18px;"></div>
         </fieldset>
 
         <fieldset style="margin-bottom:10px;">
-          <legend>Storage</legend>
           <div style="margin-bottom:6px; display:flex; gap:8px; flex-wrap:wrap; justify-content:center;">
-            <button id="saveBtn">Save (to Browser)</button>
-            <button id="loadBtn">Load (from Browser)</button>
-            <button id="exportBtn">Export JSON</button>
-            <button id="importBtn">Import JSON</button>
+            <button id="exportBtn">Export Flights</button>
+            <button id="importBtn">Import Flights</button>
             <input type="file" id="importFile" accept="application/json" style="display:none;">
           </div>
-          <small style="display:block; color:#555; text-align:center; margin-bottom:2px;">
-            <b>Save/Load</b> = local browser storage on this PC.<br>
-            <b>Export/Import</b> = JSON file backup/share.
-          </small>
         </fieldset>
 
         <fieldset style="margin-bottom:10px;">
-          <legend>Playback</legend>
           <div style="display:flex; justify-content:center; gap:14px; flex-wrap:wrap; align-items:center;">
-            <button id="playSelBtn" title="Play selected" style="width:62px; height:62px; border-radius:50%; border:1px solid #0a7f2e; background:#16a34a; color:#fff; font-size:26px; font-weight:700; cursor:pointer;">▶</button>
-            <button id="pauseSelBtn" title="Pause selected" style="width:62px; height:62px; border-radius:50%; border:1px solid #0a4f97; background:#2563eb; color:#fff; font-size:24px; font-weight:700; cursor:pointer;">❚❚</button>
+            <button id="playSelBtn" title="Play selected" style="width:62px; height:62px; border-radius:50%; border:1px solid #2c4f02; background:#4B8603; color:#fff; font-size:26px; font-weight:700; cursor:pointer;">▶</button>
+            <button id="pauseSelBtn" title="Pause selected" style="width:62px; height:62px; border-radius:50%; border:1px solid #002441; background:#014275; color:#fff; font-size:24px; font-weight:700; cursor:pointer;">❚❚</button>
             <button id="stopSelBtn" title="Stop selected" style="width:62px; height:62px; border-radius:50%; border:1px solid #991b1b; background:#dc2626; color:#fff; font-size:22px; font-weight:700; cursor:pointer;">■</button>
           </div>
           <div style="text-align:center; margin-top:10px; padding-bottom:20px;">
@@ -2517,7 +2636,6 @@
           <div style="text-align:center; color:#555; margin-bottom:10px;">
             <label style="cursor:pointer;"><input id="showCallsignCb" type="checkbox" ${showCallsign ? 'checked' : ''}> Show Callsign</label>
           </div>
-          <div style="text-align:center; color:#666; margin-bottom:8px;">Playback controls for selected tracks</div>
           <div id="tracks"></div>
         </fieldset>
 
@@ -2551,7 +2669,12 @@
   }
 
   function togglePanel() {
+    if (isPanelVisible()) {
+      setPanelVisible(false);
+      return;
+    }
     openGui();
+    setPanelVisible(true);
   }
 
   function ensureBottomButton() {
@@ -2589,6 +2712,7 @@
     window.FlightRecorder = window.FlightRecorder || {};
     window.FlightRecorder.togglePanel = togglePanel;
     exposeDebugApi();
+    bindPanelToggleHotkey();
 
     const tryInit = () => {
       const panelHost = document.querySelector('.geofs-ui-left');
@@ -2624,8 +2748,6 @@
     gui.playbackPos = guiWin.document.getElementById('playbackPos');
     gui.playbackPosInfo = guiWin.document.getElementById('playbackPosInfo');
     gui.tracksDiv = guiWin.document.getElementById('tracks');
-    gui.saveBtn = guiWin.document.getElementById('saveBtn');
-    gui.loadBtn = guiWin.document.getElementById('loadBtn');
     gui.exportBtn = guiWin.document.getElementById('exportBtn');
     gui.importBtn = guiWin.document.getElementById('importBtn');
     gui.importFile = guiWin.document.getElementById('importFile');
@@ -2694,9 +2816,12 @@
     gui.playSelBtn.onclick = () => playSelectedTracks();
     gui.pauseSelBtn.onclick = () => pauseSelectedTracks();
     gui.stopSelBtn.onclick = () => stopSelectedTracks();
-    gui.saveBtn.onclick = () => saveToLocalStorage(true);
-    gui.loadBtn.onclick = () => { loadFromLocalStorage(); updateUi(); };
-    gui.exportBtn.onclick = () => exportJSON();
+    gui.exportBtn.onclick = () => {
+      const suggested = `GeoFS Flight - ${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
+      const name = prompt('Filename for export:', suggested);
+      if (name == null) return;
+      exportJSON(name);
+    };
     gui.importBtn.onclick = () => gui.importFile.click();
     gui.importFile.onchange = (e) => {
       const f = e.target.files?.[0];
@@ -2721,39 +2846,37 @@
     gui.tracksDiv.innerHTML = orderedTracks.map((t) => {
       const seconds = Math.round((t.lla.length * t.sampleMs) / 1000);
       const rateHz = (1000 / t.sampleMs).toFixed(1);
-      const gearChanges = (t.gearEvents || []).length;
       const callsign = sanitizeCallsign(t.callsign || '');
       const checked = isTrackSelected(t.id) ? 'checked' : '';
       const recDate = formatTrackDate(t.createdAt);
       const orderLabel = String(t.orderId || 0).padStart(4, '0');
       const pilotFollowOn = !!t._pilotFollow;
       const pilotBtnLabel = pilotFollowOn ? 'Stop Fly' : 'Fly This Track';
-      const pilotBtnStyle = pilotFollowOn ? 'background:#0b5ed7; color:#fff; border:1px solid #084298;' : '';
+      const pilotBtnStyle = pilotFollowOn ? 'background:#004274; border:1px solid #002441; color:#fff; padding: 5px 20px; border-radius: 3px;' : 'background:#4B8603; border:1px solid #2c4f02; color:#fff; padding: 5px 20px; border-radius: 3px;';
+      const showPilotBtn = !!t._play?.playing;
 
       return `
-        <div style="border:1px solid #ccc; background:#eee; padding:8px; margin-bottom:8px; border-radius:6px;">
-          <div style="display:flex; justify-content:center; margin-bottom:8px;">
-            <label style="font-size:15px; font-weight:600; display:flex; align-items:center; gap:8px;">
-              <input type="checkbox" class="track-select" data-id="${escapeHtml(t.id)}" ${checked} style="width:20px; height:20px; cursor:pointer;"> Use in playback
+        <div style="border:1px solid #ccc; background:rgba(255, 255, 255, 0.6); padding:8px; margin-bottom:8px; border-radius:6px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin: 0 13px 8px 9px">
+            <label style="font-size:15px; font-weight:600; display:flex; align-items:center; gap:8px; margin:0;">
+              <input type="checkbox" class="track-select" data-id="${escapeHtml(t.id)}" ${checked} style="width:20px; height:20px; cursor:pointer;"> Use in Playback
             </label>
+            ${showPilotBtn ? `<button class="pilotBtn" data-id="${escapeHtml(t.id)}" title="Hide ghost and let your own aircraft follow this playback" style="${pilotBtnStyle}">${pilotBtnLabel}</button>` : ''}
           </div>
-          <div style="display:flex; justify-content:center; margin-bottom:8px;">
+          <div style="display:flex; justify-content:center;">
             <input class="nameIn" data-id="${escapeHtml(t.id)}" value="${escapeHtml(t.name || 'Unnamed')}" style="width:min(720px, 95%); text-align:center; font-size:18px; font-weight:700; padding:6px 8px; box-sizing:border-box;">
           </div>
-          <div style="display:flex; justify-content:center; margin-bottom:8px;">
-            <input class="trackCallsignIn" data-id="${escapeHtml(t.id)}" maxlength="24" placeholder="Callsign" value="${escapeHtml(callsign)}" style="width:min(720px, 95%); text-align:center; font-size:14px; padding:5px 8px; box-sizing:border-box;">
+          <div style="display:flex; justify-content:center;margin-top:-1px">
+            <input class="trackCallsignIn" data-id="${escapeHtml(t.id)}" maxlength="24" placeholder="Callsign" value="${escapeHtml(callsign)}" style="width:min(720px, 95%); text-align:center; font-size:14px; padding:5px 8px; box-sizing:border-box;border-radius:0;border: 1px solid #999">
           </div>
-          <div style="display:flex; justify-content:center; margin-bottom:8px;">
+          <div style="display:flex; justify-content:center;margin-top:-1px">
             <div style="width:min(720px, 95%);">
-              <textarea class="descIn" data-id="${escapeHtml(t.id)}" rows="3" placeholder="Description" style="width:100%; box-sizing:border-box; resize:vertical;">${escapeHtml(t.description || '')}</textarea>
+              <textarea class="descIn" data-id="${escapeHtml(t.id)}" rows="3" placeholder="Description" style="width:100%; box-sizing:border-box; resize:vertical;padding: 5px">${escapeHtml(t.description || '')}</textarea>
             </div>
           </div>
-          <div style="display:flex; justify-content:center; margin-bottom:8px;">
-            <span style="color:#666; text-align:center; width:min(720px, 95%); overflow-wrap:anywhere;">• ID: #${orderLabel} • Date: ${escapeHtml(recDate)} • Duration: ${seconds}s • Rate: ${rateHz} Hz • Gear changes: ${gearChanges}<br>• Callsign: ${escapeHtml(callsign || '-')} • Model: ${escapeHtml(t.modelUrl || '-')}</span>
-          </div>
-          <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; justify-content:center;">
-            <button class="pilotBtn" data-id="${escapeHtml(t.id)}" title="Hide ghost and let your own aircraft follow this playback" style="${pilotBtnStyle}">${pilotBtnLabel}</button>
-            <button class="delBtn" data-id="${escapeHtml(t.id)}">Delete</button>
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin:0px 12px 8px 12px">
+            <span style="color:#666; font-size:14px; text-align:left; flex:1; min-width:0; overflow-wrap:anywhere;">• <strong>ID</strong>: #${orderLabel} • <strong>Date</strong>: ${escapeHtml(recDate)}<br />• <strong>Duration</strong>: ${seconds}s • <strong>Rate</strong>: ${rateHz} Hz • <strong>Model</strong>: ${escapeHtml(getModelDisplayName(t.modelUrl))}</span>
+            <button class="delBtn" data-id="${escapeHtml(t.id)}" style="margin-left:auto; flex-shrink:0;">Delete</button>
           </div>
         </div>
       `;
@@ -2817,7 +2940,7 @@
   function updateRecordingHint() {
     if (!guiWin || guiWin.closed || !gui.recHint) return;
     const selectedCount = [...guiWin.document.querySelectorAll('input.track-select[type="checkbox"]:checked')].length;
-    gui.recHint.textContent = selectedCount > 0 ? 'With selected playbacks' : '';
+    gui.recHint.textContent = selectedCount > 0 ? 'While replaying selected playbacks' : '';
   }
 
   function updatePlaybackControlsUi() {
@@ -2871,7 +2994,7 @@
 
     const recActive = recordState === 'RECORDING';
     gui.recBtn.textContent = recActive ? 'STOP RECORDING' : 'START RECORDING';
-    gui.recBtn.style.background = recActive ? '#0b5ed7' : '#c92a2a';
+    gui.recBtn.style.background = recActive ? '#024475' : '#c92a2a';
 
     const canRec = recordState === 'IDLE';
 
@@ -2930,7 +3053,9 @@
 
   /* ---------- Boot ---------- */
   loadRecorderPrefs();
-  loadFromLocalStorage();
   initEmbeddedUi();
+  void loadFromIndexedDB().then(() => {
+    updateUi();
+  });
   requestAnimationFrame(mainRAF);
 })();
