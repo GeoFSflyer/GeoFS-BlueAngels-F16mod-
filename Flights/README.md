@@ -1,5 +1,5 @@
 # Flights
-Download and replay our flights hear.
+Download and replay our flights here.
 
 ## Straight out formation
 Simple straight out formation flight to practise take-off and close formation flying. Take-off at KNPA, runway 7L, with Flaps 1. Rotate at around 180 knots. Flaps up when the runway dissapears in the cockpit view, and pull back on the yoke slightly. #1 flies straight out, leveling off smoothly at 4700 while reducing power. Take-off in V-formation, transition when airborne to the diamond formation. Halfway move to line formation. Short flight.
