@@ -59,7 +59,7 @@ Use it by clicking the Flight Recorder button in the top right, opening this pan
 ![Flight Recorder](Images/scripts/FlightRecorder.png)
 
 ## Multiplayer info
-With this script you see the speed, distance and aircraft type for each aircraft, so you can intercept them easily. Press the 'L' key to see/hide labels.
+With this script you see the speed, distance and aircraft type for each aircraft, so you can intercept them easily. Press the 'L' key to see/hide labels. It now also shows you the closing speed, handy for an intercept!
 As GeoFS isn't equiped with a radar, we use this as an alternative.
 
 ![See multiplayer info](Images/scripts/multiplayer-info.png)
@@ -68,9 +68,9 @@ Installation: [add this script](https://raw.githubusercontent.com/ArjanKw/GeoFS-
 
 ## Chat fix
 There is a bug in GeoFS that prevents the key 'T' to open the chat input. Fixing this helps to quickly communicate without having to rely on your mouse.
-This script is created by Zeta, all credits go to him. We host it as we couldn't find the place where it was stored originally.
+This script [is created by Zeta](https://github.com/ZetaPossibly/GeoFS-Chat-Fix), all credits go to him. We host it as we couldn't find the place where it was stored originally.
 
-Installation: [add this script](https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/geo-fs-chat-fix.js) to Tampermonkey, or execute it in Developer Console.
+Installation: [add this script](https://raw.githubusercontent.com/ZetaPossibly/GeoFS-Chat-Fix/refs/heads/main/fix_chat.js) to Tampermonkey, or execute it in Developer Console.
 
 ## Flight info
 With this script your speed (True airspeed, Ground speed and Mach number), altitude (Flight Level, Altitude in feet and Climbrate), Angle of Attack, Gear and Flap position are displayed in the bottom. It will also warn you for a gear up landing, a stall or flying with engine off. If you have the Engine Power Boost script installed, it will also display your engine mode.
