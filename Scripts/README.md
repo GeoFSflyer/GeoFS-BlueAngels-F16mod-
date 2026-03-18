@@ -37,9 +37,23 @@ geofs.camera.modes[1].insideView = true;
 geofs.camera.modes[1].position = [0.9, 4.86, 0.6];
 geofs.camera.modes[1].orientations['current'] = [-211, -2.3, 0];
 
+// Set opacity of instruments
+instruments.setOpacity(0.9)
 
+// FLAPS zelf precies besturen // BIJ MAN. terug zetten naar 0
+controls.flaps.positionTarget = 0.1;
+controls.setPartAnimationDelta(controls.flaps);
 
+/*
+Flaps and Slats
+There are three positions that the pilot can select for the flaps and slats.
 
+AUTO: flaps and slats operate independently and asymmetrically based on many factors such as angle of attack, g-load and Mach-number. On high-g maneuvers the flaps and slats deflect down to increase lift. This decreases the turn radius. Slats deflect automatically at high angles of attack to increase the stall margin.
+
+HALF: flaps and slats deflect down to the half way position, depending on airspeed. Above 250kts they stay up. Below 250kts they gradually extend as speed decreases to maximize lift. The half position is selected for takeoff or approach.
+
+FULL: flaps and slats can deflect to the full position, again depending on airspeed. This position is selected for landing.
+*/
 
 
 // Nose cam looking back
@@ -554,3 +568,282 @@ geo-fs doet elke x ms een request naar https://mps.geo-fs.com/update?l=4. Daarin
     "lastMsgId": 2062,
     "serverTime": 1762433925624
 }
+
+
+// HUD F-18 benaderen
+const hudOpts =
+  geofs.aircraft.instance.definition
+    .parts[87]
+    .object3d
+    ._parent
+    ._children[83]
+    ._children[0]
+    ._options;
+
+Render hud:
+geofs.aircraft.instance.definition.parts[87].object3d._parent._children[83]._children[0].render()
+
+// Verander positie:
+geofs.aircraft.instance.definition.parts[87].object3d._parent._children[83]._children[0]._initialPosition = [100, 100, 100]
+
+Gevolgd door render().
+
+// Locatie van HUD
+geofs.aircraft.instance.definition.parts[87].object3d._parent._children[83]._children[0].htr
+
+// PFD
+
+instruments.renderers = {
+    PFDBoeing(e) {
+        let t = exponentialSmoothing("smoothKias", geofs.animation.getValue("kias"), .1)
+          , a = [893, 980]
+          , o = .25;
+        a = V2.parseInt(V2.scale(a, o));
+        let n = e.canvasAPI.context;
+        e.canvasAPI.clear("#000000"),
+        e.canvasAPI.drawRotatedSprite({
+            image: e.images.attitude,
+            origin: [0, 0],
+            size: [350, 1400],
+            center: [175, 700],
+            destination: a,
+            rotation: geofs.animation.getValue("aroll") * DEGREES_TO_RAD,
+            translation: [0, 5 * geofs.animation.getValue("atilt")]
+        }),
+        e.canvasAPI.drawRotatedSprite({
+            image: e.images.overlays,
+            origin: [245, 56],
+            size: [23, 21],
+            center: [11, 120],
+            destination: a,
+            rotation: geofs.animation.getValue("aroll") * DEGREES_TO_RAD,
+            translation: [0, 0]
+        }),
+        n.drawImage(e.images.background, 0, 0),
+        n.fillStyle = "#00ff08",
+        n.textAlign = "center",
+        n.font = "18px sans-serif";
+        let r = ""
+          , s = ""
+          , c = "";
+        geofs.autopilot.on && (r = "SPD",
+        "NAV" == geofs.autopilot.mode ? (s = "LNAV",
+        c = geofs.autopilot.VNAV ? "V/S" : "ALT") : (s = "HDG SEL",
+        c = "ALT")),
+        n.fillText(r, 133, 20),
+        n.fillText(s, 230, 20),
+        n.fillText(c, 325, 20),
+        n.fillStyle = "#ffffff",
+        n.textAlign = "center",
+        n.font = "14px sans-serif";
+        let d = ""
+          , u = "";
+        "GPS" == geofs.animation.getValue("NAVMODE") && (d = "GPS"),
+        "NAV" == geofs.animation.getValue("NAVMODE") && (d = "VOR/LOC"),
+        geofs.autopilot.VNAV && (u = "G/S"),
+        n.fillText(d, 230, 33),
+        n.fillText(u, 325, 33),
+        2500 >= geofs.animation.getValue("haglFeet") && (n.fillStyle = "#ffffff",
+        n.textAlign = "right",
+        n.font = "bold 20px sans-serif",
+        n.fillText(Math.floor(geofs.animation.getValue("haglFeet")), 350, 95)),
+        e.canvasAPI.drawSprite({
+            image: e.images.overlays,
+            origin: [101, 0],
+            size: [13, 20],
+            center: [6, 10],
+            destination: [355, a[1]],
+            translation: [0, clamp(-107 * geofs.animation.getValue("NAVGlideAngleDeviation"), -75, 75)]
+        }),
+        e.canvasAPI.drawSprite({
+            image: e.images.overlays,
+            origin: [114, 0],
+            size: [20, 13],
+            center: [10, 6],
+            destination: [a[0], 390],
+            translation: [clamp(6.5 * geofs.animation.getValue("NAVCourseDeviation"), -75, 75), 0]
+        }),
+        e.canvasAPI.drawRotatedSprite({
+            image: e.images.overlays,
+            origin: [101, 101],
+            size: [310, 310],
+            center: [155, 155],
+            destination: [a[0], 602],
+            rotation: -geofs.animation.getValue("heading") * DEGREES_TO_RAD
+        }),
+        e.canvasAPI.drawRotatedSprite({
+            image: e.images.overlays,
+            origin: [243, 88],
+            size: [26, 13],
+            center: [12, 165],
+            destination: [a[0], 602],
+            rotation: (-geofs.animation.getValue("heading") + geofs.autopilot.values.course) * DEGREES_TO_RAD
+        }),
+        n.lineWidth = 2,
+        n.fillStyle = "#FFFFFF",
+        n.strokeStyle = "#FFFFFF",
+        n.textAlign = "right",
+        n.font = "22px sans-serif",
+        n.save(),
+        n.beginPath(),
+        n.rect(11, 60, 90, 381),
+        n.rect(5, 210, 50, 70),
+        n.clip("evenodd"),
+        e.drawGrads(e.canvasAPI, {
+            position: [64, 60],
+            zero: [0, 190],
+            size: [90, 380],
+            orientation: "y",
+            direction: -1,
+            value: t,
+            interval: 10,
+            pixelRatio: 3.16,
+            pattern: [[{
+                length: 10,
+                legend: !0,
+                legendOffset: {
+                    x: -8,
+                    y: 7
+                }
+            }], [{
+                length: 10
+            }]],
+            sprites: [{
+                image: e.images.overlays,
+                origin: [134, 0],
+                size: [31, 19],
+                center: [5, 10],
+                value: geofs.autopilot.values.speed,
+                clamp: !0
+            }]
+        }),
+        n.restore(),
+        n.save(),
+        n.beginPath(),
+        n.rect(365, 60, 84, 381),
+        n.rect(400, 210, 65, 70),
+        n.clip("evenodd"),
+        n.font = "16px sans-serif",
+        e.drawGrads(e.canvasAPI, {
+            position: [385, 60],
+            zero: [0, 190],
+            size: [84, 380],
+            orientation: "y",
+            direction: -1,
+            value: geofs.animation.getValue("altitude"),
+            interval: 100,
+            pixelRatio: .475,
+            pattern: [[{
+                length: 10,
+                legend: !0,
+                legendOffset: {
+                    x: 60,
+                    y: 7
+                }
+            }], [{
+                length: 10
+            }]],
+            sprites: [{
+                image: e.images.overlays,
+                origin: [223, 0],
+                size: [33, 56],
+                center: [5, 28],
+                value: geofs.autopilot.values.altitude,
+                clamp: !0
+            }, {
+                image: e.images.overlays,
+                origin: [256, 0],
+                size: [64, 25],
+                center: [2, 0],
+                value: geofs.animation.getValue("groundElevationFeet")
+            }]
+        }),
+        n.restore(),
+        n.save(),
+        n.beginPath(),
+        n.rect(7, 220, 48, 50),
+        n.rect(404, 220, 65, 50),
+        n.rect(475, 116, 28, 262),
+        n.clip(),
+        n.beginPath(),
+        n.lineWidth = 3,
+        n.strokeStyle = "#FFFFFF";
+        let p = clamp(35 * Math.log(Math.abs(geofs.animation.getValue("verticalSpeed") / 1e3)) + 60, 0, 125) * Math.sign(geofs.animation.getValue("verticalSpeed"));
+        n.moveTo(530, a[1]),
+        n.lineTo(482, a[1] - p),
+        n.stroke(),
+        e.canvasAPI.drawSprite({
+            image: e.images.overlays,
+            origin: [166, 0],
+            size: [13, 5],
+            center: [0, 2],
+            destination: [480, a[1]],
+            translation: [0, -clamp(35 * Math.log(Math.abs(geofs.autopilot.values.verticalSpeed / 1e3)) + 60, 0, 125) * Math.sign(geofs.autopilot.values.verticalSpeed)]
+        }),
+        e.canvasAPI.drawSprite({
+            image: e.images.overlays,
+            origin: [0, 0],
+            size: [16, 512],
+            center: [0, 512],
+            destination: [8, 256],
+            translation: [0, 48 * geofs.utils.stickyRounding(t % 1e3 * .01, .01)]
+        }),
+        e.canvasAPI.drawSprite({
+            image: e.images.overlays,
+            origin: [0, 0],
+            size: [16, 512],
+            center: [0, 512],
+            destination: [24, 256],
+            translation: [0, 48 * geofs.utils.stickyRounding(t % 100 * .1, .1)]
+        }),
+        e.canvasAPI.drawSprite({
+            image: e.images.overlays,
+            origin: [16, 0],
+            size: [16, 512],
+            center: [0, 487],
+            destination: [40, 256],
+            translation: [0, t % 10 * 25]
+        }),
+        geofs.animation.getValue("altTenThousands") > 9999 ? e.canvasAPI.drawSprite({
+            image: e.images.overlays,
+            origin: [0, 0],
+            sprite: [16, 512],
+            size: [14, 512],
+            center: [0, 512],
+            destination: [406, 256],
+            translation: [0, 48 * geofs.utils.stickyRounding(1e-4 * geofs.animation.getValue("altTenThousands"), .01)]
+        }) : e.canvasAPI.drawSprite({
+            image: e.images.overlays,
+            origin: [70, 490],
+            size: [16, 21],
+            center: [0, 21],
+            destination: [406, 256],
+            translation: [0, 0]
+        }),
+        e.canvasAPI.drawSprite({
+            image: e.images.overlays,
+            origin: [0, 0],
+            sprite: [16, 512],
+            size: [14, 512],
+            center: [0, 512],
+            destination: [420, 256],
+            translation: [0, 48 * geofs.utils.stickyRounding(.001 * geofs.animation.getValue("altThousands"), .01)]
+        }),
+        e.canvasAPI.drawSprite({
+            image: e.images.overlays,
+            origin: [32, 0],
+            size: [12, 512],
+            center: [0, 512],
+            destination: [434, 253],
+            translation: [0, 40 * geofs.utils.stickyRounding(.01 * geofs.animation.getValue("altHundreds"), .1)]
+        }),
+        e.canvasAPI.drawSprite({
+            image: e.images.overlays,
+            origin: [44, 0],
+            size: [24, 512],
+            center: [0, 496],
+            destination: [445, 256],
+            translation: [0, .8 * geofs.animation.getValue("altTens")]
+        }),
+        n.restore()
+    },

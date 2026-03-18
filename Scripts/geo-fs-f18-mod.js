@@ -21,38 +21,10 @@
   const CAMERA_STEP_Z = 0.005;
   const CAMERA_UP_BUTTON_ID = 'f18-hud-camera-up';
   const CAMERA_DOWN_BUTTON_ID = 'f18-hud-camera-down';
-  const RIGHT_MFD_RENDERER_NAME = 'f18RightMFD';
-  const RIGHT_MFD_INCLUDE_KEY = 'f18-3d-rightMFD';
-  const RIGHT_MFD_PART_NAME = 'f18RightMFDPart';
-  const RIGHT_MFD_PICK_NODE_NAME = 'glassPanel';
-  const RIGHT_MFD_TOP_BUTTON_RENDERER_NAME = 'f18RightMFDTopButton';
-  const RIGHT_MFD_TOP_BUTTON_INCLUDE_KEY_BASE = 'f18-3d-rightMFDTopButton';
-  const RIGHT_MFD_TOP_BUTTON_PART_NAME_BASE = 'f18RightMFDTopButtonPart';
-  const RIGHT_MFD_TOP_BUTTON_COUNT = 5;
-  const RIGHT_MFD_TOP_BUTTON_START_X = -0.049;
-  const RIGHT_MFD_TOP_BUTTON_STEP_X = 0.0225;
-  const RIGHT_MFD_TOP_BUTTON_Y = -0.01;
-  const RIGHT_MFD_TOP_BUTTON_Z = 0.092;
-  const RIGHT_MFD_LEFT_BUTTON_PART_NAME_BASE = 'f18RightMFDLeftButtonPart';
-  const RIGHT_MFD_LEFT_BUTTON_COUNT = RIGHT_MFD_TOP_BUTTON_COUNT;
-  const RIGHT_MFD_LEFT_BUTTON_X = -0.0865;
-  const RIGHT_MFD_LEFT_BUTTON_Y = RIGHT_MFD_TOP_BUTTON_Y;
-  const RIGHT_MFD_LEFT_BUTTON_START_Z = 0.054;
-  const RIGHT_MFD_LEFT_BUTTON_STEP_Z = 0.025;
-  const RIGHT_MFD_RIGHT_BUTTON_PART_NAME_BASE = 'f18RightMFDRightButtonPart';
-  const RIGHT_MFD_RIGHT_BUTTON_COUNT = RIGHT_MFD_TOP_BUTTON_COUNT;
-  const RIGHT_MFD_RIGHT_BUTTON_X = 0.0835;
-  const RIGHT_MFD_RIGHT_BUTTON_Y = RIGHT_MFD_TOP_BUTTON_Y;
-  const RIGHT_MFD_RIGHT_BUTTON_START_Z = RIGHT_MFD_LEFT_BUTTON_START_Z;
-  const RIGHT_MFD_RIGHT_BUTTON_STEP_Z = RIGHT_MFD_LEFT_BUTTON_STEP_Z;
-  const RIGHT_MFD_TOP_BUTTON_VISUAL_SCALE = 2 / 3;
-  const RIGHT_MFD_TILT_DEG = 8;
-  const RIGHT_MFD_CLICK_HALF_WIDTH = 0.36;
-  const RIGHT_MFD_CLICK_HALF_HEIGHT = 0.36;
   const F18_OPTIONS_STORAGE_KEY = 'F18Options';
   const F18_WPN_STATE_STORAGE_KEY = 'F18WpnState';
-  const HUD_DEFAULT_COLOR = '#00ff00';
-  let currentHudColor = HUD_DEFAULT_COLOR;
+  const DEFAULT_COLOR = '#00ff00';
+  let currentHudColor = DEFAULT_COLOR;
 
   let wpnLoadout = {
     'A/A': {
@@ -971,9 +943,23 @@
     return options[optionKey] ?? fallback;
   }
 
+  function setF18Option(pageTitle, buttonKey, value) {
+    try {
+      const options = readF18Options();
+      const optionKey = buildF18OptionKey(pageTitle, buttonKey);
+      options[optionKey] = value;
+      window.localStorage?.setItem?.(F18_OPTIONS_STORAGE_KEY, JSON.stringify(options));
+    } catch (e) {
+      // Ignore storage write issues.
+    }
+  }
+
   function getF18OptionValue(pageTitle, buttonKey, fallback = null) {
     const selectedState = getF18Option(pageTitle, buttonKey, null);
-    const pages = window.__f18MfdUiState?.pages;
+    const pages =
+      window.__mfdUiPagesCatalog
+      ?? window.__mfdUiState?.pages
+      ?? window.__f18MfdUiState?.pages;
     if (!Array.isArray(pages)) {
       return selectedState ?? fallback;
     }
@@ -1006,6 +992,29 @@
     }
 
     return selectedState ?? fallback;
+  }
+
+  function getMfdBrightnessFactor() {
+    const brightMode = String(getF18Option('HUD', 'BRIGHT', 'NORM') ?? 'NORM').toUpperCase();
+    if (brightMode === 'DAY') return 1.0;
+    if (brightMode === 'NIGHT') return 0.3;
+    return 0.6; // NORM
+  }
+
+  function applyBrightnessToHexColor(color, factor) {
+    const value = String(color ?? '').trim();
+    const hex = value.startsWith('#') ? value.slice(1) : value;
+    if (!/^[0-9a-fA-F]{6}$/.test(hex)) {
+      return color;
+    }
+
+    const clampChannel = (channel) => Math.max(0, Math.min(255, Math.round(channel * factor)));
+    const r = clampChannel(parseInt(hex.slice(0, 2), 16));
+    const g = clampChannel(parseInt(hex.slice(2, 4), 16));
+    const b = clampChannel(parseInt(hex.slice(4, 6), 16));
+
+    const toHex = (n) => n.toString(16).padStart(2, '0');
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
   }
 
   // ---------------------------------------------------------------------------
@@ -1153,8 +1162,7 @@
     constructor() {
       this.pageIndex = 0;
       this.pages = this.createPages();
-      this.loadFromStorage();
-      this.saveToStorage();
+      this.ensureDefaultsInStorage();
     }
 
     createPages() {
@@ -1476,9 +1484,10 @@
       return buildF18OptionKey(page?.title ?? 'PAGE', preferred);
     }
 
-    loadFromStorage() {
+    ensureDefaultsInStorage() {
       try {
         const stored = readF18Options();
+        let changed = false;
 
         for (let pageIndex = 0; pageIndex < this.pages.length; pageIndex++) {
           const page = this.pages[pageIndex];
@@ -1488,18 +1497,9 @@
             const btn = page.leftButtons[i];
             if (!btn || !btn.states?.length) continue;
             const optionKey = this.getButtonStorageKey(page, btn, i, 'L');
-            const storedState = stored[optionKey];
-            if (storedState == null) continue;
-
-            const exactIndex = btn.states.findIndex((s) => s === storedState);
-            if (exactIndex >= 0) {
-              btn.stateIndex = exactIndex;
-              continue;
-            }
-
-            const ciIndex = btn.states.findIndex((s) => String(s).toUpperCase() === String(storedState).toUpperCase());
-            if (ciIndex >= 0) {
-              btn.stateIndex = ciIndex;
+            if (stored[optionKey] == null) {
+              stored[optionKey] = btn.states[btn.stateIndex] ?? btn.states[0];
+              changed = true;
             }
           }
 
@@ -1507,55 +1507,40 @@
             const btn = page.rightButtons[i];
             if (!btn || !btn.states?.length) continue;
             const optionKey = this.getButtonStorageKey(page, btn, i, 'R');
-            const storedState = stored[optionKey];
-            if (storedState == null) continue;
-
-            const exactIndex = btn.states.findIndex((s) => s === storedState);
-            if (exactIndex >= 0) {
-              btn.stateIndex = exactIndex;
-              continue;
-            }
-
-            const ciIndex = btn.states.findIndex((s) => String(s).toUpperCase() === String(storedState).toUpperCase());
-            if (ciIndex >= 0) {
-              btn.stateIndex = ciIndex;
+            if (stored[optionKey] == null) {
+              stored[optionKey] = btn.states[btn.stateIndex] ?? btn.states[0];
+              changed = true;
             }
           }
+        }
+
+        if (changed) {
+          window.localStorage?.setItem?.(F18_OPTIONS_STORAGE_KEY, JSON.stringify(stored));
         }
       } catch (e) {
         // Ignore malformed storage.
       }
     }
 
-    saveToStorage() {
-      try {
-        const data = {};
+    getStoredStateIndex(page, button, index, side) {
+      if (!button?.states?.length) return -1;
 
-        for (let pageIndex = 0; pageIndex < this.pages.length; pageIndex++) {
-          const page = this.pages[pageIndex];
-          if (!page) continue;
+      const optionKey = this.getButtonStorageKey(page, button, index, side);
+      const storedState = readF18Options()?.[optionKey];
 
-          for (let i = 0; i < (page.leftButtons?.length ?? 0); i++) {
-            const btn = page.leftButtons[i];
-            if (!btn || !btn.states?.length) continue;
-            const optionKey = this.getButtonStorageKey(page, btn, i, 'L');
-            const stateValue = btn.states[btn.stateIndex] ?? btn.states[0];
-            data[optionKey] = stateValue;
-          }
+      if (storedState != null) {
+        const exactIndex = button.states.findIndex((s) => s === storedState);
+        if (exactIndex >= 0) return exactIndex;
 
-          for (let i = 0; i < (page.rightButtons?.length ?? 0); i++) {
-            const btn = page.rightButtons[i];
-            if (!btn || !btn.states?.length) continue;
-            const optionKey = this.getButtonStorageKey(page, btn, i, 'R');
-            const stateValue = btn.states[btn.stateIndex] ?? btn.states[0];
-            data[optionKey] = stateValue;
-          }
-        }
-
-        window.localStorage?.setItem?.(F18_OPTIONS_STORAGE_KEY, JSON.stringify(data));
-      } catch (e) {
-        // Ignore storage write issues.
+        const ciIndex = button.states.findIndex((s) => String(s).toUpperCase() === String(storedState).toUpperCase());
+        if (ciIndex >= 0) return ciIndex;
       }
+
+      if (Number.isInteger(button.stateIndex) && button.stateIndex >= 0 && button.stateIndex < button.states.length) {
+        return button.stateIndex;
+      }
+
+      return 0;
     }
 
     toggleButton(side, index) {
@@ -1564,6 +1549,10 @@
       const btn = list?.[index];
       if (!btn || !btn.states?.length) return;
 
+      const currentIndex = this.getStoredStateIndex(page, btn, index, side === 'left' ? 'L' : 'R');
+      const nextIndex = (currentIndex + 1) % btn.states.length;
+      const nextState = btn.states[nextIndex] ?? btn.states[0];
+
       if (typeof btn.onClick === 'function') {
         try {
           btn.onClick({
@@ -1571,15 +1560,18 @@
             side,
             index,
             button: btn,
-            uiState: this
+            uiState: this,
+            currentIndex,
+            nextIndex,
+            nextState
           });
         } catch (e) {
           // Ignore button callback errors to keep MFD responsive.
         }
       }
 
-      btn.stateIndex = (btn.stateIndex + 1) % btn.states.length;
-      this.saveToStorage();
+      btn.stateIndex = nextIndex;
+      setF18Option(page?.title ?? 'PAGE', btn?.key || btn?.label || `${side}${index + 1}`, nextState);
     }
 
     isButtonVisible(button, page) {
@@ -1614,13 +1606,16 @@
       this.toggleButton(side, entry.actualIndex);
     }
 
-    getStateLabel(button, page) {
+    getStateLabel(button, page, actualIndex, side) {
       if (page?.title === 'WPN' && (button?.key === 'FIRE' || button?.key === 'JETTISON')) {
         const mode = getWpnModeFromOptions();
         const modeLoadout = getWpnModeLoadout(mode);
         return getSelectedWpnLoadDisplay(mode, modeLoadout);
       }
-      return button?.states?.[button.stateIndex] ?? '';
+
+      const sideToken = side === 'right' ? 'R' : 'L';
+      const resolvedIndex = this.getStoredStateIndex(page, button, actualIndex, sideToken);
+      return button?.states?.[resolvedIndex] ?? '';
     }
 
     getLayout(w, h) {
@@ -1707,7 +1702,8 @@
       const h = renderer.canvasAPI.canvas.height;
       const page = this.getCurrentPage();
       const layout = this.getLayout(w, h);
-      const color = getF18OptionValue('HUD', 'COLOR', '#00ff66') ?? '#00ff66';
+      const baseColor = getF18OptionValue('HUD', 'COLOR', '#00ff66') ?? '#00ff66';
+      const color = applyBrightnessToHexColor(baseColor, getMfdBrightnessFactor()) ?? baseColor;
       renderer.canvasAPI.clear();
 
       ctx.strokeStyle = color;
@@ -1736,7 +1732,7 @@
         const slot = layout.leftButtons[i];
         const btn = visibleLeftButtons[i].button;
         const label = btn.label;
-        const state = this.getStateLabel(btn, page);
+        const state = this.getStateLabel(btn, page, visibleLeftButtons[i].actualIndex, 'left');
         ctx.fillText(`${label}   ${state}`, slot.x + 2, slot.y + slot.h * 0.55);
       }
 
@@ -1744,7 +1740,7 @@
         const slot = layout.rightButtons[i];
         const btn = visibleRightButtons[i].button;
         const label = btn.label;
-        const state = this.getStateLabel(btn, page);
+        const state = this.getStateLabel(btn, page, visibleRightButtons[i].actualIndex, 'right');
         ctx.fillText(`${label}   ${state}`, slot.x + 2, slot.y + slot.h * 0.55);
       }
 
@@ -1775,489 +1771,7 @@
   }
 
   function getHudColorFromStoredOptions() {
-    return getF18OptionValue('HUD', 'COLOR', '#00ff00') ?? '#00ff00';
-  }
-
-  function ensureRightMfdRendererFunction() {
-    if (!window.instruments?.renderers) return false;
-    if (window.instruments.renderers[RIGHT_MFD_RENDERER_NAME]) return true;
-
-    window.instruments.renderers[RIGHT_MFD_RENDERER_NAME] = function (renderer) {
-      const uiState = window.__f18MfdUiState;
-
-      if (uiState?.render) {
-        uiState.render(renderer);
-        return;
-      }
-
-      const ctx = renderer.canvasAPI.context;
-      const w = renderer.canvasAPI.canvas.width;
-      const h = renderer.canvasAPI.canvas.height;
-      renderer.canvasAPI.clear('#000000');
-      ctx.fillStyle = getF18OptionValue('HUD', 'COLOR', '#00ff00') ?? '#00ff00';
-      ctx.font = `bold ${Math.round(h * 0.18)}px monospace`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('MFD INIT', w / 2, h / 2);
-    };
-
-    return true;
-  }
-
-  function renderRightMfdTopButton(renderer) {
-    const ctx = renderer.canvasAPI.context;
-    const w = renderer.canvasAPI.canvas.width;
-    const h = renderer.canvasAPI.canvas.height;
-    const cx = w / 2;
-    const cy = h / 2;
-    const outerSize = Math.min(w, h) * RIGHT_MFD_TOP_BUTTON_VISUAL_SCALE;
-    const outerRadius = outerSize * 0.20;
-    const innerInset = outerSize * 0.24;
-    const innerSize = outerSize - innerInset * 2;
-    const innerRadius = innerSize * 0.36;
-
-    renderer.canvasAPI.clear('#000000');
-
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.globalAlpha = 1;
-
-    const outerX = cx - outerSize / 2;
-    const outerY = cy - outerSize / 2;
-
-    ctx.beginPath();
-    ctx.roundRect(outerX, outerY, outerSize, outerSize, outerRadius);
-    ctx.fillStyle = '#222120';
-    ctx.fill();
-
-    ctx.lineWidth = Math.max(2, outerSize * 0.045);
-    ctx.strokeStyle = '#0f0f0e';
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.roundRect(outerX + innerInset, outerY + innerInset, innerSize, innerSize, innerRadius);
-    ctx.fillStyle = '#3a3835';
-    ctx.fill();
-
-    ctx.lineWidth = Math.max(1.2, outerSize * 0.018);
-    ctx.strokeStyle = '#2f2d2a';
-    ctx.stroke();
-
-    ctx.restore();
-  }
-
-  function ensureRightMfdTopButtonRendererFunction() {
-    if (!window.instruments?.renderers) return false;
-    if (window.instruments.renderers[RIGHT_MFD_TOP_BUTTON_RENDERER_NAME]) return true;
-
-    window.instruments.renderers[RIGHT_MFD_TOP_BUTTON_RENDERER_NAME] = function (renderer) {
-      renderRightMfdTopButton(renderer);
-    };
-
-    return true;
-  }
-
-  function ensureRightMfdIncludeDefinition() {
-    if (!window.geofs) return false;
-    window.geofs.includes = window.geofs.includes || {};
-    if (window.geofs.includes[RIGHT_MFD_INCLUDE_KEY]) return true;
-
-    window.geofs.includes[RIGHT_MFD_INCLUDE_KEY] = [{
-      model: {
-        url: 'models/gauges/glassPanel/glassPanel.gltf',
-        shader: {
-          name: 'glassPanel',
-          textures: {
-            diffuse: ''
-          }
-        }
-      },
-      renderer: {
-        name: RIGHT_MFD_RENDERER_NAME,
-        width: 512,
-        height: 512,
-        images: { }
-      },
-      animations: [{
-        type: 'render',
-        value: 'geofsTime'
-      }],
-      shadows: 'SHADOWS_NONE'
-    }];
-
-    return true;
-  }
-
-  function getRightMfdTopButtonIncludeKey(partName) {
-    return `${RIGHT_MFD_TOP_BUTTON_INCLUDE_KEY_BASE}-${partName}`;
-  }
-
-  function getRightMfdTopButtonPartName(index) {
-    return `${RIGHT_MFD_TOP_BUTTON_PART_NAME_BASE}${index}`;
-  }
-
-  function getRightMfdTopButtonNodeName(index) {
-    return `${RIGHT_MFD_TOP_BUTTON_PART_NAME_BASE}${index}`;
-  }
-
-  function getRightMfdLeftButtonPartName(index) {
-    return `${RIGHT_MFD_LEFT_BUTTON_PART_NAME_BASE}${index}`;
-  }
-
-  function getRightMfdLeftButtonNodeName(index) {
-    return `${RIGHT_MFD_LEFT_BUTTON_PART_NAME_BASE}${index}`;
-  }
-
-  function getRightMfdRightButtonPartName(index) {
-    return `${RIGHT_MFD_RIGHT_BUTTON_PART_NAME_BASE}${index}`;
-  }
-
-  function getRightMfdRightButtonNodeName(index) {
-    return `${RIGHT_MFD_RIGHT_BUTTON_PART_NAME_BASE}${index}`;
-  }
-
-  function getRightMfdTopButtonModelUrl(partName) {
-    return `models/gauges/glassPanel/glassPanel.gltf?v=topbutton-${encodeURIComponent(partName)}`;
-  }
-
-  function ensureRightMfdTopButtonIncludeDefinition(partName) {
-    if (!window.geofs) return false;
-    window.geofs.includes = window.geofs.includes || {};
-    const includeKey = getRightMfdTopButtonIncludeKey(partName);
-    if (window.geofs.includes[includeKey]) return true;
-
-    window.geofs.includes[includeKey] = [{
-      model: {
-        url: getRightMfdTopButtonModelUrl(partName),
-        shader: {
-          name: 'glassPanel',
-          textures: {
-            diffuse: ''
-          }
-        }
-      },
-      renderer: {
-        name: RIGHT_MFD_TOP_BUTTON_RENDERER_NAME,
-        width: 512,
-        height: 512,
-        images: { }
-      },
-      animations: [{
-        type: 'render',
-        value: 'geofsTime'
-      }],
-      shadows: 'SHADOWS_NONE'
-    }];
-
-    return true;
-  }
-
-  function installRightMfdTopButtons() {
-    const aircraft = window.geofs?.aircraft?.instance;
-    if (!aircraft?.addParts) return false;
-    if (!ensureRightMfdTopButtonRendererFunction()) return false;
-    if (!aircraft.parts?.[RIGHT_MFD_PART_NAME]) return false;
-
-    const partsToAdd = [];
-    for (let i = 0; i < RIGHT_MFD_TOP_BUTTON_COUNT; i++) {
-      const partName = getRightMfdTopButtonPartName(i);
-      if (aircraft.parts?.[partName]) continue;
-      if (!ensureRightMfdTopButtonIncludeDefinition(partName)) return false;
-
-      partsToAdd.push({
-        name: partName,
-        include: getRightMfdTopButtonIncludeKey(partName),
-        parent: RIGHT_MFD_PART_NAME,
-        position: [RIGHT_MFD_TOP_BUTTON_START_X + i * RIGHT_MFD_TOP_BUTTON_STEP_X, RIGHT_MFD_TOP_BUTTON_Y, RIGHT_MFD_TOP_BUTTON_Z],
-        scale: [0.047, 0.047, 0.047],
-        shadows: 'SHADOWS_NONE'
-      });
-    }
-
-    if (partsToAdd.length) {
-      aircraft.addParts(partsToAdd);
-    }
-
-    const registerTopButtonPickNode = (index) => {
-      const partName = getRightMfdTopButtonPartName(index);
-      const nodeName = getRightMfdTopButtonNodeName(index);
-      const part = aircraft.parts?.[partName];
-      if (!part) return false;
-
-      const model = part?.object3d?.model?._model;
-      const nodesByName = model?._nodesByName;
-      const glassNode = nodesByName?.glassPanel;
-      if (!glassNode) return false;
-
-      glassNode.name = nodeName;
-      nodesByName[nodeName] = glassNode;
-      return true;
-    };
-
-    for (let i = 0; i < RIGHT_MFD_TOP_BUTTON_COUNT; i++) {
-      const partName = getRightMfdTopButtonPartName(i);
-      if (!aircraft.parts?.[partName]) return false;
-
-      if (!registerTopButtonPickNode(i)) {
-        const buttonPart = aircraft.parts?.[partName];
-        buttonPart?.['3dmodel']?.readyPromise?.then?.(() => {
-          registerTopButtonPickNode(i);
-        });
-      }
-    }
-
-    return true;
-  }
-
-  function installRightMfdLeftButtons() {
-    const aircraft = window.geofs?.aircraft?.instance;
-    if (!aircraft?.addParts) return false;
-    if (!ensureRightMfdTopButtonRendererFunction()) return false;
-    if (!aircraft.parts?.[RIGHT_MFD_PART_NAME]) return false;
-
-    const partsToAdd = [];
-    for (let i = 0; i < RIGHT_MFD_LEFT_BUTTON_COUNT; i++) {
-      const partName = getRightMfdLeftButtonPartName(i);
-      if (aircraft.parts?.[partName]) continue;
-      if (!ensureRightMfdTopButtonIncludeDefinition(partName)) return false;
-
-      partsToAdd.push({
-        name: partName,
-        include: getRightMfdTopButtonIncludeKey(partName),
-        parent: RIGHT_MFD_PART_NAME,
-        position: [RIGHT_MFD_LEFT_BUTTON_X, RIGHT_MFD_LEFT_BUTTON_Y, RIGHT_MFD_LEFT_BUTTON_START_Z - i * RIGHT_MFD_LEFT_BUTTON_STEP_Z],
-        scale: [0.047, 0.047, 0.047],
-        shadows: 'SHADOWS_NONE'
-      });
-    }
-
-    if (partsToAdd.length) {
-      aircraft.addParts(partsToAdd);
-    }
-
-    const registerLeftButtonPickNode = (index) => {
-      const partName = getRightMfdLeftButtonPartName(index);
-      const nodeName = getRightMfdLeftButtonNodeName(index);
-      const part = aircraft.parts?.[partName];
-      if (!part) return false;
-
-      const model = part?.object3d?.model?._model;
-      const nodesByName = model?._nodesByName;
-      const glassNode = nodesByName?.glassPanel;
-      if (!glassNode) return false;
-
-      glassNode.name = nodeName;
-      nodesByName[nodeName] = glassNode;
-      return true;
-    };
-
-    for (let i = 0; i < RIGHT_MFD_LEFT_BUTTON_COUNT; i++) {
-      const partName = getRightMfdLeftButtonPartName(i);
-      if (!aircraft.parts?.[partName]) return false;
-
-      if (!registerLeftButtonPickNode(i)) {
-        const buttonPart = aircraft.parts?.[partName];
-        buttonPart?.['3dmodel']?.readyPromise?.then?.(() => {
-          registerLeftButtonPickNode(i);
-        });
-      }
-    }
-
-    return true;
-  }
-
-  function installRightMfdRightButtons() {
-    const aircraft = window.geofs?.aircraft?.instance;
-    if (!aircraft?.addParts) return false;
-    if (!ensureRightMfdTopButtonRendererFunction()) return false;
-    if (!aircraft.parts?.[RIGHT_MFD_PART_NAME]) return false;
-
-    const partsToAdd = [];
-    for (let i = 0; i < RIGHT_MFD_RIGHT_BUTTON_COUNT; i++) {
-      const partName = getRightMfdRightButtonPartName(i);
-      if (aircraft.parts?.[partName]) continue;
-      if (!ensureRightMfdTopButtonIncludeDefinition(partName)) return false;
-
-      partsToAdd.push({
-        name: partName,
-        include: getRightMfdTopButtonIncludeKey(partName),
-        parent: RIGHT_MFD_PART_NAME,
-        position: [RIGHT_MFD_RIGHT_BUTTON_X, RIGHT_MFD_RIGHT_BUTTON_Y, RIGHT_MFD_RIGHT_BUTTON_START_Z - i * RIGHT_MFD_RIGHT_BUTTON_STEP_Z],
-        scale: [0.047, 0.047, 0.047],
-        shadows: 'SHADOWS_NONE'
-      });
-    }
-
-    if (partsToAdd.length) {
-      aircraft.addParts(partsToAdd);
-    }
-
-    const registerRightButtonPickNode = (index) => {
-      const partName = getRightMfdRightButtonPartName(index);
-      const nodeName = getRightMfdRightButtonNodeName(index);
-      const part = aircraft.parts?.[partName];
-      if (!part) return false;
-
-      const model = part?.object3d?.model?._model;
-      const nodesByName = model?._nodesByName;
-      const glassNode = nodesByName?.glassPanel;
-      if (!glassNode) return false;
-
-      glassNode.name = nodeName;
-      nodesByName[nodeName] = glassNode;
-      return true;
-    };
-
-    for (let i = 0; i < RIGHT_MFD_RIGHT_BUTTON_COUNT; i++) {
-      const partName = getRightMfdRightButtonPartName(i);
-      if (!aircraft.parts?.[partName]) return false;
-
-      if (!registerRightButtonPickNode(i)) {
-        const buttonPart = aircraft.parts?.[partName];
-        buttonPart?.['3dmodel']?.readyPromise?.then?.(() => {
-          registerRightButtonPickNode(i);
-        });
-      }
-    }
-
-    return true;
-  }
-
-  function installRightMfdUsingGeoFsParts() {
-    if (window.__f18RightMfdPart) {
-      const existingPart = window.geofs?.aircraft?.instance?.parts?.[RIGHT_MFD_PART_NAME];
-      if (!existingPart) {
-        delete window.__f18RightMfdPart;
-      } else {
-        return true;
-      }
-    }
-    if (!isF18Active()) {
-      return false;
-    }
-
-    const aircraft = window.geofs?.aircraft?.instance;
-    if (!aircraft?.addParts) {
-      return false;
-    }
-    if (!ensureRightMfdRendererFunction()) {
-      return false;
-    }
-    if (!ensureRightMfdIncludeDefinition()) {
-      return false;
-    }
-
-    const hudPart = getHudPartDefinition();
-    if (!hudPart) return false;
-
-    aircraft.addParts([{
-      name: RIGHT_MFD_PART_NAME,
-      include: RIGHT_MFD_INCLUDE_KEY,
-      parent: hudPart.parent || 'root',
-      position: [ 0.2167, 6.158, 0.584],
-      rotation: [RIGHT_MFD_TILT_DEG, 0, 0],
-      scale: [0.29, 0.29, 0.285],
-      points: {
-        topLeft: [-RIGHT_MFD_CLICK_HALF_WIDTH, 0, RIGHT_MFD_CLICK_HALF_HEIGHT],
-        topRight: [RIGHT_MFD_CLICK_HALF_WIDTH, 0, RIGHT_MFD_CLICK_HALF_HEIGHT],
-        bottomLeft: [-RIGHT_MFD_CLICK_HALF_WIDTH, 0, -RIGHT_MFD_CLICK_HALF_HEIGHT],
-        bottomRight: [RIGHT_MFD_CLICK_HALF_WIDTH, 0, -RIGHT_MFD_CLICK_HALF_HEIGHT]
-      }
-    }]);
-
-    if (!aircraft.parts?.[RIGHT_MFD_PART_NAME]) return false;
-
-    const rightMfdPart = aircraft.parts[RIGHT_MFD_PART_NAME];
-    const registerPickNode = () => {
-      const model = rightMfdPart?.object3d?.model?._model;
-      const nodesByName = model?._nodesByName;
-      const glassNode = nodesByName?.glassPanel;
-      if (!glassNode) return false;
-
-      glassNode.name = RIGHT_MFD_PART_NAME;
-      nodesByName[RIGHT_MFD_PART_NAME] = glassNode;
-      return true;
-    };
-
-    if (!registerPickNode()) {
-      rightMfdPart?.['3dmodel']?.readyPromise?.then?.(() => {
-        registerPickNode();
-      });
-    }
-
-    installRightMfdTopButtons();
-    installRightMfdLeftButtons();
-    installRightMfdRightButtons();
-
-    window.__f18RightMfdPart = {
-      remove() {
-        const ac = window.geofs?.aircraft?.instance;
-        for (let i = 0; i < RIGHT_MFD_TOP_BUTTON_COUNT; i++) {
-          const topButtonPartName = getRightMfdTopButtonPartName(i);
-          const topButtonPart = ac?.parts?.[topButtonPartName];
-          if (!topButtonPart) continue;
-
-          const topButtonParent = topButtonPart.object3d?.getParent?.();
-          if (topButtonParent?._children) {
-            const topButtonIdx = topButtonParent._children.indexOf(topButtonPart.object3d);
-            if (topButtonIdx >= 0) topButtonParent._children.splice(topButtonIdx, 1);
-          }
-          topButtonPart.object3d?.destroy?.();
-          topButtonPart.rendererInstance?.destroy?.();
-          topButtonPart['3dmodel']?.destroy?.();
-          delete ac.parts[topButtonPartName];
-        }
-
-        for (let i = 0; i < RIGHT_MFD_LEFT_BUTTON_COUNT; i++) {
-          const leftButtonPartName = getRightMfdLeftButtonPartName(i);
-          const leftButtonPart = ac?.parts?.[leftButtonPartName];
-          if (!leftButtonPart) continue;
-
-          const leftButtonParent = leftButtonPart.object3d?.getParent?.();
-          if (leftButtonParent?._children) {
-            const leftButtonIdx = leftButtonParent._children.indexOf(leftButtonPart.object3d);
-            if (leftButtonIdx >= 0) leftButtonParent._children.splice(leftButtonIdx, 1);
-          }
-          leftButtonPart.object3d?.destroy?.();
-          leftButtonPart.rendererInstance?.destroy?.();
-          leftButtonPart['3dmodel']?.destroy?.();
-          delete ac.parts[leftButtonPartName];
-        }
-
-        for (let i = 0; i < RIGHT_MFD_RIGHT_BUTTON_COUNT; i++) {
-          const rightButtonPartName = getRightMfdRightButtonPartName(i);
-          const rightButtonPart = ac?.parts?.[rightButtonPartName];
-          if (!rightButtonPart) continue;
-
-          const rightButtonParent = rightButtonPart.object3d?.getParent?.();
-          if (rightButtonParent?._children) {
-            const rightButtonIdx = rightButtonParent._children.indexOf(rightButtonPart.object3d);
-            if (rightButtonIdx >= 0) rightButtonParent._children.splice(rightButtonIdx, 1);
-          }
-          rightButtonPart.object3d?.destroy?.();
-          rightButtonPart.rendererInstance?.destroy?.();
-          rightButtonPart['3dmodel']?.destroy?.();
-          delete ac.parts[rightButtonPartName];
-        }
-
-        const part = ac?.parts?.[RIGHT_MFD_PART_NAME];
-        if (part) {
-          const parent = part.object3d?.getParent?.();
-          if (parent?._children) {
-            const idx = parent._children.indexOf(part.object3d);
-            if (idx >= 0) parent._children.splice(idx, 1);
-          }
-          part.object3d?.destroy?.();
-          part.rendererInstance?.destroy?.();
-          part['3dmodel']?.destroy?.();
-          delete ac.parts[RIGHT_MFD_PART_NAME];
-        }
-        delete window.__f18RightMfdPart;
-      }
-    };
-
-    return true;
+    return getF18OptionValue('HUD', 'COLOR', DEFAULT_COLOR) ?? DEFAULT_COLOR;
   }
 
   // Returns pixelsPerDeg (vertical), pixelsPerDegX (horizontal) and
@@ -2931,7 +2445,8 @@
           line2: getSelectedWpnQuantityLine(wpnMode, wpnModeLoadout)
         }
       : null;
-    const hudColor = getHudColorFromStoredOptions();
+    const hudBaseColor = getHudColorFromStoredOptions();
+    const hudColor = applyBrightnessToHexColor(hudBaseColor, getMfdBrightnessFactor()) ?? hudBaseColor;
     const hudLevel = getF18Option('HUD', 'LEVEL', 'FULL');
     currentHudColor = hudColor;
 
@@ -3059,106 +2574,460 @@
     }
   }
 
-  class F18MfdModule {
-    constructor() {
+  class MfdModule {
+    static DEFAULTS = {
+      MFD_TOP_BUTTON_COUNT: 5,
+      MFD_LEFT_BUTTON_COUNT: 5,
+      MFD_RIGHT_BUTTON_COUNT: 5,
+      MFD_TOP_BUTTON_START_X: -0.049,
+      MFD_TOP_BUTTON_STEP_X: 0.0225,
+      MFD_TOP_BUTTON_Y: -0.01,
+      MFD_TOP_BUTTON_Z: 0.092,
+      MFD_LEFT_BUTTON_X: -0.0865,
+      MFD_LEFT_BUTTON_Y: -0.01,
+      MFD_LEFT_BUTTON_START_Z: 0.054,
+      MFD_LEFT_BUTTON_STEP_Z: 0.025,
+      MFD_RIGHT_BUTTON_X: 0.0835,
+      MFD_RIGHT_BUTTON_Y: -0.01,
+      MFD_RIGHT_BUTTON_START_Z: 0.054,
+      MFD_RIGHT_BUTTON_STEP_Z: 0.025,
+      MFD_TOP_BUTTON_VISUAL_SCALE: 2 / 3,
+      MFD_CLICK_HALF_WIDTH: 0.36,
+      MFD_CLICK_HALF_HEIGHT: 0.36,
+      MFD_PART_MODEL_URL: 'models/gauges/glassPanel/glassPanel.gltf'
+    };
+
+    constructor(config = {}) {
+      this.cfg = {
+        ...MfdModule.DEFAULTS,
+        name: 'RIGHT',
+        position: [0.2167, 6.158, 0.584],
+        rotation: [8, 0, 0],
+        scale: [0.29, 0.29, 0.285],
+        parentPartName: null,
+        ...config
+      };
+
+      this.slotName = normalizeOptionToken(this.cfg.name || 'MFD') || 'MFD';
+      this.slotNameLower = this.slotName.toLowerCase();
+      this.names = {
+        MFD_RENDERER_NAME: `mfdRenderer${this.slotName}`,
+        MFD_INCLUDE_KEY: `mfd-include-${this.slotNameLower}`,
+        MFD_PART_NAME: `mfdPart${this.slotName}`,
+        MFD_TOP_BUTTON_RENDERER_NAME: `mfdTopButtonRenderer${this.slotName}`,
+        MFD_TOP_BUTTON_INCLUDE_KEY_BASE: `mfd-top-button-include-${this.slotNameLower}`,
+        MFD_TOP_BUTTON_PART_NAME_BASE: `mfdTopButtonPart${this.slotName}_`,
+        MFD_LEFT_BUTTON_PART_NAME_BASE: `mfdLeftButtonPart${this.slotName}_`,
+        MFD_RIGHT_BUTTON_PART_NAME_BASE: `mfdRightButtonPart${this.slotName}_`
+      };
+
+      this.uiStateKey = `__mfdUiState_${this.slotName}`;
+      this.runtimeRefKey = `__mfdPartRef_${this.slotName}`;
       this.nodeClickHandlerInstalled = false;
       this.onNodeClickBound = this.onNodeClick.bind(this);
+    }
+
+    get partName() {
+      return this.names.MFD_PART_NAME;
+    }
+
+    getTopButtonPartName(index) {
+      return `${this.names.MFD_TOP_BUTTON_PART_NAME_BASE}${index}`;
+    }
+
+    getLeftButtonPartName(index) {
+      return `${this.names.MFD_LEFT_BUTTON_PART_NAME_BASE}${index}`;
+    }
+
+    getRightButtonPartName(index) {
+      return `${this.names.MFD_RIGHT_BUTTON_PART_NAME_BASE}${index}`;
+    }
+
+    getButtonPartName(side, index) {
+      if (side === 'top') return this.getTopButtonPartName(index);
+      if (side === 'left') return this.getLeftButtonPartName(index);
+      return this.getRightButtonPartName(index);
+    }
+
+    ensureUiState() {
+      if (!window[this.uiStateKey]) {
+        window[this.uiStateKey] = new F18MfdUiState();
+      }
+      window.__mfdUiStates = window.__mfdUiStates || {};
+      window.__mfdUiStates[this.slotName] = window[this.uiStateKey];
+      if (!window.__mfdUiPagesCatalog) {
+        window.__mfdUiPagesCatalog = window[this.uiStateKey]?.pages;
+      }
+      return true;
+    }
+
+    getUiState() {
+      return window[this.uiStateKey];
+    }
+
+    renderMfdButton(renderer) {
+      const ctx = renderer.canvasAPI.context;
+      const w = renderer.canvasAPI.canvas.width;
+      const h = renderer.canvasAPI.canvas.height;
+      const cx = w / 2;
+      const cy = h / 2;
+      const outerSize = Math.min(w, h) * this.cfg.MFD_TOP_BUTTON_VISUAL_SCALE;
+      const outerRadius = outerSize * 0.20;
+      const innerInset = outerSize * 0.24;
+      const innerSize = outerSize - innerInset * 2;
+      const innerRadius = innerSize * 0.36;
+
+      renderer.canvasAPI.clear('#000000');
+
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 1;
+
+      const outerX = cx - outerSize / 2;
+      const outerY = cy - outerSize / 2;
+
+      ctx.beginPath();
+      ctx.roundRect(outerX, outerY, outerSize, outerSize, outerRadius);
+      ctx.fillStyle = '#222120';
+      ctx.fill();
+
+      ctx.lineWidth = Math.max(2, outerSize * 0.045);
+      ctx.strokeStyle = '#0f0f0e';
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.roundRect(outerX + innerInset, outerY + innerInset, innerSize, innerSize, innerRadius);
+      ctx.fillStyle = '#3a3835';
+      ctx.fill();
+
+      ctx.lineWidth = Math.max(1.2, outerSize * 0.018);
+      ctx.strokeStyle = '#2f2d2a';
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    ensureMainRendererFunction() {
+      if (!window.instruments?.renderers) return false;
+      if (window.instruments.renderers[this.names.MFD_RENDERER_NAME]) return true;
+
+      window.instruments.renderers[this.names.MFD_RENDERER_NAME] = (renderer) => {
+        const uiState = this.getUiState();
+        if (uiState?.render) {
+          uiState.render(renderer);
+          return;
+        }
+
+        const ctx = renderer.canvasAPI.context;
+        const w = renderer.canvasAPI.canvas.width;
+        const h = renderer.canvasAPI.canvas.height;
+        renderer.canvasAPI.clear('#000000');
+        const fallbackBaseColor = getF18OptionValue('HUD', 'COLOR', DEFAULT_COLOR) ?? DEFAULT_COLOR;
+        ctx.fillStyle = applyBrightnessToHexColor(fallbackBaseColor, getMfdBrightnessFactor()) ?? fallbackBaseColor;
+        ctx.font = `bold ${Math.round(h * 0.18)}px monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('MFD INIT', w / 2, h / 2);
+      };
+
+      return true;
+    }
+
+    ensureButtonRendererFunction() {
+      if (!window.instruments?.renderers) return false;
+      if (window.instruments.renderers[this.names.MFD_TOP_BUTTON_RENDERER_NAME]) return true;
+
+      window.instruments.renderers[this.names.MFD_TOP_BUTTON_RENDERER_NAME] = (renderer) => {
+        this.renderMfdButton(renderer);
+      };
+
+      return true;
+    }
+
+    ensureIncludeDefinition(includeKey, rendererName, modelUrl) {
+      if (!window.geofs) return false;
+      window.geofs.includes = window.geofs.includes || {};
+      if (window.geofs.includes[includeKey]) return true;
+
+      window.geofs.includes[includeKey] = [{
+        model: {
+          url: modelUrl,
+          shader: {
+            name: 'glassPanel',
+            textures: { diffuse: '' }
+          }
+        },
+        renderer: {
+          name: rendererName,
+          width: 512,
+          height: 512,
+          images: { }
+        },
+        animations: [{
+          type: 'render',
+          value: 'geofsTime'
+        }],
+        shadows: 'SHADOWS_NONE'
+      }];
+
+      return true;
+    }
+
+    ensureMainIncludeDefinition() {
+      return this.ensureIncludeDefinition(
+        this.names.MFD_INCLUDE_KEY,
+        this.names.MFD_RENDERER_NAME,
+        `${this.cfg.MFD_PART_MODEL_URL}?v=${encodeURIComponent(this.names.MFD_RENDERER_NAME)}`
+      );
+    }
+
+    getButtonIncludeKey(partName) {
+      return `${this.names.MFD_TOP_BUTTON_INCLUDE_KEY_BASE}-${partName}`;
+    }
+
+    ensureButtonIncludeDefinition(partName) {
+      return this.ensureIncludeDefinition(
+        this.getButtonIncludeKey(partName),
+        this.names.MFD_TOP_BUTTON_RENDERER_NAME,
+        `${this.cfg.MFD_PART_MODEL_URL}?v=mfd-button-${encodeURIComponent(partName)}`
+      );
+    }
+
+    registerButtonPickNode(partName, nodeName) {
+      const aircraft = window.geofs?.aircraft?.instance;
+      const part = aircraft?.parts?.[partName];
+      if (!part) return false;
+
+      const model = part?.object3d?.model?._model;
+      const nodesByName = model?._nodesByName;
+      const glassNode = nodesByName?.glassPanel;
+      if (!glassNode) return false;
+
+      glassNode.name = nodeName;
+      nodesByName[nodeName] = glassNode;
+      return true;
+    }
+
+    installButtonGroup(side) {
+      const aircraft = window.geofs?.aircraft?.instance;
+      if (!aircraft?.addParts) return false;
+      if (!this.ensureButtonRendererFunction()) return false;
+      if (!aircraft.parts?.[this.names.MFD_PART_NAME]) return false;
+
+      const count = side === 'top'
+        ? this.cfg.MFD_TOP_BUTTON_COUNT
+        : side === 'left'
+          ? this.cfg.MFD_LEFT_BUTTON_COUNT
+          : this.cfg.MFD_RIGHT_BUTTON_COUNT;
+
+      const partsToAdd = [];
+      for (let i = 0; i < count; i++) {
+        const partName = this.getButtonPartName(side, i);
+        if (aircraft.parts?.[partName]) continue;
+        if (!this.ensureButtonIncludeDefinition(partName)) return false;
+
+        const position = side === 'top'
+          ? [
+              this.cfg.MFD_TOP_BUTTON_START_X + i * this.cfg.MFD_TOP_BUTTON_STEP_X,
+              this.cfg.MFD_TOP_BUTTON_Y,
+              this.cfg.MFD_TOP_BUTTON_Z
+            ]
+          : side === 'left'
+            ? [
+                this.cfg.MFD_LEFT_BUTTON_X,
+                this.cfg.MFD_LEFT_BUTTON_Y,
+                this.cfg.MFD_LEFT_BUTTON_START_Z - i * this.cfg.MFD_LEFT_BUTTON_STEP_Z
+              ]
+            : [
+                this.cfg.MFD_RIGHT_BUTTON_X,
+                this.cfg.MFD_RIGHT_BUTTON_Y,
+                this.cfg.MFD_RIGHT_BUTTON_START_Z - i * this.cfg.MFD_RIGHT_BUTTON_STEP_Z
+              ];
+
+        partsToAdd.push({
+          name: partName,
+          include: this.getButtonIncludeKey(partName),
+          parent: this.names.MFD_PART_NAME,
+          position,
+          scale: [0.047, 0.047, 0.047],
+          shadows: 'SHADOWS_NONE'
+        });
+      }
+
+      if (partsToAdd.length) {
+        aircraft.addParts(partsToAdd);
+      }
+
+      for (let i = 0; i < count; i++) {
+        const partName = this.getButtonPartName(side, i);
+        if (!aircraft.parts?.[partName]) return false;
+        if (!this.registerButtonPickNode(partName, partName)) {
+          const buttonPart = aircraft.parts?.[partName];
+          buttonPart?.['3dmodel']?.readyPromise?.then?.(() => {
+            this.registerButtonPickNode(partName, partName);
+          });
+        }
+      }
+
+      return true;
+    }
+
+    ensureMfdUsingGeoFsParts() {
+      const existingRef = window[this.runtimeRefKey];
+      const existingPart = window.geofs?.aircraft?.instance?.parts?.[this.names.MFD_PART_NAME];
+      if (existingRef && existingPart) return true;
+      if (existingRef && !existingPart) delete window[this.runtimeRefKey];
+      if (!isF18Active()) return false;
+
+      const aircraft = window.geofs?.aircraft?.instance;
+      if (!aircraft?.addParts) return false;
+      if (!this.ensureMainRendererFunction()) return false;
+      if (!this.ensureMainIncludeDefinition()) return false;
+
+      const hudPart = getHudPartDefinition();
+      if (!hudPart) return false;
+
+      if (!aircraft.parts?.[this.names.MFD_PART_NAME]) {
+        aircraft.addParts([{
+          name: this.names.MFD_PART_NAME,
+          include: this.names.MFD_INCLUDE_KEY,
+          parent: this.cfg.parentPartName || hudPart.parent || 'root',
+          position: this.cfg.position,
+          rotation: this.cfg.rotation,
+          scale: this.cfg.scale,
+          points: {
+            topLeft: [-this.cfg.MFD_CLICK_HALF_WIDTH, 0, this.cfg.MFD_CLICK_HALF_HEIGHT],
+            topRight: [this.cfg.MFD_CLICK_HALF_WIDTH, 0, this.cfg.MFD_CLICK_HALF_HEIGHT],
+            bottomLeft: [-this.cfg.MFD_CLICK_HALF_WIDTH, 0, -this.cfg.MFD_CLICK_HALF_HEIGHT],
+            bottomRight: [this.cfg.MFD_CLICK_HALF_WIDTH, 0, -this.cfg.MFD_CLICK_HALF_HEIGHT]
+          }
+        }]);
+      }
+
+      const mfdPart = aircraft.parts?.[this.names.MFD_PART_NAME];
+      if (!mfdPart) return false;
+
+      const registerMainPickNode = () => {
+        const model = mfdPart?.object3d?.model?._model;
+        const nodesByName = model?._nodesByName;
+        const glassNode = nodesByName?.glassPanel;
+        if (!glassNode) return false;
+
+        glassNode.name = this.names.MFD_PART_NAME;
+        nodesByName[this.names.MFD_PART_NAME] = glassNode;
+        return true;
+      };
+
+      if (!registerMainPickNode()) {
+        mfdPart?.['3dmodel']?.readyPromise?.then?.(() => registerMainPickNode());
+      }
+
+      if (!this.installButtonGroup('top')) return false;
+      if (!this.installButtonGroup('left')) return false;
+      if (!this.installButtonGroup('right')) return false;
+
+      window[this.runtimeRefKey] = {
+        remove: () => this.removeInstalledParts()
+      };
+
+      return true;
+    }
+
+    removePartByName(partName) {
+      const ac = window.geofs?.aircraft?.instance;
+      const part = ac?.parts?.[partName];
+      if (!part) return;
+
+      const parent = part.object3d?.getParent?.();
+      if (parent?._children) {
+        const idx = parent._children.indexOf(part.object3d);
+        if (idx >= 0) parent._children.splice(idx, 1);
+      }
+      part.object3d?.destroy?.();
+      part.rendererInstance?.destroy?.();
+      part['3dmodel']?.destroy?.();
+      delete ac.parts[partName];
+    }
+
+    removeInstalledParts() {
+      for (let i = 0; i < this.cfg.MFD_TOP_BUTTON_COUNT; i++) {
+        this.removePartByName(this.getTopButtonPartName(i));
+      }
+      for (let i = 0; i < this.cfg.MFD_LEFT_BUTTON_COUNT; i++) {
+        this.removePartByName(this.getLeftButtonPartName(i));
+      }
+      for (let i = 0; i < this.cfg.MFD_RIGHT_BUTTON_COUNT; i++) {
+        this.removePartByName(this.getRightButtonPartName(i));
+      }
+      this.removePartByName(this.names.MFD_PART_NAME);
+      delete window[this.runtimeRefKey];
     }
 
     hasRequiredNodeClickHandlers() {
       const handlers = window.controls?.nodeClickHandlers;
       if (!handlers) return false;
 
-      if (handlers[RIGHT_MFD_PART_NAME] !== this.onNodeClickBound) return false;
-      if (handlers[RIGHT_MFD_PICK_NODE_NAME] !== this.onNodeClickBound) return false;
-
-      for (let i = 0; i < RIGHT_MFD_TOP_BUTTON_COUNT; i++) {
-        if (handlers[getRightMfdTopButtonNodeName(i)] !== this.onNodeClickBound) return false;
+      if (handlers[this.names.MFD_PART_NAME] !== this.onNodeClickBound) return false;
+      for (let i = 0; i < this.cfg.MFD_TOP_BUTTON_COUNT; i++) {
+        if (handlers[this.getTopButtonPartName(i)] !== this.onNodeClickBound) return false;
       }
-      for (let i = 0; i < RIGHT_MFD_LEFT_BUTTON_COUNT; i++) {
-        if (handlers[getRightMfdLeftButtonNodeName(i)] !== this.onNodeClickBound) return false;
+      for (let i = 0; i < this.cfg.MFD_LEFT_BUTTON_COUNT; i++) {
+        if (handlers[this.getLeftButtonPartName(i)] !== this.onNodeClickBound) return false;
       }
-      for (let i = 0; i < RIGHT_MFD_RIGHT_BUTTON_COUNT; i++) {
-        if (handlers[getRightMfdRightButtonNodeName(i)] !== this.onNodeClickBound) return false;
+      for (let i = 0; i < this.cfg.MFD_RIGHT_BUTTON_COUNT; i++) {
+        if (handlers[this.getRightButtonPartName(i)] !== this.onNodeClickBound) return false;
       }
-
       return true;
     }
 
     ensureLoaded() {
-      if (!window.__f18MfdUiState) {
-        window.__f18MfdUiState = new F18MfdUiState();
-      }
-
-      const ready = installRightMfdUsingGeoFsParts();
-      if (!ready) {
-        return false;
-      }
+      this.ensureUiState();
+      const ready = this.ensureMfdUsingGeoFsParts();
+      if (!ready) return false;
 
       if (this.nodeClickHandlerInstalled && !this.hasRequiredNodeClickHandlers()) {
         this.nodeClickHandlerInstalled = false;
       }
-
       this.installNodeClickHandler();
-      return true;
+      return this.hasRequiredNodeClickHandlers();
     }
 
     installNodeClickHandler() {
       const controlsApi = window.controls;
-      if (!controlsApi?.addNodeClickHandler || this.nodeClickHandlerInstalled) {
-        return;
-      }
+      if (!controlsApi?.addNodeClickHandler || this.nodeClickHandlerInstalled) return false;
 
-      controlsApi.addNodeClickHandler(RIGHT_MFD_PART_NAME, this.onNodeClickBound);
-      controlsApi.addNodeClickHandler(RIGHT_MFD_PICK_NODE_NAME, this.onNodeClickBound);
-      for (let i = 0; i < RIGHT_MFD_TOP_BUTTON_COUNT; i++) {
-        controlsApi.addNodeClickHandler(getRightMfdTopButtonNodeName(i), this.onNodeClickBound);
+      controlsApi.addNodeClickHandler(this.names.MFD_PART_NAME, this.onNodeClickBound);
+      for (let i = 0; i < this.cfg.MFD_TOP_BUTTON_COUNT; i++) {
+        controlsApi.addNodeClickHandler(this.getTopButtonPartName(i), this.onNodeClickBound);
       }
-      for (let i = 0; i < RIGHT_MFD_LEFT_BUTTON_COUNT; i++) {
-        controlsApi.addNodeClickHandler(getRightMfdLeftButtonNodeName(i), this.onNodeClickBound);
+      for (let i = 0; i < this.cfg.MFD_LEFT_BUTTON_COUNT; i++) {
+        controlsApi.addNodeClickHandler(this.getLeftButtonPartName(i), this.onNodeClickBound);
       }
-      for (let i = 0; i < RIGHT_MFD_RIGHT_BUTTON_COUNT; i++) {
-        controlsApi.addNodeClickHandler(getRightMfdRightButtonNodeName(i), this.onNodeClickBound);
+      for (let i = 0; i < this.cfg.MFD_RIGHT_BUTTON_COUNT; i++) {
+        controlsApi.addNodeClickHandler(this.getRightButtonPartName(i), this.onNodeClickBound);
       }
       this.nodeClickHandlerInstalled = true;
+      return true;
     }
 
     removeNodeClickHandler() {
       const controlsApi = window.controls;
-      if (!this.nodeClickHandlerInstalled || !controlsApi?.nodeClickHandlers) {
-        return;
-      }
+      if (!this.nodeClickHandlerInstalled || !controlsApi?.nodeClickHandlers) return;
 
-      delete controlsApi.nodeClickHandlers[RIGHT_MFD_PART_NAME];
-      delete controlsApi.nodeClickHandlers[RIGHT_MFD_PICK_NODE_NAME];
-      for (let i = 0; i < RIGHT_MFD_TOP_BUTTON_COUNT; i++) {
-        delete controlsApi.nodeClickHandlers[getRightMfdTopButtonNodeName(i)];
+      delete controlsApi.nodeClickHandlers[this.names.MFD_PART_NAME];
+      for (let i = 0; i < this.cfg.MFD_TOP_BUTTON_COUNT; i++) {
+        delete controlsApi.nodeClickHandlers[this.getTopButtonPartName(i)];
       }
-      for (let i = 0; i < RIGHT_MFD_LEFT_BUTTON_COUNT; i++) {
-        delete controlsApi.nodeClickHandlers[getRightMfdLeftButtonNodeName(i)];
+      for (let i = 0; i < this.cfg.MFD_LEFT_BUTTON_COUNT; i++) {
+        delete controlsApi.nodeClickHandlers[this.getLeftButtonPartName(i)];
       }
-      for (let i = 0; i < RIGHT_MFD_RIGHT_BUTTON_COUNT; i++) {
-        delete controlsApi.nodeClickHandlers[getRightMfdRightButtonNodeName(i)];
+      for (let i = 0; i < this.cfg.MFD_RIGHT_BUTTON_COUNT; i++) {
+        delete controlsApi.nodeClickHandlers[this.getRightButtonPartName(i)];
       }
       this.nodeClickHandlerInstalled = false;
     }
 
-    // Projects a single corner of the MFD part to screen space.
-    // cornerLocal: [x, y, z] in the part's own local frame (unscaled).
-    // partObj: the Object3D of the MFD part.
-    // Returns { x, y } in screen pixels (y=0 at top), or null if not on screen.
     projectMfdCorner(cornerLocal, partObj, aircraftLla) {
-      // partObj.worldPosition is the part centre in aircraft-root-local XYZ (metres, ENU-ish).
-      // It is computed by GeoFS's compute() WITHOUT multiplying by the part's own scale,
-      // so it correctly represents the physical position of the part.
-      //
-      // partObj._scale is the part's own scale ([0.28, 0.28, 0.28] for our MFD part).
-      // We scale the local corner by this and rotate it by partObj.worldRotation,
-      // then add to partObj.worldPosition to get the corner in aircraft-root-local XYZ.
-      //
-      // This avoids the bug in setVectorWorldPosition(_points[n]) which multiplies the
-      // entire accumulated worldPosition by worldScale, pushing corners behind the camera.
-
       const partPos = partObj.worldPosition;
       const partRot = partObj.worldRotation;
       const sx = partObj._scale?.[0] ?? 1;
@@ -3186,40 +3055,32 @@
 
     getProjectedMfdBounds() {
       const aircraft = window.geofs?.aircraft?.instance;
-      const part = aircraft?.parts?.[RIGHT_MFD_PART_NAME];
+      const part = aircraft?.parts?.[this.names.MFD_PART_NAME];
       const partObj = part?.object3d;
       const aircraftLla = aircraft?.llaLocation;
       if (!partObj || !aircraftLla) return null;
 
-      const halfW = RIGHT_MFD_CLICK_HALF_WIDTH;
-      const halfH = RIGHT_MFD_CLICK_HALF_HEIGHT;
+      const halfW = this.cfg.MFD_CLICK_HALF_WIDTH;
+      const halfH = this.cfg.MFD_CLICK_HALF_HEIGHT;
       const localCorners = [
-        [-halfW, 0,  halfH],  // topLeft
-        [ halfW, 0,  halfH],  // topRight
-        [-halfW, 0, -halfH],  // bottomLeft
-        [ halfW, 0, -halfH],  // bottomRight
+        [-halfW, 0,  halfH],
+        [ halfW, 0,  halfH],
+        [-halfW, 0, -halfH],
+        [ halfW, 0, -halfH],
       ];
 
       const projected = localCorners.map(c => this.projectMfdCorner(c, partObj, aircraftLla));
       if (projected.some(p => p === null)) return null;
 
       const [topLeft, topRight, bottomLeft, bottomRight] = projected;
-
       const xs = projected.map(p => p.x);
       const ys = projected.map(p => p.y);
-      const left   = Math.min(...xs);
-      const right  = Math.max(...xs);
-      const top    = Math.min(...ys);
-      const bottom = Math.max(...ys);
-
-      if (!Number.isFinite(left) || !Number.isFinite(right) ||
-          !Number.isFinite(top)  || !Number.isFinite(bottom)) return null;
 
       return {
-        left,
-        top,
-        width: right - left,
-        height: bottom - top,
+        left: Math.min(...xs),
+        top: Math.min(...ys),
+        width: Math.max(...xs) - Math.min(...xs),
+        height: Math.max(...ys) - Math.min(...ys),
         corners: { topLeft, topRight, bottomLeft, bottomRight }
       };
     }
@@ -3241,52 +3102,20 @@
         || this.pointInTriangle(p, topLeft, bottomRight, bottomLeft);
     }
 
-    mapScreenToLocalBilinear(x, y, corners, bounds) {
-      const p00 = corners.topLeft;
-      const p10 = corners.topRight;
-      const p01 = corners.bottomLeft;
-      const p11 = corners.bottomRight;
+    getPickScore(x, y) {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return Infinity;
 
-      let u = bounds.width > 0 ? (x - bounds.left) / bounds.width : 0.5;
-      let v = bounds.height > 0 ? (y - bounds.top) / bounds.height : 0.5;
-
-      u = Math.max(0, Math.min(1, u));
-      v = Math.max(0, Math.min(1, v));
-
-      const ax = p10.x - p00.x;
-      const ay = p10.y - p00.y;
-      const bx = p01.x - p00.x;
-      const by = p01.y - p00.y;
-      const cx = p11.x - p10.x - p01.x + p00.x;
-      const cy = p11.y - p10.y - p01.y + p00.y;
-
-      for (let i = 0; i < 8; i++) {
-        const fx = p00.x + ax * u + bx * v + cx * u * v - x;
-        const fy = p00.y + ay * u + by * v + cy * u * v - y;
-
-        const dfxdu = ax + cx * v;
-        const dfxdv = bx + cx * u;
-        const dfydu = ay + cy * v;
-        const dfydv = by + cy * u;
-
-        const det = dfxdu * dfydv - dfxdv * dfydu;
-        if (!Number.isFinite(det) || Math.abs(det) < 1e-9) {
-          break;
-        }
-
-        const du = (-fx * dfydv + fy * dfxdv) / det;
-        const dv = (fx * dfydu - fy * dfxdu) / det;
-
-        u += du;
-        v += dv;
-
-        if (Math.abs(du) + Math.abs(dv) < 1e-6) {
-          break;
-        }
+      const bounds = this.getProjectedMfdBounds();
+      if (!bounds || !this.pointInProjectedQuad(x, y, bounds.corners)) {
+        return Infinity;
       }
 
-      if (!Number.isFinite(u) || !Number.isFinite(v)) return null;
-      return { u, v };
+      const { topLeft, topRight, bottomLeft, bottomRight } = bounds.corners;
+      const centerX = (topLeft.x + topRight.x + bottomLeft.x + bottomRight.x) / 4;
+      const centerY = (topLeft.y + topRight.y + bottomLeft.y + bottomRight.y) / 4;
+      const dx = x - centerX;
+      const dy = y - centerY;
+      return dx * dx + dy * dy;
     }
 
     getClickScreenCoords() {
@@ -3305,15 +3134,15 @@
       };
     }
 
-    getTopButtonIndexFromScreenCoords(x, y) {
+    getButtonIndexFromScreenCoords(side, x, y) {
       if (!Number.isFinite(x) || !Number.isFinite(y)) return -1;
 
       const aircraft = window.geofs?.aircraft?.instance;
       const aircraftLla = aircraft?.llaLocation;
       if (!aircraft || !aircraftLla) return -1;
 
-      const halfW = RIGHT_MFD_CLICK_HALF_WIDTH * RIGHT_MFD_TOP_BUTTON_VISUAL_SCALE;
-      const halfH = RIGHT_MFD_CLICK_HALF_HEIGHT * RIGHT_MFD_TOP_BUTTON_VISUAL_SCALE;
+      const halfW = this.cfg.MFD_CLICK_HALF_WIDTH * this.cfg.MFD_TOP_BUTTON_VISUAL_SCALE;
+      const halfH = this.cfg.MFD_CLICK_HALF_HEIGHT * this.cfg.MFD_TOP_BUTTON_VISUAL_SCALE;
       const localCorners = [
         [-halfW, 0, halfH],
         [halfW, 0, halfH],
@@ -3321,8 +3150,14 @@
         [halfW, 0, -halfH]
       ];
 
-      for (let i = 0; i < RIGHT_MFD_TOP_BUTTON_COUNT; i++) {
-        const partName = getRightMfdTopButtonPartName(i);
+      const count = side === 'top'
+        ? this.cfg.MFD_TOP_BUTTON_COUNT
+        : side === 'left'
+          ? this.cfg.MFD_LEFT_BUTTON_COUNT
+          : this.cfg.MFD_RIGHT_BUTTON_COUNT;
+
+      for (let i = 0; i < count; i++) {
+        const partName = this.getButtonPartName(side, i);
         const partObj = aircraft.parts?.[partName]?.object3d;
         if (!partObj) continue;
 
@@ -3339,170 +3174,244 @@
       return -1;
     }
 
-    getLeftButtonIndexFromScreenCoords(x, y) {
-      if (!Number.isFinite(x) || !Number.isFinite(y)) return -1;
-
-      const aircraft = window.geofs?.aircraft?.instance;
-      const aircraftLla = aircraft?.llaLocation;
-      if (!aircraft || !aircraftLla) return -1;
-
-      const halfW = RIGHT_MFD_CLICK_HALF_WIDTH * RIGHT_MFD_TOP_BUTTON_VISUAL_SCALE;
-      const halfH = RIGHT_MFD_CLICK_HALF_HEIGHT * RIGHT_MFD_TOP_BUTTON_VISUAL_SCALE;
-      const localCorners = [
-        [-halfW, 0, halfH],
-        [halfW, 0, halfH],
-        [-halfW, 0, -halfH],
-        [halfW, 0, -halfH]
-      ];
-
-      for (let i = 0; i < RIGHT_MFD_LEFT_BUTTON_COUNT; i++) {
-        const partName = getRightMfdLeftButtonPartName(i);
-        const partObj = aircraft.parts?.[partName]?.object3d;
-        if (!partObj) continue;
-
-        const projected = localCorners.map((corner) => this.projectMfdCorner(corner, partObj, aircraftLla));
-        if (projected.some((p) => p === null)) continue;
-
-        const [topLeft, topRight, bottomLeft, bottomRight] = projected;
-        const inside = this.pointInProjectedQuad(x, y, { topLeft, topRight, bottomLeft, bottomRight });
-        if (inside) {
-          return i;
-        }
+    isOwnedNode(nodeName) {
+      if (nodeName === this.names.MFD_PART_NAME) return true;
+      for (let i = 0; i < this.cfg.MFD_TOP_BUTTON_COUNT; i++) {
+        if (nodeName === this.getTopButtonPartName(i)) return true;
       }
-
-      return -1;
-    }
-
-    getRightButtonIndexFromScreenCoords(x, y) {
-      if (!Number.isFinite(x) || !Number.isFinite(y)) return -1;
-
-      const aircraft = window.geofs?.aircraft?.instance;
-      const aircraftLla = aircraft?.llaLocation;
-      if (!aircraft || !aircraftLla) return -1;
-
-      const halfW = RIGHT_MFD_CLICK_HALF_WIDTH * RIGHT_MFD_TOP_BUTTON_VISUAL_SCALE;
-      const halfH = RIGHT_MFD_CLICK_HALF_HEIGHT * RIGHT_MFD_TOP_BUTTON_VISUAL_SCALE;
-      const localCorners = [
-        [-halfW, 0, halfH],
-        [halfW, 0, halfH],
-        [-halfW, 0, -halfH],
-        [halfW, 0, -halfH]
-      ];
-
-      for (let i = 0; i < RIGHT_MFD_RIGHT_BUTTON_COUNT; i++) {
-        const partName = getRightMfdRightButtonPartName(i);
-        const partObj = aircraft.parts?.[partName]?.object3d;
-        if (!partObj) continue;
-
-        const projected = localCorners.map((corner) => this.projectMfdCorner(corner, partObj, aircraftLla));
-        if (projected.some((p) => p === null)) continue;
-
-        const [topLeft, topRight, bottomLeft, bottomRight] = projected;
-        const inside = this.pointInProjectedQuad(x, y, { topLeft, topRight, bottomLeft, bottomRight });
-        if (inside) {
-          return i;
-        }
+      for (let i = 0; i < this.cfg.MFD_LEFT_BUTTON_COUNT; i++) {
+        if (nodeName === this.getLeftButtonPartName(i)) return true;
       }
-
-      return -1;
+      for (let i = 0; i < this.cfg.MFD_RIGHT_BUTTON_COUNT; i++) {
+        if (nodeName === this.getRightButtonPartName(i)) return true;
+      }
+      return false;
     }
 
     onNodeClick(nodeName) {
       if (!isF18Active()) {
-        return;
+        return false;
       }
       if (window.geofs?.camera?.currentModeName !== 'cockpit') {
-        return;
+        return false;
+      }
+
+      if (!this.isOwnedNode(nodeName)) {
+        return false;
       }
 
       const topButtonIndex = (() => {
-        for (let i = 0; i < RIGHT_MFD_TOP_BUTTON_COUNT; i++) {
-          if (nodeName === getRightMfdTopButtonNodeName(i)) return i;
+        for (let i = 0; i < this.cfg.MFD_TOP_BUTTON_COUNT; i++) {
+          if (nodeName === this.getTopButtonPartName(i)) return i;
         }
         return -1;
       })();
 
       if (topButtonIndex >= 0) {
-        const uiState = window.__f18MfdUiState;
+        const uiState = this.getUiState();
         uiState?.setPage?.(topButtonIndex);
-        return;
+        return true;
       }
 
       const leftButtonIndex = (() => {
-        for (let i = 0; i < RIGHT_MFD_LEFT_BUTTON_COUNT; i++) {
-          if (nodeName === getRightMfdLeftButtonNodeName(i)) return i;
+        for (let i = 0; i < this.cfg.MFD_LEFT_BUTTON_COUNT; i++) {
+          if (nodeName === this.getLeftButtonPartName(i)) return i;
         }
         return -1;
       })();
 
       if (leftButtonIndex >= 0) {
-        const uiState = window.__f18MfdUiState;
+        const uiState = this.getUiState();
         uiState?.toggleButtonBySlot?.('left', leftButtonIndex);
-        return;
+        return true;
       }
 
       const rightButtonIndex = (() => {
-        for (let i = 0; i < RIGHT_MFD_RIGHT_BUTTON_COUNT; i++) {
-          if (nodeName === getRightMfdRightButtonNodeName(i)) return i;
+        for (let i = 0; i < this.cfg.MFD_RIGHT_BUTTON_COUNT; i++) {
+          if (nodeName === this.getRightButtonPartName(i)) return i;
         }
         return -1;
       })();
 
       if (rightButtonIndex >= 0) {
-        const uiState = window.__f18MfdUiState;
+        const uiState = this.getUiState();
         uiState?.toggleButtonBySlot?.('right', rightButtonIndex);
-        return;
+        return true;
       }
 
-      if (nodeName === RIGHT_MFD_PICK_NODE_NAME) {
-        const click = this.getClickScreenCoords();
-        const pickedTopButtonIndex = this.getTopButtonIndexFromScreenCoords(click?.x, click?.y);
-        if (pickedTopButtonIndex >= 0) {
-          const uiState = window.__f18MfdUiState;
-          uiState?.setPage?.(pickedTopButtonIndex);
-          return;
-        }
-
-        const pickedLeftButtonIndex = this.getLeftButtonIndexFromScreenCoords(click?.x, click?.y);
-        if (pickedLeftButtonIndex >= 0) {
-          const uiState = window.__f18MfdUiState;
-          uiState?.toggleButtonBySlot?.('left', pickedLeftButtonIndex);
-          return;
-        }
-
-        const pickedRightButtonIndex = this.getRightButtonIndexFromScreenCoords(click?.x, click?.y);
-        if (pickedRightButtonIndex >= 0) {
-          const uiState = window.__f18MfdUiState;
-          uiState?.toggleButtonBySlot?.('right', pickedRightButtonIndex);
-          return;
-        }
+      if (nodeName !== this.names.MFD_PART_NAME) {
+        return false;
       }
 
-      if (nodeName !== RIGHT_MFD_PART_NAME && nodeName !== RIGHT_MFD_PICK_NODE_NAME) {
-        return;
+      return this.handlePickClick();
+    }
+
+    handlePickClick(clickOverride = null) {
+      const uiState = this.getUiState();
+      if (!uiState) return false;
+
+      const click = clickOverride ?? this.getClickScreenCoords();
+      if (!click) return false;
+
+      const bounds = this.getProjectedMfdBounds();
+      if (!bounds || !this.pointInProjectedQuad(click.x, click.y, bounds.corners)) {
+        return false;
       }
 
-      const uiState = window.__f18MfdUiState;
+      const pickedTopButtonIndex = this.getButtonIndexFromScreenCoords('top', click.x, click.y);
+      if (pickedTopButtonIndex >= 0) {
+        uiState?.setPage?.(pickedTopButtonIndex);
+        return true;
+      }
+
+      const pickedLeftButtonIndex = this.getButtonIndexFromScreenCoords('left', click.x, click.y);
+      if (pickedLeftButtonIndex >= 0) {
+        uiState?.toggleButtonBySlot?.('left', pickedLeftButtonIndex);
+        return true;
+      }
+
+      const pickedRightButtonIndex = this.getButtonIndexFromScreenCoords('right', click.x, click.y);
+      if (pickedRightButtonIndex >= 0) {
+        uiState?.toggleButtonBySlot?.('right', pickedRightButtonIndex);
+        return true;
+      }
+
       uiState?.nextPage?.();
+      return true;
     }
 
     restore() {
       this.removeNodeClickHandler();
-      if (window.__f18RightMfdPart) {
-        window.__f18RightMfdPart.remove();
-      }
-      delete window.__f18MfdUiState;
+      window[this.runtimeRefKey]?.remove?.();
     }
   }
 
   class F18MainPlugin {
     constructor() {
       this.hudModule = new F18HudModule();
-      this.mfdModule = new F18MfdModule();
+      this.mfdModules = [];
+      this.mfdPickNodeHandlerInstalled = false;
+      this.onMfdPickNodeClickBound = this.onMfdPickNodeClick.bind(this);
+      this.runNodeBridgeInstalled = false;
+      this.originalRunNodeClickHandlers = null;
       this.timer = null;
       this.cameraWatchTimer = null;
       this.cameraWatchTicks = 0;
       this.lastMfdRecoveryTick = -999;
+
+      this.addMfd({
+        name: 'RIGHT',
+        position: [0.2167, 6.158, 0.584],
+        rotation: [8, 0, 0],
+        scale: [0.29, 0.29, 0.285]
+      });
+
+      this.addMfd({
+        name: 'LEFT',
+        position: [-0.2167, 6.158, 0.584],
+        rotation: [8, 0, 0],
+        scale: [0.29, 0.29, 0.285]
+      });
+    }
+
+    addMfd(config) {
+      const module = new MfdModule(config);
+      this.mfdModules.push(module);
+      return module;
+    }
+
+    getClickScreenCoords() {
+      const mouse = window.controls?.mouse;
+      if (!mouse) return null;
+
+      const rawX = mouse.lastX ?? mouse.originalX;
+      const rawY = mouse.lastY ?? mouse.originalY;
+      const oX = mouse.oX ?? 0;
+      const oY = mouse.oY ?? 0;
+      if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) return null;
+
+      return {
+        x: rawX - oX,
+        y: rawY - oY
+      };
+    }
+
+    getMfdAtScreenPoint(x, y) {
+      let targetModule = null;
+      let bestScore = Infinity;
+
+      for (const mfdModule of this.mfdModules) {
+        const score = mfdModule.getPickScore(x, y);
+        if (score < bestScore) {
+          bestScore = score;
+          targetModule = mfdModule;
+        }
+      }
+
+      return Number.isFinite(bestScore) ? targetModule : null;
+    }
+
+    onMfdPickNodeClick(nodeName) {
+      if (nodeName !== 'glassPanel') {
+        for (const mfdModule of this.mfdModules) {
+          if (mfdModule.onNodeClick(nodeName)) {
+            return;
+          }
+        }
+        return;
+      }
+
+      const click = this.getClickScreenCoords();
+      if (!click) return;
+
+      const targetModule = this.getMfdAtScreenPoint(click.x, click.y);
+      targetModule?.handlePickClick(click);
+    }
+
+    ensureGlobalMfdPickNodeHandler() {
+      const controlsApi = window.controls;
+      if (!controlsApi?.addNodeClickHandler) return false;
+      controlsApi.addNodeClickHandler('glassPanel', this.onMfdPickNodeClickBound);
+      this.mfdPickNodeHandlerInstalled = true;
+      return true;
+    }
+
+    ensureRunNodeClickBridge() {
+      const controlsApi = window.controls;
+      if (!controlsApi?.runNodeClickHandlers) return false;
+      if (this.runNodeBridgeInstalled) return true;
+
+      this.originalRunNodeClickHandlers = controlsApi.runNodeClickHandlers.bind(controlsApi);
+      controlsApi.runNodeClickHandlers = (nodeName) => {
+        this.originalRunNodeClickHandlers?.(nodeName);
+
+        // Fallback only: avoid double-processing nodes that already have a direct handler.
+        if (controlsApi?.nodeClickHandlers?.[nodeName]) {
+          return;
+        }
+
+        this.onMfdPickNodeClick(nodeName);
+      };
+
+      this.runNodeBridgeInstalled = true;
+      return true;
+    }
+
+    removeGlobalMfdPickNodeHandler() {
+      const controlsApi = window.controls;
+      if (!this.mfdPickNodeHandlerInstalled || !controlsApi?.nodeClickHandlers) return;
+      delete controlsApi.nodeClickHandlers.glassPanel;
+      this.mfdPickNodeHandlerInstalled = false;
+    }
+
+    removeRunNodeClickBridge() {
+      const controlsApi = window.controls;
+      if (!this.runNodeBridgeInstalled || !controlsApi) return;
+      if (this.originalRunNodeClickHandlers) {
+        controlsApi.runNodeClickHandlers = this.originalRunNodeClickHandlers;
+      }
+      this.originalRunNodeClickHandlers = null;
+      this.runNodeBridgeInstalled = false;
     }
 
     startCameraWatch() {
@@ -3514,17 +3423,19 @@
         this.cameraWatchTicks += 1;
         const mode = window.geofs?.camera?.currentModeName;
         const aircraft = window.geofs?.aircraft?.instance;
-        const hasMfdRef = Boolean(window.__f18RightMfdPart);
-        const hasMfdPart = Boolean(aircraft?.parts?.[RIGHT_MFD_PART_NAME]);
+        for (const mfdModule of this.mfdModules) {
+          const hasMfdRef = Boolean(window[mfdModule.runtimeRefKey]);
+          const hasMfdPart = Boolean(aircraft?.parts?.[mfdModule.partName]);
 
-        if (mode === 'cockpit' && !hasMfdPart && (this.cameraWatchTicks - this.lastMfdRecoveryTick) >= 4) {
-          this.lastMfdRecoveryTick = this.cameraWatchTicks;
+          if (mode === 'cockpit' && !hasMfdPart && (this.cameraWatchTicks - this.lastMfdRecoveryTick) >= 4) {
+            this.lastMfdRecoveryTick = this.cameraWatchTicks;
 
-          if (hasMfdRef) {
-            delete window.__f18RightMfdPart;
+            if (hasMfdRef) {
+              delete window[mfdModule.runtimeRefKey];
+            }
+
+            mfdModule.ensureLoaded();
           }
-
-          this.mfdModule.ensureLoaded();
         }
       }, 250);
     }
@@ -3539,8 +3450,10 @@
 
     tryInstall() {
       const hudReady = this.hudModule.ensureLoaded();
-      const mfdReady = this.mfdModule.ensureLoaded();
-      return Boolean(hudReady && mfdReady);
+      const mfdReady = this.mfdModules.every((mfdModule) => mfdModule.ensureLoaded());
+      const pickNodeReady = this.ensureGlobalMfdPickNodeHandler();
+      const nodeBridgeReady = this.ensureRunNodeClickBridge();
+      return Boolean(hudReady && mfdReady && pickNodeReady && nodeBridgeReady);
     }
 
     start() {
@@ -3564,7 +3477,9 @@
       }
       stopWpnGunFireTimer();
       this.stopCameraWatch();
-      this.mfdModule.restore();
+      this.removeGlobalMfdPickNodeHandler();
+      this.removeRunNodeClickBridge();
+      this.mfdModules.forEach((mfdModule) => mfdModule.restore());
       this.hudModule.restore();
     }
   }

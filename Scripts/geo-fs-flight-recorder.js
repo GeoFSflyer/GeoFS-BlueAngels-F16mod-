@@ -62,6 +62,12 @@
       hideNodes: ["knot", "ribbon"]
     },
     {
+      aircraftId: "27", // F-18
+      ignoreNodes: ["RefDoor1", "RefDoor2"],
+      gearNodes: [],
+      hideNodes: []
+    },
+    {
       aircraftId: "29",
       ignoreNodes: ["frontGearDoor1"],
       gearNodes: [],
