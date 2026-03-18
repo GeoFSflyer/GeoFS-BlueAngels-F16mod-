@@ -370,6 +370,179 @@
     roundsRemainingInBurst: 0
   };
 
+  const FLIGHT_RECORDER_MIN_VERSION = '1.2.0';
+
+  function parseSemver(version) {
+    const value = String(version ?? '').trim();
+    const match = value.match(/(\d+)\.(\d+)\.(\d+)/);
+    if (!match) return null;
+    return {
+      major: Number(match[1]),
+      minor: Number(match[2]),
+      patch: Number(match[3])
+    };
+  }
+
+  function isSemverAtLeast(version, minimumVersion) {
+    const a = parseSemver(version);
+    const b = parseSemver(minimumVersion);
+    if (!a || !b) return false;
+
+    if (a.major !== b.major) return a.major > b.major;
+    if (a.minor !== b.minor) return a.minor > b.minor;
+    return a.patch >= b.patch;
+  }
+
+  function getFlightRecorderApi() {
+    return window.FlightRecorder?.api ?? null;
+  }
+
+  function getFlightRecorderVersion(api = getFlightRecorderApi()) {
+    if (!api || typeof api.getVersion !== 'function') return null;
+    try {
+      return String(api.getVersion() ?? '').trim() || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function isFlightRecorderCompatible(api = getFlightRecorderApi()) {
+    if (!api) return false;
+    const version = getFlightRecorderVersion(api);
+    if (!version) return false;
+    return isSemverAtLeast(version, FLIGHT_RECORDER_MIN_VERSION);
+  }
+
+  function normalizeFlightRecorderRecordingState(rawState) {
+    const value = String(rawState ?? '').trim().toUpperCase();
+    if (value.includes('RECORD')) return 'RECORDING';
+    if (value.includes('STOP')) return 'STOPPED';
+    if (value.includes('OFF') || value.includes('IDLE') || value.includes('NONE')) return 'OFF';
+    return 'OFF';
+  }
+
+  function normalizeFlightRecorderPlaybackState(rawState) {
+    const value = String(rawState ?? '').trim().toUpperCase();
+    if (value.includes('START') || value.includes('PLAY')) return 'STARTED';
+    if (value.includes('PAUSE')) return 'PAUSED';
+    if (value.includes('STOP') || value.includes('OFF') || value.includes('IDLE') || value.includes('NONE')) return 'STOPPED';
+    return 'STOPPED';
+  }
+
+  function getNestedStateValue(raw) {
+    if (typeof raw === 'string') return raw;
+    if (raw && typeof raw === 'object') {
+      if (typeof raw.state === 'string') return raw.state;
+      if (typeof raw.status === 'string') return raw.status;
+      if (typeof raw.mode === 'string') return raw.mode;
+      if (typeof raw.value === 'string') return raw.value;
+    }
+    return null;
+  }
+
+  function getFlightRecorderRecordingState(api = getFlightRecorderApi()) {
+    if (!isFlightRecorderCompatible(api)) return 'OFF';
+
+    let raw = null;
+    try {
+      raw = api?.recording?.getState?.();
+    } catch (e) {
+      raw = null;
+    }
+
+    if (raw && typeof raw === 'object' && typeof raw.recording === 'boolean') {
+      return raw.recording ? 'RECORDING' : 'STOPPED';
+    }
+
+    const nested = getNestedStateValue(raw);
+    return normalizeFlightRecorderRecordingState(nested);
+  }
+
+  function getFlightRecorderPlaybackState(api = getFlightRecorderApi()) {
+    if (!isFlightRecorderCompatible(api)) return 'STOPPED';
+
+    let raw = null;
+    try {
+      raw = api?.playback?.getState?.();
+    } catch (e) {
+      raw = null;
+    }
+
+    if (raw && typeof raw === 'object' && typeof raw.playing === 'boolean') {
+      if (raw.playing) return 'STARTED';
+      if (raw.paused === true) return 'PAUSED';
+      return 'STOPPED';
+    }
+
+    const nested = getNestedStateValue(raw);
+    return normalizeFlightRecorderPlaybackState(nested);
+  }
+
+  function getFlightRecorderMfdStatus() {
+    const api = getFlightRecorderApi();
+    const installed = Boolean(api);
+    const version = getFlightRecorderVersion(api);
+    const compatible = isFlightRecorderCompatible(api);
+
+    if (!installed || !compatible) {
+      return {
+        installed,
+        compatible: false,
+        version,
+        recordingState: 'OFF',
+        playbackState: 'STOPPED',
+        message: 'Install Flight Recorder v1.2.0 or higher'
+      };
+    }
+
+    return {
+      installed,
+      compatible: true,
+      version,
+      recordingState: getFlightRecorderRecordingState(api),
+      playbackState: getFlightRecorderPlaybackState(api),
+      message: ''
+    };
+  }
+
+  function toggleFlightRecorderRecordingFromMfd() {
+    const api = getFlightRecorderApi();
+    if (!isFlightRecorderCompatible(api)) return false;
+
+    const currentState = getFlightRecorderRecordingState(api);
+    try {
+      if (currentState === 'RECORDING') {
+        api?.recording?.stop?.();
+      } else {
+        api?.recording?.start?.();
+      }
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function controlFlightRecorderPlaybackFromMfd(action) {
+    const api = getFlightRecorderApi();
+    if (!isFlightRecorderCompatible(api)) return false;
+
+    const command = String(action ?? '').trim().toUpperCase();
+    try {
+      if (command === 'START') {
+        api?.playback?.start?.();
+      } else if (command === 'PAUSE') {
+        api?.playback?.pause?.();
+      } else if (command === 'STOP') {
+        api?.playback?.stop?.();
+      } else {
+        return false;
+      }
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   function deepCloneJson(value) {
     return JSON.parse(JSON.stringify(value));
   }
@@ -1170,12 +1343,86 @@
         {
           title: 'REC',
           leftButtons: [
-            { key: 'STATE', label: 'STATE', states: ['OFF', 'RECORDING', 'STOPPED'], stateIndex: 0 },
-            { key: 'PLAYBACK', label: 'PLAYBACK', states: ['STARTED', 'PAUSED', 'STOPPED'], stateIndex: 0 },
+            {
+              key: 'STATE',
+              label: 'STATE',
+              states: ['OFF'],
+              stateIndex: 0,
+              managedExternally: true,
+              onClick: () => {
+                toggleFlightRecorderRecordingFromMfd();
+              }
+            },
           ],
           rightButtons: [
+            {
+              key: 'PLAYBACK',
+              label: 'START',
+              states: ['START'],
+              stateIndex: 0,
+              managedExternally: true,
+              combinedAction: true,
+              combinedGroupLabel: 'PLAYBACK',
+              onClick: () => {
+                controlFlightRecorderPlaybackFromMfd('START');
+              }
+            },
+            {
+              key: 'PLAYBACK',
+              label: 'PAUSE',
+              states: ['PAUSE'],
+              stateIndex: 0,
+              managedExternally: true,
+              combinedAction: true,
+              combinedGroupLabel: 'PLAYBACK',
+              onClick: () => {
+                controlFlightRecorderPlaybackFromMfd('PAUSE');
+              }
+            },
+            {
+              key: 'PLAYBACK',
+              label: 'STOP',
+              states: ['STOP'],
+              stateIndex: 0,
+              managedExternally: true,
+              combinedAction: true,
+              combinedGroupLabel: 'PLAYBACK',
+              onClick: () => {
+                controlFlightRecorderPlaybackFromMfd('STOP');
+              }
+            },
           ],
-          lines: []
+          lines: [],
+          render: (renderer, renderContext) => {
+            const ctx = renderContext?.ctx ?? renderer?.canvasAPI?.context;
+            const w = renderContext?.w ?? renderer?.canvasAPI?.canvas?.width ?? 512;
+            const h = renderContext?.h ?? renderer?.canvasAPI?.canvas?.height ?? 512;
+            const color = renderContext?.color ?? '#00ff66';
+            if (!ctx) return;
+
+            const status = getFlightRecorderMfdStatus();
+            const cx = w * 0.5;
+
+            ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.fillStyle = color;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            if (!status.compatible) {
+              ctx.font = `bold ${Math.round(h * 0.042)}px monospace`;
+              ctx.fillText('Install Flight Recorder', cx, h * 0.58);
+              ctx.fillText('v1.2.0 or higher', cx, h * 0.66);
+              ctx.restore();
+              return;
+            }
+
+            ctx.font = `bold ${Math.round(h * 0.042)}px monospace`;
+            ctx.fillText(`FR v${status.version ?? 'unknown'}`, cx, h * 0.56);
+            ctx.fillText(`REC ${status.recordingState}`, cx, h * 0.64);
+            ctx.fillText(`PLAY ${status.playbackState}`, cx, h * 0.72);
+            ctx.restore();
+          }
         },
         {
           title: 'HUD',
@@ -1199,13 +1446,22 @@
           lines: []
         },
         {
-          title: 'INF',
+          title: 'SYS',
           leftButtons: [
             { key: 'FLAPS', label: 'FLAPS', states: ['MAN', 'AUTO'], stateIndex: 0 }
           ],
           rightButtons: [
           ],
-          lines: ['F-18 - Natrium mod', 'GEAR: ' + (controls?.gear?.position === 0 ? 'DOWN' : 'UP'), 'HOOK: ' + (controls?.accessories?.position === 0 ? 'UP' : 'DOWN'), 'FLAPS: ' + (controls?.flaps?.position === 0 ? 'UP' : controls?.flaps?.position === 1 ? '1 / 2' : 'FULL')]
+          lines: [],
+          render: (renderer, renderContext) => {
+            const ctx = renderContext?.ctx ?? renderer?.canvasAPI?.context;
+            const w = renderContext?.w ?? renderer?.canvasAPI?.canvas?.width ?? 512;
+            const h = renderContext?.h ?? renderer?.canvasAPI?.canvas?.height ?? 512;
+            const color = renderContext?.color ?? '#00ff66';
+            if (!ctx) return;
+
+            drawGearAndFlapIndicators(ctx, w, h, color, { target: 'mfd' });
+          }
         },
         {
           title: 'CHK',
@@ -1570,6 +1826,10 @@
         }
       }
 
+      if (btn.managedExternally) {
+        return;
+      }
+
       btn.stateIndex = nextIndex;
       setF18Option(page?.title ?? 'PAGE', btn?.key || btn?.label || `${side}${index + 1}`, nextState);
     }
@@ -1598,6 +1858,39 @@
       return entries;
     }
 
+    getCombinedButtonGroups(side, page = this.getCurrentPage()) {
+      const visibleEntries = this.getVisibleButtonEntries(side, page);
+      if (!visibleEntries.length) return [];
+
+      const groups = [];
+      let i = 0;
+      while (i < visibleEntries.length) {
+        const start = i;
+        const key = visibleEntries[i]?.button?.key;
+        i += 1;
+
+        while (i < visibleEntries.length && visibleEntries[i]?.button?.key === key) {
+          i += 1;
+        }
+
+        if (key && (i - start) >= 2) {
+          groups.push({
+            key,
+            startSlot: start,
+            endSlot: i - 1,
+            entries: visibleEntries.slice(start, i)
+          });
+        }
+      }
+
+      return groups;
+    }
+
+    getCombinedGroupForSlot(side, slotIndex, page = this.getCurrentPage()) {
+      const groups = this.getCombinedButtonGroups(side, page);
+      return groups.find((group) => slotIndex >= group.startSlot && slotIndex <= group.endSlot) ?? null;
+    }
+
     toggleButtonBySlot(side, slotIndex) {
       const page = this.getCurrentPage();
       const visibleEntries = this.getVisibleButtonEntries(side, page);
@@ -1607,6 +1900,22 @@
     }
 
     getStateLabel(button, page, actualIndex, side) {
+      if (page?.title === 'REC') {
+        const status = getFlightRecorderMfdStatus();
+        if (!status.compatible) {
+          return 'UNAVAIL';
+        }
+        if (button?.key === 'STATE') {
+          return status.recordingState;
+        }
+        if (button?.key === 'PLAYBACK') {
+          if (button?.combinedAction) {
+            return button?.states?.[0] ?? button?.label ?? 'N/A';
+          }
+          return status.playbackState;
+        }
+      }
+
       if (page?.title === 'WPN' && (button?.key === 'FIRE' || button?.key === 'JETTISON')) {
         const mode = getWpnModeFromOptions();
         const modeLoadout = getWpnModeLoadout(mode);
@@ -1730,6 +2039,16 @@
 
       for (let i = 0; i < visibleLeftButtons.length && i < layout.leftButtons.length; i++) {
         const slot = layout.leftButtons[i];
+        const combinedGroup = this.getCombinedGroupForSlot('left', i, page);
+        if (combinedGroup) {
+          const btn = visibleLeftButtons[i].button;
+          const actionText = btn?.states?.[0] ?? btn?.label ?? '';
+          const bracketX = slot.x + slot.w * 0.56;
+          const actionX = bracketX + w * 0.026;
+          ctx.fillText(`${actionText}`, actionX, slot.y + slot.h * 0.55);
+          continue;
+        }
+
         const btn = visibleLeftButtons[i].button;
         const label = btn.label;
         const state = this.getStateLabel(btn, page, visibleLeftButtons[i].actualIndex, 'left');
@@ -1738,11 +2057,78 @@
 
       for (let i = 0; i < visibleRightButtons.length && i < layout.rightButtons.length; i++) {
         const slot = layout.rightButtons[i];
+        const combinedGroup = this.getCombinedGroupForSlot('right', i, page);
+        if (combinedGroup) {
+          const btn = visibleRightButtons[i].button;
+          const actionText = btn?.states?.[0] ?? btn?.label ?? '';
+          const bracketX = slot.x + slot.w * 0.56;
+          const actionX = bracketX + w * 0.026;
+          ctx.fillText(`${actionText}`, actionX, slot.y + slot.h * 0.55);
+          continue;
+        }
+
         const btn = visibleRightButtons[i].button;
         const label = btn.label;
         const state = this.getStateLabel(btn, page, visibleRightButtons[i].actualIndex, 'right');
         ctx.fillText(`${label}   ${state}`, slot.x + 2, slot.y + slot.h * 0.55);
       }
+
+      const drawCombinedBracket = (side) => {
+        const groups = this.getCombinedButtonGroups(side, page);
+        const slots = side === 'left' ? layout.leftButtons : layout.rightButtons;
+        if (!groups?.length || !slots?.length) return;
+
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = Math.max(1.5, w * 0.0028);
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.font = `bold ${Math.round(h * 0.038)}px monospace`;
+
+        for (const group of groups) {
+          const startSlot = slots[group.startSlot];
+          const endSlot = slots[group.endSlot];
+          if (!startSlot || !endSlot) continue;
+
+          const groupLabel = group.entries?.[0]?.button?.combinedGroupLabel
+            ?? group.entries?.[0]?.button?.key
+            ?? '';
+
+          const yTop = startSlot.y + startSlot.h * 0.22;
+          const yBottom = endSlot.y + endSlot.h * 0.78;
+          const yMid = (yTop + yBottom) * 0.5;
+
+          const bracketX = startSlot.x + startSlot.w * 0.56;
+          const bracketArm = w * 0.012;
+
+          ctx.beginPath();
+          ctx.moveTo(bracketX + bracketArm, yTop);
+          ctx.lineTo(bracketX, yTop);
+          ctx.lineTo(bracketX, yBottom);
+          ctx.lineTo(bracketX + bracketArm, yBottom);
+          ctx.stroke();
+
+          const labelX = bracketX - w * 0.048;
+          const labelChars = String(groupLabel ?? '').split('');
+          const lineStep = h * 0.038;
+          const totalHeight = Math.max(0, (labelChars.length - 1) * lineStep);
+          const startY = yMid - totalHeight * 0.5;
+
+          ctx.save();
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          for (let c = 0; c < labelChars.length; c++) {
+            ctx.fillText(labelChars[c], labelX, startY + c * lineStep);
+          }
+          ctx.restore();
+        }
+
+        ctx.restore();
+      };
+
+      drawCombinedBracket('left');
+      drawCombinedBracket('right');
 
       if (Array.isArray(page.lines) && page.lines.length) {
         ctx.textAlign = 'center';
@@ -2408,6 +2794,193 @@
     ctx.restore();
   }
 
+  function drawGearAndFlapIndicators(ctx, w, h, lineColor, options = {}) {
+    const target = String(options?.target ?? 'hud').toLowerCase();
+    const isMfd = target === 'mfd';
+
+    const gearRaw = Number(window.controls?.gear?.position);
+    const gearPos = Number.isFinite(gearRaw) ? gearRaw : 1;
+
+    const flapsPosRaw = Number(window.controls?.flaps?.position);
+    const flapsPos = Number.isFinite(flapsPosRaw) ? flapsPosRaw : 0;
+    const flapsMaxRaw = Number(window.controls?.flaps?.maxPosition);
+    const flapsMax = Number.isFinite(flapsMaxRaw) && flapsMaxRaw > 0 ? flapsMaxRaw : 1;
+    const flapsNorm = Math.max(0, Math.min(1, flapsPos / flapsMax));
+
+    const hookRaw = Number(window.controls?.accessories?.position);
+    const hookPos = Number.isFinite(hookRaw) ? Math.max(0, Math.min(1, hookRaw)) : 0;
+
+    const left = isMfd ? w * 0.10 : w * 0.02;
+    const top = isMfd ? h * 0.27 : h * 0.02;
+    const blockW = isMfd ? w * 0.24 : w * 0.24;
+    const gapW = isMfd ? w * 0.05 : w * 0.04;
+
+    const indicatorTopY = top;
+    const indicatorBottomY = top + (isMfd ? h * 0.12 : h * 0.14);
+    const textY = top + (isMfd ? h * 0.17 : h * 0.19);
+
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.strokeStyle = lineColor;
+    ctx.fillStyle = lineColor;
+    ctx.lineWidth = Math.max(1.5, w * 0.0025);
+    ctx.setLineDash([]);
+
+    const flapsLineWidth = isMfd ? 5 : 3;
+    const hookLineWidth = isMfd ? 5 : 3;
+    const dotRadius = isMfd ? 2.5 : Math.max(1.5, w * 0.0028);
+
+    // --- GEAR indicator (3 boxes) ---
+    const gearX = left;
+    const boxW = blockW * (isMfd ? 0.14 : 0.14);
+    const boxH = h * (isMfd ? 0.045 : 0.11);
+    const topBoxX = gearX + blockW * 0.43;
+    const topBoxY = indicatorTopY - (isMfd ? boxH * 0.80 : 0);
+    const leftBoxX = gearX + blockW * 0.10;
+    const leftBoxY = indicatorBottomY - boxH;
+    const rightBoxX = gearX + blockW * 0.76;
+    const rightBoxY = indicatorBottomY - boxH;
+
+    const isGearDown = gearPos <= 0;
+    const isGearUp = gearPos >= 1;
+    const isGearTrans = !isGearDown && !isGearUp;
+    const gearFill = isGearDown ? '#2bb24c' : isGearTrans ? '#ff8a24' : null;
+
+    const drawGearBox = (x, y) => {
+      ctx.strokeRect(x, y, boxW, boxH);
+      if (gearFill) {
+        ctx.fillStyle = gearFill;
+        ctx.fillRect(x + 1, y + 1, Math.max(0, boxW - 2), Math.max(0, boxH - 2));
+        ctx.fillStyle = lineColor;
+      }
+    };
+
+    drawGearBox(topBoxX, topBoxY);
+    drawGearBox(leftBoxX, leftBoxY);
+    drawGearBox(rightBoxX, rightBoxY);
+
+    let gearStatus = 'GEAR UP';
+    if (isGearDown) gearStatus = 'GEAR DOWN';
+    else if (isGearTrans) gearStatus = 'GEAR TRANS';
+
+    // --- FLAP indicator ---
+    const flapX = gearX + blockW + gapW;
+    const flapWingY = top + (isMfd ? h * 0.03 : h * 0.045);
+    const wingStartX = flapX + blockW * 0.08;
+    const wingEndX = flapX + blockW * 0.62;
+    const flapHingeX = wingEndX;
+    const slatHingeX = wingStartX;
+    const segmentLen = blockW * (isMfd ? 0.40 : 0.22);
+
+    const flapMaxDeg = 45;
+    const flapDeg = flapMaxDeg * flapsNorm;
+    const flapRad = flapDeg * Math.PI / 180;
+    const slatNorm = Math.max(0, Math.min(1, flapsPos));
+    const slatMaxDeg = 30;
+
+    // wing baseline
+    const previousLineWidth = ctx.lineWidth;
+    ctx.lineWidth = flapsLineWidth;
+    ctx.beginPath();
+    ctx.moveTo(wingStartX, flapWingY);
+    ctx.lineTo(wingEndX, flapWingY);
+    ctx.stroke();
+
+    // slat line: continuous exact angle; position 1 is max deflection
+    const slatDeg = slatMaxDeg * slatNorm;
+    const slatRad = slatDeg * Math.PI / 180;
+    const slatEndX = slatHingeX - Math.cos(slatRad) * (segmentLen * 0.55);
+    const slatEndY = flapWingY + Math.sin(slatRad) * (segmentLen * 0.55);
+    ctx.beginPath();
+    ctx.moveTo(slatHingeX, flapWingY);
+    ctx.lineTo(slatEndX, slatEndY);
+    ctx.stroke();
+
+    // flap line (continuous exact angle)
+    const flapEndX = flapHingeX + Math.cos(flapRad) * segmentLen;
+    const flapEndY = flapWingY + Math.sin(flapRad) * segmentLen;
+    ctx.beginPath();
+    ctx.moveTo(flapHingeX, flapWingY);
+    ctx.lineTo(flapEndX, flapEndY);
+    ctx.stroke();
+    ctx.lineWidth = previousLineWidth;
+
+    // detent dots: 0..maxPosition
+    const detentCount = Math.max(1, Math.round(flapsMax));
+    for (let i = 0; i <= detentCount; i++) {
+      const t = i / detentCount;
+      const a = (flapMaxDeg * t) * Math.PI / 180;
+      const dx = Math.cos(a) * segmentLen;
+      const dy = Math.sin(a) * segmentLen;
+      const dotX = flapHingeX + dx;
+      const dotY = flapWingY + dy;
+      ctx.beginPath();
+      ctx.arc(dotX, dotY, dotRadius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    let flapStatus = 'FLAPS UP';
+    if (flapsPos >= flapsMax) {
+      flapStatus = 'FLAPS DOWN';
+    } else if (flapsPos > 0) {
+      const nearest = Math.max(1, Math.min(detentCount - 1, Math.round(flapsPos)));
+      flapStatus = `FLAPS ${nearest} / ${detentCount}`;
+    }
+
+    // --- HOOK indicator ---
+    const hookX = flapX + blockW + gapW;
+    const hookWingY = flapWingY;
+    const hookHingeX = hookX + blockW * 0.38;
+    const hookLen = blockW * (isMfd ? 0.36 : 0.24);
+    const hookRad = (45 * hookPos) * Math.PI / 180;
+
+    const hookUpX = hookHingeX + hookLen;
+    const hookUpY = hookWingY;
+    const hookDownX = hookHingeX + Math.cos(Math.PI / 4) * hookLen;
+    const hookDownY = hookWingY + Math.sin(Math.PI / 4) * hookLen;
+
+    ctx.lineWidth = hookLineWidth;
+    const hookEndX = hookHingeX + Math.cos(hookRad) * hookLen;
+    const hookEndY = hookWingY + Math.sin(hookRad) * hookLen;
+    ctx.beginPath();
+    ctx.moveTo(hookHingeX, hookWingY);
+    ctx.lineTo(hookEndX, hookEndY);
+    ctx.stroke();
+    ctx.lineWidth = previousLineWidth;
+
+    ctx.beginPath();
+    ctx.arc(hookUpX, hookUpY, dotRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(hookDownX, hookDownY, dotRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    let hookStatus = 'HOOK UP';
+    if (hookPos >= 1) {
+      hookStatus = 'HOOK DOWN';
+    } else if (hookPos > 0) {
+      hookStatus = 'HOOK MOV';
+    }
+
+    // status labels on equal baseline
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `bold ${Math.round(h * (isMfd ? 0.036 : 0.048))}px monospace`;
+
+    const gearCenterX = gearX + blockW * 0.5;
+    const flapCenterX = flapX + blockW * 0.5;
+    const hookCenterX = hookX + blockW * 0.5;
+
+    ctx.fillStyle = isGearTrans ? '#ff8a24' : lineColor;
+    ctx.fillText(gearStatus, gearCenterX, textY);
+
+    ctx.fillStyle = lineColor;
+    ctx.fillText(flapStatus, flapCenterX, textY);
+    ctx.fillText(hookStatus, hookCenterX, textY);
+
+    ctx.restore();
+  }
+
   // ---------------------------------------------------------------------------
   // F-18 HUD renderer — volledige custom draw
   // ---------------------------------------------------------------------------
@@ -2571,6 +3144,334 @@
       if (window.__f18HudCameraControls) {
         window.__f18HudCameraControls.remove();
       }
+    }
+  }
+
+  class CameraModule {
+    static CAMERA_MODE_DEFINITIONS = {
+      6: {
+        distance: 0,
+        FOV: 10,
+        insideView: false,
+        mode: 6,
+        name: 'Nose cam',
+        offsetBounds: [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
+        offsets: {
+          current: [0, 0.5, -1],
+          last: [0, 0.5, 0],
+          neutral: [0, 0.5, 0]
+        },
+        orientation: [180, 20, -1.5],
+        orientations: {
+          current: [180, 20, 0],
+          last: [180, 20, 0],
+          neutral: [180, 20, 0]
+        },
+        position: [0, 11.55, -1.5],
+        view: 'Nose cam'
+      },
+      7: {
+        distance: 0,
+        FOV: 10,
+        insideView: false,
+        mode: 7,
+        name: 'Cockpit Rear',
+        offsetBounds: [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
+        offsets: {
+          current: [0, 0.5, -1],
+          last: [0, 0.5, 0],
+          neutral: [0, 0.5, 0]
+        },
+        orientation: [180, -15, -1.5],
+        orientations: {
+          current: [180, -15, 0],
+          last: [180, -15, 0],
+          neutral: [180, -15, 0]
+        },
+        position: [0, 5, 3.4],
+        view: 'Cockpit Rear'
+      },
+      8: {
+        distance: 0,
+        FOV: 10,
+        insideView: false,
+        mode: 8,
+        name: 'Wingman',
+        offsetBounds: [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
+        offsets: {
+          current: [0, 0.5, -1],
+          last: [0, 0.5, 0],
+          neutral: [0, 0.5, 0]
+        },
+        orientation: [115, -12, 0],
+        orientations: {
+          current: [115, -15, 0],
+          last: [115, -15, 0],
+          neutral: [115, -15, 0]
+        },
+        position: [1, 4, -0.3],
+        view: 'Wingman'
+      },
+      9: {
+        distance: 0,
+        FOV: 2,
+        insideView: false,
+        mode: 9,
+        name: 'Down Rear',
+        offsetBounds: [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
+        offsets: {
+          current: [0, 0.5, -1],
+          last: [0, 0.5, 0],
+          neutral: [0, 0.5, 0]
+        },
+        orientation: [180, 20, -1.5],
+        orientations: {
+          current: [180, 20, 0],
+          last: [180, 20, 0],
+          neutral: [180, 20, 0]
+        },
+        position: [0, 4, -1],
+        view: 'Down Rear'
+      },
+      10: {
+        distance: 0,
+        FOV: 2,
+        insideView: false,
+        mode: 10,
+        name: 'Gun cam',
+        offsetBounds: [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
+        offsets: {
+          current: [0, -6, -1],
+          last: [0, 0.5, 0],
+          neutral: [0, 0.5, 0]
+        },
+        orientation: [10, 0, 0],
+        orientations: {
+          current: [10, 0, 0],
+          last: [0, 20, 0],
+          neutral: [0, 20, 0]
+        },
+        position: [3, 4.5, 1.85],
+        view: 'Gun cam'
+      },
+      11: {
+        distance: 0,
+        FOV: 10,
+        insideView: false,
+        mode: 11,
+        name: 'Wing cam',
+        offsetBounds: [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
+        offsets: {
+          current: [0, -5, -1],
+          last: [0, 0.5, 0],
+          neutral: [0, 0.5, 0]
+        },
+        orientation: [30, 35, 0],
+        orientations: {
+          current: [30, 35, 0],
+          last: [0, 20, 0],
+          neutral: [0, 20, 0]
+        },
+        position: [-6, 0, 0.1],
+        view: 'Wing cam'
+      },
+      12: {
+        distance: 0,
+        FOV: 1.7,
+        insideView: true,
+        mode: 12,
+        name: 'Throttle cam',
+        offsetBounds: [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
+        offsets: {
+          current: [0, 0, 0],
+          last: [0, 0, 0],
+          neutral: [0, 0, 0]
+        },
+        orientation: [0, -8, 0],
+        orientations: {
+          current: [0, -8, 0],
+          last: [0, -8, 0],
+          neutral: [0, -8, 0]
+        },
+        position: [-0.17, 5.4, 0.3],
+        view: 'Throttle cam'
+      }
+    };
+
+    constructor() {
+      this.installed = false;
+      this.originalModesByIndex = new Map();
+    }
+
+    ensureLoaded() {
+      if (this.installed) return true;
+      if (!isF18Active()) return false;
+
+      const modes = window.geofs?.camera?.modes;
+      if (!modes) return false;
+
+      for (const [indexKey, definition] of Object.entries(CameraModule.CAMERA_MODE_DEFINITIONS)) {
+        const index = Number(indexKey);
+        if (!Number.isInteger(index)) continue;
+
+        if (!this.originalModesByIndex.has(index)) {
+          const hasOriginalMode = Object.prototype.hasOwnProperty.call(modes, index);
+          this.originalModesByIndex.set(index, {
+            exists: hasOriginalMode,
+            value: hasOriginalMode ? deepCloneJson(modes[index]) : null
+          });
+        }
+
+        modes[index] = deepCloneJson(definition);
+      }
+
+      this.installed = true;
+      return true;
+    }
+
+    restore() {
+      if (!this.installed) return;
+
+      const modes = window.geofs?.camera?.modes;
+      if (modes) {
+        for (const [index, originalState] of this.originalModesByIndex.entries()) {
+          if (originalState?.exists) {
+            modes[index] = deepCloneJson(originalState.value);
+          } else {
+            delete modes[index];
+          }
+        }
+      }
+
+      this.originalModesByIndex.clear();
+      this.installed = false;
+    }
+  }
+
+  class FMCModule {
+    constructor() {
+      this.installed = false;
+      this.timer = null;
+      this.lastFlapsMode = null;
+      this.lastAutoTarget = null;
+    }
+
+    ensureLoaded() {
+      if (this.installed) return true;
+      this.installed = true;
+      this.startLoop();
+      return true;
+    }
+
+    startLoop() {
+      if (this.timer) return;
+      this.timer = setInterval(() => this.tick(), 120);
+    }
+
+    stopLoop() {
+      if (!this.timer) return;
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+
+    getFlapsMode() {
+      return String(getF18Option('SYS', 'FLAPS', 'MAN') ?? 'MAN').toUpperCase();
+    }
+
+    computeAutoFlapsTarget() {
+      const controlsApi = window.controls;
+      const maxPositionRaw = Number(controlsApi?.flaps?.maxPosition);
+      const maxPosition = Number.isFinite(maxPositionRaw) && maxPositionRaw > 0 ? maxPositionRaw : 1;
+
+      const anim = window.geofs?.animation?.values ?? {};
+      const kias = Number(anim.kias);
+      const aoa = Number(anim.aoa);
+      const gLoad = Number(anim.loadFactor);
+      const mach = Number(anim.mach);
+
+      // Hard speed-gate from spec: above 250 KIAS flaps should stay up.
+      if (Number.isFinite(kias) && kias >= 250) {
+        return 0;
+      }
+
+      // Under 130 KIAS always command full flaps.
+      if (Number.isFinite(kias) && kias <= 130) {
+        return maxPosition;
+      }
+
+      // Gradual speed schedule (250 -> ~0, 200 -> very small, 130 -> 1).
+      const speedFactor = Number.isFinite(kias)
+        ? Math.pow(clampValue((250 - kias) / 120, 0, 1), 2.6)
+        : 0;
+      const aoaFactor = Number.isFinite(aoa)
+        ? clampValue((aoa - 6) / 10, 0, 1)
+        : 0;
+      const gFactor = Number.isFinite(gLoad)
+        ? clampValue((gLoad - 1.15) / 3.0, 0, 1)
+        : 0;
+
+      // Mach contributes only at very low Mach, so it won't dominate around ~200 KIAS.
+      const machFactor = Number.isFinite(mach)
+        ? Math.pow(clampValue((0.28 - mach) / 0.12, 0, 1), 2)
+        : 0;
+
+      // Use the maximum demand of the four factors (no weighted combination).
+      const normalized = Math.max(speedFactor, aoaFactor, gFactor, machFactor);
+      return normalized * maxPosition;
+    }
+
+    applyFlapsTarget(target) {
+      const controlsApi = window.controls;
+      const flaps = controlsApi?.flaps;
+      if (!flaps || typeof controlsApi?.setPartAnimationDelta !== 'function') return;
+
+      const maxPositionRaw = Number(flaps?.maxPosition);
+      const maxPosition = Number.isFinite(maxPositionRaw) && maxPositionRaw > 0 ? maxPositionRaw : 1;
+      const clampedTarget = clampValue(Number(target) || 0, 0, maxPosition);
+
+      if (this.lastAutoTarget != null && Math.abs(this.lastAutoTarget - clampedTarget) < 0.015) {
+        return;
+      }
+
+      flaps.positionTarget = clampedTarget;
+      controlsApi.setPartAnimationDelta(flaps);
+      this.lastAutoTarget = clampedTarget;
+    }
+
+    tick() {
+      if (!isF18Active()) {
+        this.lastFlapsMode = null;
+        this.lastAutoTarget = null;
+        return;
+      }
+
+      const controlsApi = window.controls;
+      if (!controlsApi?.flaps) return;
+
+      const flapsMode = this.getFlapsMode();
+      if (flapsMode === 'AUTO') {
+        const target = this.computeAutoFlapsTarget();
+        this.applyFlapsTarget(target);
+      } else if (this.lastFlapsMode === 'AUTO') {
+        // Critical handback behavior: reset to 0 when leaving AUTO,
+        // otherwise manual mode can stay latched.
+        this.lastAutoTarget = null;
+        this.applyFlapsTarget(0);
+      }
+
+      this.lastFlapsMode = flapsMode;
+    }
+
+    restore() {
+      this.stopLoop();
+
+      if (isF18Active()) {
+        this.lastAutoTarget = null;
+        this.applyFlapsTarget(0);
+      }
+
+      this.lastFlapsMode = null;
+      this.installed = false;
     }
   }
 
@@ -3289,6 +4190,8 @@
   class F18MainPlugin {
     constructor() {
       this.hudModule = new F18HudModule();
+      this.cameraModule = new CameraModule();
+      this.fmcModule = new FMCModule();
       this.mfdModules = [];
       this.mfdPickNodeHandlerInstalled = false;
       this.onMfdPickNodeClickBound = this.onMfdPickNodeClick.bind(this);
@@ -3450,10 +4353,12 @@
 
     tryInstall() {
       const hudReady = this.hudModule.ensureLoaded();
+      const cameraReady = this.cameraModule.ensureLoaded();
+      const fmcReady = this.fmcModule.ensureLoaded();
       const mfdReady = this.mfdModules.every((mfdModule) => mfdModule.ensureLoaded());
       const pickNodeReady = this.ensureGlobalMfdPickNodeHandler();
       const nodeBridgeReady = this.ensureRunNodeClickBridge();
-      return Boolean(hudReady && mfdReady && pickNodeReady && nodeBridgeReady);
+      return Boolean(hudReady && cameraReady && fmcReady && mfdReady && pickNodeReady && nodeBridgeReady);
     }
 
     start() {
@@ -3480,6 +4385,8 @@
       this.removeGlobalMfdPickNodeHandler();
       this.removeRunNodeClickBridge();
       this.mfdModules.forEach((mfdModule) => mfdModule.restore());
+      this.fmcModule.restore();
+      this.cameraModule.restore();
       this.hudModule.restore();
     }
   }
