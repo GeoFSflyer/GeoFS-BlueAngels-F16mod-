@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         GeoFS F-18 HUD Mod
+// @name         GeoFS F-18 Mod
 // @namespace    https://github.com/ArjanKw/GeoFS-BlueAngels/
-// @version      1.0.0
-// @description  Vervangt de genericHUD renderer voor de F-18 met een volledige custom HUD.
+// @version      1.1.0
+// @description  Improves the cockpit with a new HUD and custom MFDs, adjustable seat height and more.
 // @match        https://www.geo-fs.com/*
 // @match        https://geo-fs.com/*
 // @match        https://*.geo-fs.com/*
@@ -50,8 +50,896 @@
   const RIGHT_MFD_CLICK_HALF_WIDTH = 0.36;
   const RIGHT_MFD_CLICK_HALF_HEIGHT = 0.36;
   const F18_OPTIONS_STORAGE_KEY = 'F18Options';
+  const F18_WPN_STATE_STORAGE_KEY = 'F18WpnState';
   const HUD_DEFAULT_COLOR = '#00ff00';
   let currentHudColor = HUD_DEFAULT_COLOR;
+
+  let wpnLoadout = {
+    'A/A': {
+        gun: 578,
+        left: {
+            wingtip: {
+                load: 'AIM-9',
+                display: '9M',
+                quantity: 2,
+                type: 'A/A'
+            },
+            hardpoint1: {
+                load: 'AIM-120',
+                display: '12M',
+                quantity: 2,
+                type: 'A/A'
+            },
+            hardpoint2: {
+                load: 'AIM-120',
+                display: '12M',
+                quantity: 2,
+                type: 'A/A'
+            },
+        },
+        right: {
+            wingtip: {
+                load: 'AIM-9',
+                display: '9M',
+                quantity: 2,
+                type: 'A/A'
+            },
+            hardpoint1: {
+                load: 'AIM-120',
+                display: '12M',
+                quantity: 2,
+                type: 'A/A'
+            },
+            hardpoint2: {
+                load: 'AIM-120',
+                display: '12M',
+                quantity: 2,
+                type: 'A/A'
+            }
+        }
+    },
+    'L/R A/A': {
+        gun: 578,
+        left: {
+            wingtip: {
+                load: 'AIM-9',
+                display: '9M',
+                quantity: 2,
+                type: 'A/A'
+            },
+            hardpoint1: {
+                load: 'AIM-120',
+                display: '12M',
+                quantity: 2,
+                type: 'A/A'
+            },
+            hardpoint2: {
+                load: 'Fuel',
+                display: 'FUEL',
+                quantity: 1,
+                type: 'FUEL'
+            },
+        },
+        right: {
+            wingtip: {
+                load: 'AIM-9',
+                display: '9M',
+                quantity: 2,
+                type: 'A/A'
+            },
+            hardpoint1: {
+                load: 'AIM-120',
+                display: '12M',
+                quantity: 2,
+                type: 'A/A'
+            },
+            hardpoint2: {
+                load: 'Fuel',
+                display: 'FUEL',
+                quantity: 1,
+                type: 'FUEL'
+            }
+        }
+    },
+    'A/G': {
+        gun: 578,
+        left: {
+            wingtip: {
+                load: 'AIM-9',
+                display: '9M',
+                quantity: 2,
+                type: 'A/A'
+            },
+            hardpoint1: {
+                load: 'AGM-88',
+                display: 'HARM',
+                quantity: 1,
+                type: 'A/G'
+            },
+            hardpoint2: {
+                load: 'AGM-84K',
+                display: 'SLAM-ER',
+                quantity: 1,
+                type: 'A/G'
+            }
+        },
+        right: {
+            wingtip: {
+                load: 'AIM-9',
+                display: '9M',
+                quantity: 2,
+                type: 'A/A'
+            },
+            hardpoint1: {
+                load: 'AGM-88',
+                display: 'HARM',
+                quantity: 1,
+                type: 'A/G'
+            },
+            hardpoint2: {
+                load: 'JDAM',
+                display: 'JDAM',
+                quantity: 1,
+                type: 'A/G'
+            }
+        }
+    },
+    'L/R A/G': {
+        gun: 578,
+        left: {
+            wingtip: {
+                load: 'AIM-9',
+                display: '9M',
+                quantity: 2,
+                type: 'A/A'
+            },
+            hardpoint1: {
+                load: 'AGM-88',
+                display: 'HARM',
+                quantity: 1,
+                type: 'A/G'
+            },
+            hardpoint2: {
+                load: 'Fuel',
+                display: 'FUEL',
+                quantity: 1,
+                type: 'FUEL'
+            }
+        },
+        right: {
+            wingtip: {
+                load: 'AIM-9',
+                display: '9M',
+                quantity: 2,
+                type: 'A/A'
+            },
+            hardpoint1: {
+                load: 'AGM-88',
+                display: 'HARM',
+                quantity: 1,
+                type: 'A/G'
+            },
+            hardpoint2: {
+                load: 'Fuel',
+                display: 'FUEL',
+                quantity: 1,
+                type: 'FUEL'
+            }
+        }
+    },
+    'L/R': {
+        gun: 578,
+        left: {
+            wingtip: {
+                load: 'AIM-9',
+                display: '9M',
+                quantity: 1,
+                type: 'A/A'
+            },
+            hardpoint1: {
+                load: 'Fuel',
+                display: 'FUEL',
+                quantity: 1,
+                type: 'FUEL'
+            },
+            hardpoint2: {
+                load: 'Fuel',
+                display: 'FUEL',
+                quantity: 1,
+                type: 'FUEL'
+            }
+        },
+        right: {
+            wingtip: {
+                load: 'AIM-9',
+                display: '9M',
+                quantity: 1,
+                type: 'A/A'
+            },
+            hardpoint1: {
+                load: 'Fuel',
+                display: 'FUEL',
+                quantity: 1,
+                type: 'FUEL'
+            },
+            hardpoint2: {
+                load: 'Fuel',
+                display: 'FUEL',
+                quantity: 1,
+                type: 'FUEL'
+            }
+        }
+    },
+    'MIN': {
+        gun: 300,
+        left: {
+            wingtip: {
+                load: 'AIM-9',
+                display: '9M',
+                quantity: 1,
+                type: 'A/A'
+            },
+            hardpoint1: {
+                load: 'N/A',
+                display: 'N/A',
+                quantity: 0,
+                type: 'N/A'
+            },
+            hardpoint2: {
+                load: 'N/A',
+                display: 'N/A',
+                quantity: 0,
+                type: 'N/A'
+            }
+        },
+        right: {
+            wingtip: {
+                load: 'AIM-9',
+                display: '9M',
+                quantity: 1,
+                type: 'A/A'
+            },
+            hardpoint1: {
+                load: 'N/A',
+                display: 'N/A',
+                quantity: 0,
+                type: 'N/A'
+            },
+            hardpoint2: {
+                load: 'N/A',
+                display: 'N/A',
+                quantity: 0,
+                type: 'N/A'
+            }
+        }
+    },
+    'CLEAN': {
+        gun: 0,
+        left: {
+            wingtip: {
+                load: 'N/A',
+                display: 'N/A',
+                quantity: 0,
+                type: 'N/A'
+            },
+            hardpoint1: {
+                load: 'N/A',
+                display: 'N/A',
+                quantity: 0,
+                type: 'N/A'
+            },
+            hardpoint2: {
+                load: 'N/A',
+                display: 'N/A',
+                quantity: 0,
+                type: 'N/A'
+            }
+        },
+        right: {
+            wingtip: {
+                load: 'N/A',
+                display: 'N/A',
+                quantity: 0,
+                type: 'N/A'
+            },
+            hardpoint1: {
+                load: 'N/A',
+                display: 'N/A',
+                quantity: 0,
+                type: 'N/A'
+            },
+            hardpoint2: {
+                load: 'N/A',
+                display: 'N/A',
+                quantity: 0,
+                type: 'N/A'
+            }
+        }
+    },
+    
+  }
+
+  const WPN_STATION_RENDER_ORDER = [
+    { side: 'center', station: 'gun' },
+    { side: 'left', station: 'wingtip' },
+    { side: 'left', station: 'hardpoint1' },
+    { side: 'left', station: 'hardpoint2' },
+    { side: 'right', station: 'hardpoint2' },
+    { side: 'right', station: 'hardpoint1' },
+    { side: 'right', station: 'wingtip' }
+  ];
+
+  const wpnSelectedWeaponByMode = {};
+  const WPN_FIRE_BLINK_INTERVAL_MS = 500;
+  const WPN_FIRE_BLINK_PHASES = 4;
+  const WPN_GUN_FIRE_RATE_RPS = 66;
+  const WPN_GUN_ROUNDS_PER_BURST = 100;
+  const WPN_GUN_FIRE_TICK_MS = Math.max(1, Math.round(1000 / WPN_GUN_FIRE_RATE_RPS));
+  const WPN_REARM_DURATION_MS = 60_000;
+  const wpnLoadoutTemplates = JSON.parse(JSON.stringify(wpnLoadout));
+  let wpnCurrentLoadout = JSON.parse(JSON.stringify(
+    wpnLoadoutTemplates?.['A/A']
+    ?? Object.values(wpnLoadoutTemplates ?? {})[0]
+    ?? {}
+  ));
+  const wpnRearmState = {
+    active: false,
+    startTime: 0,
+    progress: 0,
+    durationMs: WPN_REARM_DURATION_MS,
+    config: 'A/A',
+    status: 'IDLE',
+    lastSavedPercent: -1
+  };
+
+  const wpnGunFireState = {
+    timerId: null,
+    mode: null,
+    roundsRemainingInBurst: 0
+  };
+
+  function deepCloneJson(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function getWpnModeFromOptions() {
+    const mode = getF18Option('WPN', 'MODE', 'NAV');
+    return mode === 'A/A' || mode === 'A/G' || mode === 'NAV' || mode === 'JETTISON' ? mode : 'NAV';
+  }
+
+  function isModeCompatibleStation(mode, stationName, stationData) {
+    if (mode === 'JETTISON') {
+      return stationName !== 'gun';
+    }
+    if (stationName === 'gun') {
+      return mode !== 'NAV';
+    }
+    if (mode === 'NAV') return false;
+    const stationType = stationData?.type;
+    if (!stationType) return true;
+    return stationType === mode;
+  }
+
+  function saveWpnStateToStorage() {
+    try {
+      const payload = {
+        config: getF18Option('WPN', 'CONFIG', 'A/A'),
+        loadout: wpnCurrentLoadout,
+        selected: wpnSelectedWeaponByMode
+      };
+      window.localStorage?.setItem?.(F18_WPN_STATE_STORAGE_KEY, JSON.stringify(payload));
+    } catch (e) {
+      // Ignore storage write issues.
+    }
+  }
+
+  function loadWpnStateFromStorage() {
+    try {
+      const raw = window.localStorage?.getItem?.(F18_WPN_STATE_STORAGE_KEY);
+      if (!raw) return;
+
+      const parsed = JSON.parse(raw);
+      const storedLoadout = parsed?.loadout;
+      if (!storedLoadout || typeof storedLoadout !== 'object') return;
+
+      const baseTemplate = deepCloneJson(
+        wpnLoadoutTemplates?.['A/A']
+        ?? Object.values(wpnLoadoutTemplates ?? {})[0]
+        ?? {}
+      );
+
+      const modeKeys = Object.keys(wpnLoadoutTemplates ?? {});
+      const looksLikeLegacyByMode = modeKeys.some((k) => storedLoadout?.[k] && typeof storedLoadout[k] === 'object');
+      const sourceLoadout = looksLikeLegacyByMode
+        ? (storedLoadout?.[parsed?.config] ?? storedLoadout?.['A/A'] ?? storedLoadout?.[modeKeys[0]])
+        : storedLoadout;
+
+      if (sourceLoadout && typeof sourceLoadout === 'object') {
+        baseTemplate.gun = Number.isFinite(sourceLoadout?.gun) ? sourceLoadout.gun : baseTemplate.gun;
+        for (const sideKey of ['left', 'right']) {
+          for (const stationKey of Object.keys(baseTemplate?.[sideKey] ?? {})) {
+            const stationTemplate = baseTemplate[sideKey][stationKey];
+            const stationStored = sourceLoadout?.[sideKey]?.[stationKey];
+            if (!stationStored || typeof stationStored !== 'object') continue;
+
+            stationTemplate.quantity = Number.isFinite(stationStored.quantity)
+              ? stationStored.quantity
+              : stationTemplate.quantity;
+            if (typeof stationStored.load === 'string') stationTemplate.load = stationStored.load;
+            if (typeof stationStored.display === 'string') stationTemplate.display = stationStored.display;
+            if (typeof stationStored.type === 'string') stationTemplate.type = stationStored.type;
+          }
+        }
+      }
+
+      wpnCurrentLoadout = baseTemplate;
+
+      const storedSelected = parsed?.selected;
+      if (storedSelected && typeof storedSelected === 'object') {
+        for (const key of Object.keys(wpnSelectedWeaponByMode)) {
+          delete wpnSelectedWeaponByMode[key];
+        }
+        for (const modeKey of Object.keys(storedSelected)) {
+          const selected = storedSelected[modeKey];
+          if (!selected || typeof selected !== 'object' || !selected.station) continue;
+          wpnSelectedWeaponByMode[modeKey] = {
+            side: selected.side,
+            station: selected.station
+          };
+        }
+      }
+
+      if (typeof parsed?.config === 'string') {
+        wpnRearmState.config = parsed.config;
+      }
+    } catch (e) {
+      // Ignore malformed storage.
+    }
+  }
+
+  loadWpnStateFromStorage();
+
+  function resolveWpnTemplateConfig(config) {
+    if (config && wpnLoadoutTemplates?.[config]) return config;
+    if (wpnLoadoutTemplates?.['A/A']) return 'A/A';
+    const first = Object.keys(wpnLoadoutTemplates ?? {})[0];
+    return first ?? null;
+  }
+
+  function getRearmTemplateByMode(config) {
+    const resolvedConfig = resolveWpnTemplateConfig(config);
+    const sourceTemplate = resolvedConfig ? wpnLoadoutTemplates?.[resolvedConfig] : null;
+    if (!sourceTemplate) return null;
+
+    return JSON.parse(JSON.stringify(sourceTemplate));
+  }
+
+  function zeroCurrentWpnLoadout() {
+    if (!wpnCurrentLoadout) return;
+
+    wpnCurrentLoadout.gun = 0;
+    for (const sideKey of ['left', 'right']) {
+      const sideStations = wpnCurrentLoadout?.[sideKey];
+      if (!sideStations || typeof sideStations !== 'object') continue;
+      for (const stationKey of Object.keys(sideStations)) {
+        if (!Number.isFinite(sideStations[stationKey]?.quantity)) continue;
+        sideStations[stationKey].quantity = 0;
+      }
+    }
+  }
+
+  function applyWpnRearmProgress(targetByMode, progress) {
+    const p = Math.max(0, Math.min(1, progress));
+    if (!wpnCurrentLoadout || !targetByMode) return;
+
+    wpnCurrentLoadout.gun = Math.floor((Number.isFinite(targetByMode.gun) ? targetByMode.gun : 0) * p);
+
+    for (const sideKey of ['left', 'right']) {
+      wpnCurrentLoadout[sideKey] = wpnCurrentLoadout[sideKey] ?? {};
+      const targetSide = targetByMode?.[sideKey] ?? {};
+
+      for (const stationKey of Object.keys(targetSide)) {
+        const targetStation = targetSide?.[stationKey] ?? {};
+        wpnCurrentLoadout[sideKey][stationKey] = wpnCurrentLoadout[sideKey][stationKey] ?? {};
+
+        wpnCurrentLoadout[sideKey][stationKey].load = targetStation?.load;
+        wpnCurrentLoadout[sideKey][stationKey].display = targetStation?.display;
+        wpnCurrentLoadout[sideKey][stationKey].type = targetStation?.type;
+
+        const targetQuantity = Number.isFinite(targetStation?.quantity) ? targetStation.quantity : 0;
+        wpnCurrentLoadout[sideKey][stationKey].quantity = Math.floor(targetQuantity * p);
+      }
+    }
+  }
+
+  function startWpnRearm(config) {
+    if (wpnRearmState.active) return false;
+
+    const resolvedConfig = resolveWpnTemplateConfig(config);
+    const targetByMode = getRearmTemplateByMode(resolvedConfig);
+    if (!resolvedConfig || !targetByMode) return false;
+
+    zeroCurrentWpnLoadout();
+    for (const modeKey of Object.keys(wpnSelectedWeaponByMode ?? {})) {
+      delete wpnSelectedWeaponByMode[modeKey];
+    }
+
+    wpnRearmState.active = true;
+    wpnRearmState.startTime = Date.now();
+    wpnRearmState.progress = 0;
+    wpnRearmState.config = resolvedConfig;
+    wpnRearmState.status = 'REARMING';
+    wpnRearmState.lastSavedPercent = -1;
+    wpnRearmState.targetByMode = targetByMode;
+    saveWpnStateToStorage();
+
+    return true;
+  }
+
+  function updateWpnRearmState() {
+    if (!wpnRearmState.active) return;
+
+    if (window.geofs?.animation?.values?.enginesOn) {
+      wpnRearmState.active = false;
+      wpnRearmState.status = 'ABORTED';
+      wpnRearmState.targetByMode = null;
+      saveWpnStateToStorage();
+      return;
+    }
+
+    const elapsed = Date.now() - wpnRearmState.startTime;
+    const duration = Math.max(1, Number.isFinite(wpnRearmState.durationMs) ? wpnRearmState.durationMs : WPN_REARM_DURATION_MS);
+    const progress = Math.max(0, Math.min(1, elapsed / duration));
+
+    wpnRearmState.progress = progress;
+    applyWpnRearmProgress(wpnRearmState.targetByMode, progress);
+
+    const percent = Math.round(progress * 100);
+    if (percent !== wpnRearmState.lastSavedPercent) {
+      wpnRearmState.lastSavedPercent = percent;
+      saveWpnStateToStorage();
+    }
+
+    if (progress >= 1) {
+      wpnRearmState.active = false;
+      wpnRearmState.status = 'READY';
+      wpnRearmState.targetByMode = null;
+      saveWpnStateToStorage();
+    }
+  }
+
+  function stopWpnGunFireTimer() {
+    if (wpnGunFireState.timerId) {
+      clearTimeout(wpnGunFireState.timerId);
+      wpnGunFireState.timerId = null;
+    }
+    wpnGunFireState.mode = null;
+    wpnGunFireState.roundsRemainingInBurst = 0;
+  }
+
+  function processWpnGunFireTick() {
+    if (wpnGunFireState.roundsRemainingInBurst <= 0) {
+      stopWpnGunFireTimer();
+      return;
+    }
+
+    const mode = wpnGunFireState.mode;
+    const modeLoadout = getWpnModeLoadout(mode);
+    let storedPayload = null;
+    try {
+      const raw = window.localStorage?.getItem?.(F18_WPN_STATE_STORAGE_KEY);
+      storedPayload = raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      storedPayload = null;
+    }
+
+    const storedGun = Number.isFinite(storedPayload?.loadout?.gun)
+      ? storedPayload.loadout.gun
+      : null;
+    const memoryGun = Number.isFinite(modeLoadout?.gun) ? modeLoadout.gun : 0;
+    const currentGun = storedGun != null ? storedGun : memoryGun;
+
+    if (currentGun <= 0) {
+      stopWpnGunFireTimer();
+      selectNextWpnWeapon(mode, modeLoadout, 0);
+      saveWpnStateToStorage();
+      return;
+    }
+
+    const updatedGun = Math.max(0, currentGun - 1);
+    if (modeLoadout) {
+      modeLoadout.gun = updatedGun;
+    }
+
+    try {
+      const payloadToStore = (storedPayload && typeof storedPayload === 'object') ? storedPayload : {};
+      payloadToStore.loadout = (payloadToStore.loadout && typeof payloadToStore.loadout === 'object') ? payloadToStore.loadout : {};
+      payloadToStore.loadout.gun = updatedGun;
+      window.localStorage?.setItem?.(F18_WPN_STATE_STORAGE_KEY, JSON.stringify(payloadToStore));
+    } catch (e) {
+      saveWpnStateToStorage();
+    }
+
+    wpnGunFireState.roundsRemainingInBurst -= 1;
+
+    if (updatedGun <= 0) {
+      stopWpnGunFireTimer();
+      selectNextWpnWeapon(mode, modeLoadout, 0);
+      saveWpnStateToStorage();
+      return;
+    }
+
+    if (wpnGunFireState.roundsRemainingInBurst <= 0) {
+      stopWpnGunFireTimer();
+      return;
+    }
+
+    wpnGunFireState.timerId = setTimeout(processWpnGunFireTick, WPN_GUN_FIRE_TICK_MS);
+  }
+
+  function ensureWpnGunFireTimerRunning() {
+    if (wpnGunFireState.timerId) return;
+    wpnGunFireState.timerId = setTimeout(processWpnGunFireTick, WPN_GUN_FIRE_TICK_MS);
+  }
+
+  function startWpnGunFire(mode, modeLoadout) {
+    if (!modeLoadout || !Number.isFinite(modeLoadout.gun) || modeLoadout.gun <= 0) {
+      return false;
+    }
+
+    const wasIdle = !wpnGunFireState.timerId;
+
+    wpnGunFireState.mode = mode;
+
+    wpnGunFireState.roundsRemainingInBurst += WPN_GUN_ROUNDS_PER_BURST;
+    if (wasIdle) {
+      processWpnGunFireTick();
+    } else {
+      ensureWpnGunFireTimerRunning();
+    }
+    triggerWpnFireFlash();
+    return true;
+  }
+
+  let wpnFireFlash = {
+    startTime: 0,
+    label: 'FIRE'
+  };
+
+  function triggerWpnActionFlash(label = 'FIRE') {
+    wpnFireFlash.startTime = Date.now();
+    wpnFireFlash.label = label;
+  }
+
+  function triggerWpnFireFlash() {
+    triggerWpnActionFlash('FIRE');
+  }
+
+  function getWpnActionFlashLabel() {
+    return wpnFireFlash?.label || 'FIRE';
+  }
+
+  function isWpnFireFlashVisible() {
+    if (!wpnFireFlash.startTime) return false;
+
+    const elapsed = Date.now() - wpnFireFlash.startTime;
+    const totalDuration = WPN_FIRE_BLINK_INTERVAL_MS * WPN_FIRE_BLINK_PHASES;
+    if (elapsed >= totalDuration) {
+      wpnFireFlash.startTime = 0;
+      wpnFireFlash.label = 'FIRE';
+      return false;
+    }
+
+    const phase = Math.floor(elapsed / WPN_FIRE_BLINK_INTERVAL_MS);
+    return phase % 2 === 0;
+  }
+
+  function getWpnModeFromPage(page) {
+    const modeButton = page?.leftButtons?.find?.((b) => b?.key === 'MODE')
+      ?? page?.rightButtons?.find?.((b) => b?.key === 'MODE');
+    return modeButton?.states?.[modeButton?.stateIndex] ?? 'A/A';
+  }
+
+  function getWpnModeLoadout(mode) {
+    return wpnCurrentLoadout ?? null;
+  }
+
+  function canUseStationForMode(mode, modeLoadout, side, station, minimumQuantity = 0) {
+    if (!modeLoadout || !station) return false;
+
+    if (station === 'gun') {
+      if (!isModeCompatibleStation(mode, station, null)) return false;
+      return getWpnStationQuantity(modeLoadout, side, station) > minimumQuantity;
+    }
+
+    const stationData = modeLoadout?.[side]?.[station];
+    if (!stationData) return false;
+    if (!isModeCompatibleStation(mode, station, stationData)) return false;
+    return getWpnStationQuantity(modeLoadout, side, station) > minimumQuantity;
+  }
+
+  function getWpnStationQuantity(modeLoadout, side, station) {
+    if (station === 'gun') {
+      const gun = modeLoadout?.gun;
+      return Number.isFinite(gun) ? gun : 0;
+    }
+    const q = modeLoadout?.[side]?.[station]?.quantity;
+    return Number.isFinite(q) ? q : 0;
+  }
+
+  function ensureWpnSelectedWeapon(mode, modeLoadout) {
+    if (!modeLoadout) return null;
+
+    const current = wpnSelectedWeaponByMode[mode];
+    if (current?.station === 'gun' && Number.isFinite(modeLoadout?.gun)) {
+      if (!isModeCompatibleStation(mode, 'gun', null)) return null;
+      return current;
+    }
+
+    if (current?.side && current?.station && modeLoadout?.[current.side]?.[current.station]) {
+      const stationData = modeLoadout?.[current.side]?.[current.station];
+      if (!isModeCompatibleStation(mode, current.station, stationData)) return null;
+      return current;
+    }
+
+    return null;
+  }
+
+  function getSelectedWpnLoadDisplay(mode, modeLoadout) {
+    const selected = ensureWpnSelectedWeapon(mode, modeLoadout);
+    if (!selected) return 'N/A';
+
+    if (selected.station === 'gun') {
+      return 'GUN';
+    }
+
+    const station = modeLoadout?.[selected.side]?.[selected.station];
+    return station?.load ?? 'N/A';
+  }
+
+  function getSelectedWpnQuantityLine(mode, modeLoadout) {
+    const selected = ensureWpnSelectedWeapon(mode, modeLoadout);
+    if (!selected) return 'N/A';
+
+    if (selected.station === 'gun') {
+      const quantity = Number.isFinite(modeLoadout?.gun) ? modeLoadout.gun : 0;
+      return `${quantity}x GUN`;
+    }
+
+    const station = modeLoadout?.[selected.side]?.[selected.station];
+    if (!station) return 'N/A';
+    const quantity = Number.isFinite(station.quantity) ? station.quantity : 0;
+    const load = station.load ?? station.display ?? 'N/A';
+    return `${quantity}x ${load}`;
+  }
+
+  function selectNextWpnWeapon(mode, modeLoadout, minimumQuantity = 0) {
+    if (!modeLoadout) return false;
+
+    const current = ensureWpnSelectedWeapon(mode, modeLoadout);
+    const currentIndex = current
+      ? Math.max(0, WPN_STATION_RENDER_ORDER.findIndex((s) => s.side === current.side && s.station === current.station))
+      : -1;
+
+    for (let step = 1; step <= WPN_STATION_RENDER_ORDER.length; step++) {
+      const index = (currentIndex + step) % WPN_STATION_RENDER_ORDER.length;
+      const candidate = WPN_STATION_RENDER_ORDER[index];
+      if (!canUseStationForMode(mode, modeLoadout, candidate.side, candidate.station, minimumQuantity)) continue;
+      wpnSelectedWeaponByMode[mode] = { side: candidate.side, station: candidate.station };
+      saveWpnStateToStorage();
+      return true;
+    }
+
+    return false;
+  }
+
+  function selectSameWeaponHardpoint(mode, modeLoadout, selected) {
+    if (!modeLoadout || !selected) return false;
+    if (selected.station === 'gun') return false;
+    if (!String(selected.station).startsWith('hardpoint')) return false;
+
+    const currentStation = modeLoadout?.[selected.side]?.[selected.station];
+    const currentLoadType = currentStation?.load;
+    if (!currentLoadType) return false;
+    if (!isModeCompatibleStation(mode, selected.station, currentStation)) return false;
+
+    const selectedIndex = WPN_STATION_RENDER_ORDER.findIndex((s) => s.side === selected.side && s.station === selected.station);
+    if (selectedIndex < 0) return false;
+
+    for (let step = 1; step <= WPN_STATION_RENDER_ORDER.length; step++) {
+      const index = (selectedIndex + step) % WPN_STATION_RENDER_ORDER.length;
+      const candidate = WPN_STATION_RENDER_ORDER[index];
+      if (!candidate?.station || !String(candidate.station).startsWith('hardpoint')) continue;
+
+      const candidateStation = modeLoadout?.[candidate.side]?.[candidate.station];
+      if (!candidateStation) continue;
+      if (candidateStation.load !== currentLoadType) continue;
+      if (!isModeCompatibleStation(mode, candidate.station, candidateStation)) continue;
+      if (!Number.isFinite(candidateStation.quantity) || candidateStation.quantity <= 0) continue;
+
+      wpnSelectedWeaponByMode[mode] = { side: candidate.side, station: candidate.station };
+      saveWpnStateToStorage();
+      return true;
+    }
+
+    return false;
+  }
+
+  function fireSelectedWpnWeapon(mode, modeLoadout) {
+    if (!modeLoadout) return false;
+    if (mode === 'NAV' || mode === 'JETTISON') return false;
+
+    let selected = ensureWpnSelectedWeapon(mode, modeLoadout);
+    if (!selected) {
+      if (!selectNextWpnWeapon(mode, modeLoadout, 0)) return false;
+      selected = ensureWpnSelectedWeapon(mode, modeLoadout);
+      if (!selected) return false;
+    }
+
+    if (selected.station === 'gun') {
+      return startWpnGunFire(mode, modeLoadout);
+    }
+
+    const station = modeLoadout?.[selected?.side]?.[selected?.station];
+    if (!station || !Number.isFinite(station.quantity)) {
+      return false;
+    }
+
+    if (station.quantity <= 0) {
+      if (!selectSameWeaponHardpoint(mode, modeLoadout, selected)) {
+        selectNextWpnWeapon(mode, modeLoadout, 0);
+      }
+      return false;
+    }
+
+    station.quantity -= 1;
+    triggerWpnFireFlash();
+    saveWpnStateToStorage();
+
+    if (station.quantity <= 0) {
+      if (!selectSameWeaponHardpoint(mode, modeLoadout, selected)) {
+        selectNextWpnWeapon(mode, modeLoadout, 0);
+      }
+    }
+
+    return true;
+  }
+
+  function jettisonSelectedWpnWeapon(mode, modeLoadout) {
+    if (!modeLoadout) return false;
+    if (mode !== 'JETTISON') return false;
+
+    let selected = ensureWpnSelectedWeapon(mode, modeLoadout);
+    if (!selected) {
+      if (!selectNextWpnWeapon(mode, modeLoadout, 0)) return false;
+      selected = ensureWpnSelectedWeapon(mode, modeLoadout);
+      if (!selected) return false;
+    }
+
+    if (selected.station === 'gun') return false;
+
+    const station = modeLoadout?.[selected?.side]?.[selected?.station];
+    if (!station || !Number.isFinite(station.quantity)) {
+      return false;
+    }
+
+    if (station.quantity <= 0) {
+      if (!selectSameWeaponHardpoint(mode, modeLoadout, selected)) {
+        selectNextWpnWeapon(mode, modeLoadout, 0);
+      }
+      return false;
+    }
+
+    station.quantity = 0;
+    triggerWpnActionFlash('JETT');
+    saveWpnStateToStorage();
+
+    if (!selectSameWeaponHardpoint(mode, modeLoadout, selected)) {
+      selectNextWpnWeapon(mode, modeLoadout, 0);
+    }
+
+    return true;
+  }
 
   function normalizeOptionToken(value) {
     return String(value ?? '')
@@ -81,6 +969,43 @@
     const options = readF18Options();
     const optionKey = buildF18OptionKey(pageTitle, buttonKey);
     return options[optionKey] ?? fallback;
+  }
+
+  function getF18OptionValue(pageTitle, buttonKey, fallback = null) {
+    const selectedState = getF18Option(pageTitle, buttonKey, null);
+    const pages = window.__f18MfdUiState?.pages;
+    if (!Array.isArray(pages)) {
+      return selectedState ?? fallback;
+    }
+
+    const page = pages.find((p) => p?.title === pageTitle);
+    if (!page) {
+      return selectedState ?? fallback;
+    }
+
+    const allButtons = [
+      ...(Array.isArray(page.leftButtons) ? page.leftButtons : []),
+      ...(Array.isArray(page.rightButtons) ? page.rightButtons : [])
+    ];
+    const button = allButtons.find((b) => b?.key === buttonKey || b?.label === buttonKey);
+    if (!button || !Array.isArray(button.values) || !button.values.length) {
+      return selectedState ?? fallback;
+    }
+
+    let stateIndex = -1;
+    if (selectedState != null && Array.isArray(button.states)) {
+      stateIndex = button.states.findIndex((s) => String(s).toUpperCase() === String(selectedState).toUpperCase());
+    }
+
+    if (stateIndex < 0 && Number.isInteger(button.stateIndex)) {
+      stateIndex = button.stateIndex;
+    }
+
+    if (stateIndex >= 0 && stateIndex < button.values.length) {
+      return button.values[stateIndex];
+    }
+
+    return selectedState ?? fallback;
   }
 
   // ---------------------------------------------------------------------------
@@ -158,6 +1083,15 @@
     outer.style.transform = 'rotate(0deg)';
     outer.style.position = 'relative';
     outer.style.cursor = 'pointer';
+
+    if (label === 'UP') {
+        outer.style.borderBottom = '1px solid #333';
+        outer.style.borderRadius = '15px 15px 0 0';
+    } else if (label === 'DOWN') {
+        outer.style.marginTop = '-9px';
+        outer.style.borderRadius = '0 0 15px 15px';
+        outer.style.borderTop = '0';
+    }
 
     const inner = document.createElement('div');
     inner.className = 'geofs-overlay geofs-textOverlay control-pad-dyn-label geofs-visible';
@@ -252,7 +1186,7 @@
             },
           ],
           rightButtons: [
-            { key: 'COLOR', label: 'MFD COLOR', states: ['GREEN', 'WHITE'], stateIndex: 0 },
+            { key: 'COLOR', label: 'MFD COLOR', states: ['GREEN', 'WHITE', 'BLUE', 'RED'], values: ['#00FF00', '#FFFFFF', '#00fffb', '#FF0000'], stateIndex: 0 },
           ],
           lines: []
         },
@@ -263,7 +1197,7 @@
           ],
           rightButtons: [
           ],
-          lines: ['F-18 - Natrium mod', 'GEAR: ' + (controls.gear.position == 0 ? 'DOWN' : 'UP'), 'HOOK: ' + (controls.hook.position == 0 ? 'DOWN' : 'UP'), 'FLAPS: ' + (controls.flaps.position == 0 ? 'UP' : controls.flaps.position < 0.5 ? '1 / 2' : 'FULL')]
+          lines: ['F-18 - Natrium mod', 'GEAR: ' + (controls?.gear?.position === 0 ? 'DOWN' : 'UP'), 'HOOK: ' + (controls?.accessories?.position === 0 ? 'UP' : 'DOWN'), 'FLAPS: ' + (controls?.flaps?.position === 0 ? 'UP' : controls?.flaps?.position === 1 ? '1 / 2' : 'FULL')]
         },
         {
           title: 'CHK',
@@ -277,14 +1211,244 @@
         {
           title: 'WPN',
           leftButtons: [
-            { key: 'MODE', label: 'MODE', states: ['NAV', 'A/A', 'A/G'], stateIndex: 0 },
-            { key: 'GUN', label: 'GUN', states: ['SAFE', 'ARM'], stateIndex: 0 }
+            { key: 'MASTER', label: 'MASTER', states: ['OFF', 'ON', 'SIM'], stateIndex: 0 },
+            {
+              key: 'SELECT',
+              label: 'SELECT',
+              states: ['NEXT'],
+              stateIndex: 0,
+              onClick: ({ page }) => {
+                const mode = getWpnModeFromOptions();
+                const modeLoadout = getWpnModeLoadout(mode);
+                selectNextWpnWeapon(mode, modeLoadout, 0);
+              },
+              show: () => controls?.gear?.position === 1 && geofs?.animation?.values?.haglFeet > 50
+            },
+            {
+              key: 'CONFIG',
+              label: 'CONFIG',
+              states: ['A/A', 'L/R A/A', 'A/G', 'L/R A/G', 'L/R', 'MIN', 'CLEAN'],
+              stateIndex: 0,
+              show: () => controls?.gear?.position === 0 && !geofs?.animation?.values?.enginesOn
+            }
           ],
           rightButtons: [
-            { key: 'JETT', label: 'JETT', states: ['RELEASE'], stateIndex: 0 },
-            { key: 'MASTER', label: 'MASTER', states: ['OFF', 'ON', 'SIM'], stateIndex: 0 }
+            { key: 'MODE', label: 'MODE', states: ['NAV', 'A/A', 'A/G', 'JETTISON'], stateIndex: 0 },
+            {
+              key: 'FIRE',
+              label: 'FIRE',
+              states: ['N/A'],
+              stateIndex: 0,
+              onClick: ({ page }) => {
+                const mode = getWpnModeFromOptions();
+                const modeLoadout = getWpnModeLoadout(mode);
+                fireSelectedWpnWeapon(mode, modeLoadout);
+              },
+              show: () => controls?.gear?.position === 1 && geofs?.animation?.values?.haglFeet > 50 && getF18Option('WPN', 'MASTER', 'OFF') !== 'OFF' && getF18Option('WPN', 'MODE', 'NAV') != 'JETTISON'
+            },
+            {
+              key: 'JETTISON',
+              label: 'JETTISON',
+              states: ['N/A'],
+              stateIndex: 0,
+              onClick: ({ page }) => {
+                const mode = getWpnModeFromOptions();
+                const modeLoadout = getWpnModeLoadout(mode);
+                jettisonSelectedWpnWeapon(mode, modeLoadout);
+              },
+              show: () => controls?.gear?.position === 1 && geofs?.animation?.values?.haglFeet > 50 && getF18Option('WPN', 'MASTER', 'OFF') !== 'OFF' && getF18Option('WPN', 'MODE', 'NAV') == 'JETTISON'
+            },
+            {
+              key: 'REARM',
+              label: 'REARM',
+              states: ['START'],
+              stateIndex: 0,
+              onClick: ({ page }) => {
+                // The armament to load in the wpnLoadout.
+                const config = getF18Option('WPN', 'CONFIG', 'A/A');
+
+                // Start the rearming process, which will gradually fill the wpnLoadout based on the selected config.
+                startWpnRearm(config);
+              },
+              show: () => controls?.gear?.position === 0 && !geofs?.animation?.values?.enginesOn && getF18Option('WPN', 'MASTER', 'OFF') === 'OFF'
+            }
           ],
-          lines: ['WPN PAGE']
+          lines: [],
+          render: (renderer, renderContext) => {
+            const ctx = renderContext?.ctx ?? renderer?.canvasAPI?.context;
+            const w = renderContext?.w ?? renderer?.canvasAPI?.canvas?.width ?? 512;
+            const h = renderContext?.h ?? renderer?.canvasAPI?.canvas?.height ?? 512;
+            if (!ctx) return;
+
+            updateWpnRearmState();
+
+            const selectedMode = getWpnModeFromOptions();
+            const modeLoadout = getWpnModeLoadout(selectedMode);
+            if (!modeLoadout) return;
+            const selectedWeapon = ensureWpnSelectedWeapon(selectedMode, modeLoadout);
+
+            const fireButton = renderContext?.page?.rightButtons?.find((b) => b?.key === 'FIRE');
+            if (fireButton) {
+              fireButton.states = [getSelectedWpnLoadDisplay(selectedMode, modeLoadout)];
+              fireButton.stateIndex = 0;
+            }
+            const jettisonButton = renderContext?.page?.rightButtons?.find((b) => b?.key === 'JETTISON');
+            if (jettisonButton) {
+              jettisonButton.states = [getSelectedWpnLoadDisplay(selectedMode, modeLoadout)];
+              jettisonButton.stateIndex = 0;
+            }
+
+            const color = renderContext?.color ?? '#00ff66';
+            const left = modeLoadout?.left ?? {};
+            const right = modeLoadout?.right ?? {};
+            const gunRounds = Number.isFinite(modeLoadout?.gun) ? modeLoadout.gun : '--';
+
+            const drawDiamond = (x, y, size) => {
+              ctx.beginPath();
+              ctx.moveTo(x, y - size);
+              ctx.lineTo(x + size, y);
+              ctx.lineTo(x, y + size);
+              ctx.lineTo(x - size, y);
+              ctx.closePath();
+              ctx.stroke();
+            };
+
+            const drawStation = (x, y, station, options = {}) => {
+              const quantity = Number.isFinite(station?.quantity) ? String(station.quantity) : '--';
+              const display = station?.display ?? '--';
+              const showDiamond = options.showDiamond !== false;
+              const boxedQuantity = options.boxedQuantity === true;
+
+              if (showDiamond) {
+                drawDiamond(x, y - h * 0.036, w * 0.012);
+              }
+
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.font = `bold ${Math.round(h * 0.042)}px monospace`;
+
+              if (boxedQuantity) {
+                const boxW = w * 0.078;
+                const boxH = h * 0.044;
+                const by = y - boxH * 0.5 + h * 0.003;
+                ctx.strokeRect(x - boxW * 0.5, by + 1, boxW, boxH);
+              }
+
+              ctx.fillText(quantity, x, y + 4);
+              ctx.fillText(display, x, y + h * 0.045 + 4);
+            };
+
+            ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.strokeStyle = color;
+            ctx.fillStyle = color;
+            ctx.lineWidth = Math.max(1.4, w * 0.003);
+
+            const yOffset = h * 0.11;
+
+            const cx = w * 0.5;
+
+            // Wing contour
+            const leftRootX = w * 0.44;
+            const rightRootX = w * 0.56;
+            const topY = h * 0.20 + yOffset;
+            const midY = h * 0.31 + yOffset;
+            const breakY = h * 0.40 + yOffset;
+            const tipY = h * 0.54 + yOffset;
+            const leftBreakX = w * 0.31;
+            const rightBreakX = w * 0.69;
+            const leftTipX = w * 0.09;
+            const rightTipX = w * 0.91;
+
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = `bold ${Math.round(h * 0.048)}px monospace`;
+            
+            if (selectedWeapon?.station === 'gun') {
+              const boxW = w * 0.12;
+              const boxH = h * 0.06;
+              ctx.strokeRect(cx - boxW * 0.5, topY - boxH * 0.5, boxW, boxH);
+            }
+            
+            ctx.fillText(String(gunRounds), cx, topY);
+            ctx.beginPath();
+            ctx.moveTo(leftRootX, topY);
+            ctx.lineTo(leftRootX, midY);
+            ctx.lineTo(leftBreakX, breakY);
+            ctx.lineTo(leftTipX, tipY);
+            ctx.moveTo(rightRootX, topY);
+            ctx.lineTo(rightRootX, midY);
+            ctx.lineTo(rightBreakX, breakY);
+            ctx.lineTo(rightTipX, tipY);
+            ctx.stroke();
+
+            ctx.font = `bold ${Math.round(h * 0.055)}px monospace`;
+            ctx.fillText('FUEL', cx, h * 0.35 + yOffset);
+
+            if (getF18Option('WPN', 'MASTER', 'OFF') !== 'OFF') {
+              ctx.fillText('ARM', cx, h * 0.47 + yOffset);
+            }
+
+            // Stations left wing (wingtip -> hardpoint1 -> hardpoint2)
+            ctx.font = `bold ${Math.round(h * 0.046)}px monospace`;
+            drawStation(w * 0.06, h * 0.50 + yOffset, left?.wingtip, {
+              showDiamond: false,
+              boxedQuantity: selectedWeapon?.side === 'left' && selectedWeapon?.station === 'wingtip'
+            });
+            drawStation(w * 0.18, h * 0.54 + yOffset, left?.hardpoint1, {
+              boxedQuantity: selectedWeapon?.side === 'left' && selectedWeapon?.station === 'hardpoint1'
+            });
+            drawStation(w * 0.29, h * 0.47 + yOffset, left?.hardpoint2, {
+              boxedQuantity: selectedWeapon?.side === 'left' && selectedWeapon?.station === 'hardpoint2'
+            });
+
+            // Stations right wing (hardpoint2 -> hardpoint1 -> wingtip)
+            drawStation(w * 0.71, h * 0.47 + yOffset, right?.hardpoint2, {
+              boxedQuantity: selectedWeapon?.side === 'right' && selectedWeapon?.station === 'hardpoint2'
+            });
+            drawStation(w * 0.82, h * 0.54 + yOffset, right?.hardpoint1, {
+              boxedQuantity: selectedWeapon?.side === 'right' && selectedWeapon?.station === 'hardpoint1'
+            });
+            drawStation(w * 0.94, h * 0.50 + yOffset, right?.wingtip, {
+              showDiamond: false,
+              boxedQuantity: selectedWeapon?.side === 'right' && selectedWeapon?.station === 'wingtip'
+            });
+
+            if (isWpnFireFlashVisible()) {
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.font = `bold ${Math.round(h * 0.12)}px monospace`;
+              ctx.fillStyle = '#ff0000';
+              ctx.fillText(getWpnActionFlashLabel(), cx, h * 0.72);
+              ctx.fillStyle = color;
+            }
+
+            // Rearming state: show a progress bar until rearming is complete.
+            // If not rearming, show a simple line: "Rearm with engine off on ground."
+            const rearmTextY = h * 0.84;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            if (wpnRearmState.active) {
+              const progress = Math.max(0, Math.min(1, wpnRearmState.progress ?? 0));
+              const pct = Math.round(progress * 100);
+              const barW = w * 0.50;
+              const barH = h * 0.03;
+              const barX = cx - barW * 0.5;
+              const barY = h * 0.875;
+
+              ctx.font = `bold ${Math.round(h * 0.034)}px monospace`;
+              ctx.fillText(`REARMING ${wpnRearmState.config} ${pct}%`, cx, rearmTextY);
+
+              ctx.strokeRect(barX, barY, barW, barH);
+              ctx.fillRect(barX, barY, barW * progress, barH);
+            } else {
+              ctx.font = `bold ${Math.round(h * 0.03)}px monospace`;
+              ctx.fillText('Rearm with Engine OFF, Master OFF on ground.', cx, rearmTextY);
+            }
+
+            ctx.restore();
+          }
         }
       ];
     }
@@ -418,7 +1582,44 @@
       this.saveToStorage();
     }
 
-    getStateLabel(button) {
+    isButtonVisible(button, page) {
+      if (!button) return false;
+      if (typeof button.show !== 'function') return true;
+      try {
+        return Boolean(button.show({ page, button, uiState: this }));
+      } catch (e) {
+        return false;
+      }
+    }
+
+    getVisibleButtonEntries(side, page = this.getCurrentPage()) {
+      const list = side === 'left' ? page?.leftButtons : page?.rightButtons;
+      if (!Array.isArray(list)) return [];
+
+      const entries = [];
+      for (let i = 0; i < list.length; i++) {
+        const button = list[i];
+        if (this.isButtonVisible(button, page)) {
+          entries.push({ button, actualIndex: i });
+        }
+      }
+      return entries;
+    }
+
+    toggleButtonBySlot(side, slotIndex) {
+      const page = this.getCurrentPage();
+      const visibleEntries = this.getVisibleButtonEntries(side, page);
+      const entry = visibleEntries?.[slotIndex];
+      if (!entry) return;
+      this.toggleButton(side, entry.actualIndex);
+    }
+
+    getStateLabel(button, page) {
+      if (page?.title === 'WPN' && (button?.key === 'FIRE' || button?.key === 'JETTISON')) {
+        const mode = getWpnModeFromOptions();
+        const modeLoadout = getWpnModeLoadout(mode);
+        return getSelectedWpnLoadDisplay(mode, modeLoadout);
+      }
       return button?.states?.[button.stateIndex] ?? '';
     }
 
@@ -480,19 +1681,19 @@
       }
 
       for (const slot of layout.leftButtons) {
-        if (slot.index < (page.leftButtons?.length ?? 0)
+        if (slot.index < this.getVisibleButtonEntries('left', page).length
           && x >= slot.x && x <= slot.x + slot.w
           && y >= slot.y && y <= slot.y + slot.h) {
-          this.toggleButton('left', slot.index);
+          this.toggleButtonBySlot('left', slot.index);
           return true;
         }
       }
 
       for (const slot of layout.rightButtons) {
-        if (slot.index < (page.rightButtons?.length ?? 0)
+        if (slot.index < this.getVisibleButtonEntries('right', page).length
           && x >= slot.x && x <= slot.x + slot.w
           && y >= slot.y && y <= slot.y + slot.h) {
-          this.toggleButton('right', slot.index);
+          this.toggleButtonBySlot('right', slot.index);
           return true;
         }
       }
@@ -506,7 +1707,7 @@
       const h = renderer.canvasAPI.canvas.height;
       const page = this.getCurrentPage();
       const layout = this.getLayout(w, h);
-      const color = getF18Option('HUD', 'COLOR', 'GREEN') === 'WHITE' ? '#ffffff' : '#00ff66';
+      const color = getF18OptionValue('HUD', 'COLOR', '#00ff66') ?? '#00ff66';
       renderer.canvasAPI.clear();
 
       ctx.strokeStyle = color;
@@ -528,19 +1729,22 @@
       ctx.textAlign = 'left';
       ctx.font = `bold ${Math.round(h * 0.045)}px monospace`;
 
-      for (let i = 0; i < (page.leftButtons?.length ?? 0); i++) {
+      const visibleLeftButtons = this.getVisibleButtonEntries('left', page);
+      const visibleRightButtons = this.getVisibleButtonEntries('right', page);
+
+      for (let i = 0; i < visibleLeftButtons.length && i < layout.leftButtons.length; i++) {
         const slot = layout.leftButtons[i];
-        const btn = page.leftButtons[i];
+        const btn = visibleLeftButtons[i].button;
         const label = btn.label;
-        const state = this.getStateLabel(btn);
+        const state = this.getStateLabel(btn, page);
         ctx.fillText(`${label}   ${state}`, slot.x + 2, slot.y + slot.h * 0.55);
       }
 
-      for (let i = 0; i < (page.rightButtons?.length ?? 0); i++) {
+      for (let i = 0; i < visibleRightButtons.length && i < layout.rightButtons.length; i++) {
         const slot = layout.rightButtons[i];
-        const btn = page.rightButtons[i];
+        const btn = visibleRightButtons[i].button;
         const label = btn.label;
-        const state = this.getStateLabel(btn);
+        const state = this.getStateLabel(btn, page);
         ctx.fillText(`${label}   ${state}`, slot.x + 2, slot.y + slot.h * 0.55);
       }
 
@@ -551,11 +1755,27 @@
           ctx.fillText(line, w * 0.5, h * (0.72 + i * 0.07));
         });
       }
+
+      if (typeof page.render === 'function') {
+        try {
+          page.render(renderer, {
+            ctx,
+            w,
+            h,
+            page,
+            layout,
+            uiState: this,
+            color
+          });
+        } catch (e) {
+          // Ignore page render callback errors to keep MFD responsive.
+        }
+      }
     }
   }
 
   function getHudColorFromStoredOptions() {
-    return getF18Option('HUD', 'COLOR', 'GREEN') === 'WHITE' ? '#ffffff' : '#00ff00';
+    return getF18OptionValue('HUD', 'COLOR', '#00ff00') ?? '#00ff00';
   }
 
   function ensureRightMfdRendererFunction() {
@@ -564,6 +1784,7 @@
 
     window.instruments.renderers[RIGHT_MFD_RENDERER_NAME] = function (renderer) {
       const uiState = window.__f18MfdUiState;
+
       if (uiState?.render) {
         uiState.render(renderer);
         return;
@@ -573,7 +1794,7 @@
       const w = renderer.canvasAPI.canvas.width;
       const h = renderer.canvasAPI.canvas.height;
       renderer.canvasAPI.clear('#000000');
-      ctx.fillStyle = getF18Option('HUD', 'COLOR', 'GREEN') === 'WHITE' ? '#ffffff' : '#00ff00';
+      ctx.fillStyle = getF18OptionValue('HUD', 'COLOR', '#00ff00') ?? '#00ff00';
       ctx.font = `bold ${Math.round(h * 0.18)}px monospace`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -904,13 +2125,28 @@
   }
 
   function installRightMfdUsingGeoFsParts() {
-    if (window.__f18RightMfdPart) return true;
-    if (!isF18Active()) return false;
+    if (window.__f18RightMfdPart) {
+      const existingPart = window.geofs?.aircraft?.instance?.parts?.[RIGHT_MFD_PART_NAME];
+      if (!existingPart) {
+        delete window.__f18RightMfdPart;
+      } else {
+        return true;
+      }
+    }
+    if (!isF18Active()) {
+      return false;
+    }
 
     const aircraft = window.geofs?.aircraft?.instance;
-    if (!aircraft?.addParts) return false;
-    if (!ensureRightMfdRendererFunction()) return false;
-    if (!ensureRightMfdIncludeDefinition()) return false;
+    if (!aircraft?.addParts) {
+      return false;
+    }
+    if (!ensureRightMfdRendererFunction()) {
+      return false;
+    }
+    if (!ensureRightMfdIncludeDefinition()) {
+      return false;
+    }
 
     const hudPart = getHudPartDefinition();
     if (!hudPart) return false;
@@ -1312,7 +2548,7 @@
 
   function drawSpeedBox(ctx, kias, w, h) {
     const boxX = w * 0.145;
-    const boxY = h * 0.333;
+    const boxY = h * 0.295;
     const boxW = w * 0.118;
     const boxH = h * 0.064;
 
@@ -1336,7 +2572,7 @@
 
   function drawAltitudeBox(ctx, alt, w, h) {
     const boxX = w * 0.730;
-    const boxY = h * 0.333;
+    const boxY = h * 0.295;
     const boxW = w * 0.138;
     const boxH = h * 0.064;
 
@@ -1373,10 +2609,10 @@
 
   function drawLeftReadouts(ctx, mach, gValue, aoa, maxGValue, autopilot, w, h) {
     const x = w * 0.145;
-    const y1 = h * 0.445;
-    const y2 = h * 0.497;
-    const y3 = h * 0.549;
-    const y4 = h * 0.601;
+    const y1 = h * 0.405;
+    const y2 = h * 0.457;
+    const y3 = h * 0.509;
+    const y4 = h * 0.561;
 
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1396,7 +2632,7 @@
     ctx.fillText(maxGValue.toFixed(1), x + gPrefixWidth, y4);
 
     if (autopilot?.on) {
-      const sepY = h * 0.636;
+      const sepY = h * 0.596;
       ctx.beginPath();
       ctx.moveTo(x, sepY);
       ctx.lineTo(w * 0.265, sepY);
@@ -1431,11 +2667,13 @@
   // Rechter readouts rond altitude (VSI boven, radio-alt onder)
   // ---------------------------------------------------------------------------
 
-  function drawRightReadouts(ctx, vsi, radioAlt, trimDisplay, navUnit, w, h) {
+  function drawRightReadouts(ctx, vsi, radioAlt, trimDisplay, navUnit, w, h, wpnHudStatus) {
     const x = w * 0.730;
-    const yTop = h * 0.300;
-    const yBottom = h * 0.445;
-    const yTrim = h * 0.497;
+    const yTop = h * 0.260;
+    const yBottom = h * 0.405;
+    const yTrim = h * 0.457;
+    const yWpn1 = h * 0.509;
+    const yWpn2 = h * 0.561;
 
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1451,8 +2689,13 @@
 
     ctx.fillText(trimDisplay, x, yTrim);
 
+    if (wpnHudStatus) {
+      ctx.fillText(wpnHudStatus.line1, x, yWpn1);
+      ctx.fillText(wpnHudStatus.line2, x, yWpn2);
+    }
+
     if (navUnit != null) {
-      const sepY = h * 0.532;
+      const sepY = h * 0.596;
       ctx.beginPath();
       ctx.moveTo(x, sepY);
       ctx.lineTo(w * 0.85, sepY);
@@ -1464,10 +2707,10 @@
       let rowY = sepY + h * 0.038;
       ctx.font = `${Math.round(h * 0.032)}px monospace`;
 
-      const dme = navUnit?.DME ?? '--';
-      const bearing = Number.isFinite(navUnit?.bearing) ? Math.round(navUnit.bearing) : '--';
-      const course = Number.isFinite(navUnit?.course) ? Math.round(navUnit.course) : '--';
-      const timeToSignal = navUnit?.timeToSignal ?? '--';
+      const dme = navUnit?.DME ?? '';
+      const bearing = Number.isFinite(navUnit?.bearing) ? Math.round(navUnit.bearing) : '';
+      const course = Number.isFinite(navUnit?.course) ? Math.round(navUnit.course) : '';
+      const timeToSignal = navUnit?.timeToSignal ?? '';
 
       ctx.fillText(`DME ${dme}`, x, rowY);
       rowY += rowStep;
@@ -1679,9 +2922,20 @@
     const currentG = Number.isFinite(anim.loadFactor) ? anim.loadFactor : 1;
     const navUnit = window.geofs?.nav?.currentNAVUnit ?? null;
     const autopilot = window.geofs?.autopilot ?? null;
+    const wpnMaster = getF18Option('WPN', 'MASTER', 'OFF');
+    const wpnMode = getWpnModeFromOptions();
+    const wpnModeLoadout = getWpnModeLoadout(wpnMode);
+    const wpnHudStatus = wpnMaster !== 'OFF'
+      ? {
+          line1: `${wpnMaster === 'SIM' ? 'SIM' : 'ARM'} ${wpnMode}`,
+          line2: getSelectedWpnQuantityLine(wpnMode, wpnModeLoadout)
+        }
+      : null;
     const hudColor = getHudColorFromStoredOptions();
     const hudLevel = getF18Option('HUD', 'LEVEL', 'FULL');
     currentHudColor = hudColor;
+
+    updateWpnRearmState();
 
     if (currentG > maxG) {
       maxG = currentG;
@@ -1713,7 +2967,7 @@
     // --- Readouts links/rechts rond de boxes ---
     if (hudLevel !== 'MIN') {
         drawLeftReadouts(o, mach, currentG, aoa, maxG, autopilot, w, h);
-        drawRightReadouts(o, vsi, radioAlt, trimDisplay, navUnit, w, h);
+      drawRightReadouts(o, vsi, radioAlt, trimDisplay, navUnit, w, h, wpnHudStatus);
     }
 
     // --- Attitude-symbologie (pitch ladder, boresight, FPV, AoA) ---
@@ -1738,6 +2992,17 @@
       }
       const isGearDown = window.controls?.gear?.position < 0.5;
       drawAoaBracket(o, fpvDrawn, cx, clipCy, pixelsPerDeg, w, h, aoa, isGearDown);
+    }
+
+    if (isWpnFireFlashVisible()) {
+      o.save();
+      o.setTransform(1, 0, 0, 1, 0, 0);
+      o.fillStyle = currentHudColor;
+      o.textAlign = 'center';
+      o.textBaseline = 'middle';
+      o.font = `${Math.round(h * 0.15)}px monospace`;
+      o.fillText(getWpnActionFlashLabel(), w * 0.5, h * 0.52);
+      o.restore();
     }
   }
 
@@ -1800,6 +3065,26 @@
       this.onNodeClickBound = this.onNodeClick.bind(this);
     }
 
+    hasRequiredNodeClickHandlers() {
+      const handlers = window.controls?.nodeClickHandlers;
+      if (!handlers) return false;
+
+      if (handlers[RIGHT_MFD_PART_NAME] !== this.onNodeClickBound) return false;
+      if (handlers[RIGHT_MFD_PICK_NODE_NAME] !== this.onNodeClickBound) return false;
+
+      for (let i = 0; i < RIGHT_MFD_TOP_BUTTON_COUNT; i++) {
+        if (handlers[getRightMfdTopButtonNodeName(i)] !== this.onNodeClickBound) return false;
+      }
+      for (let i = 0; i < RIGHT_MFD_LEFT_BUTTON_COUNT; i++) {
+        if (handlers[getRightMfdLeftButtonNodeName(i)] !== this.onNodeClickBound) return false;
+      }
+      for (let i = 0; i < RIGHT_MFD_RIGHT_BUTTON_COUNT; i++) {
+        if (handlers[getRightMfdRightButtonNodeName(i)] !== this.onNodeClickBound) return false;
+      }
+
+      return true;
+    }
+
     ensureLoaded() {
       if (!window.__f18MfdUiState) {
         window.__f18MfdUiState = new F18MfdUiState();
@@ -1808,6 +3093,10 @@
       const ready = installRightMfdUsingGeoFsParts();
       if (!ready) {
         return false;
+      }
+
+      if (this.nodeClickHandlerInstalled && !this.hasRequiredNodeClickHandlers()) {
+        this.nodeClickHandlerInstalled = false;
       }
 
       this.installNodeClickHandler();
@@ -2119,7 +3408,6 @@
     }
 
     onNodeClick(nodeName) {
-      console.log('Clicked node:', nodeName);
       if (!isF18Active()) {
         return;
       }
@@ -2149,7 +3437,7 @@
 
       if (leftButtonIndex >= 0) {
         const uiState = window.__f18MfdUiState;
-        uiState?.toggleButton?.('left', leftButtonIndex);
+        uiState?.toggleButtonBySlot?.('left', leftButtonIndex);
         return;
       }
 
@@ -2162,7 +3450,7 @@
 
       if (rightButtonIndex >= 0) {
         const uiState = window.__f18MfdUiState;
-        uiState?.toggleButton?.('right', rightButtonIndex);
+        uiState?.toggleButtonBySlot?.('right', rightButtonIndex);
         return;
       }
 
@@ -2178,25 +3466,23 @@
         const pickedLeftButtonIndex = this.getLeftButtonIndexFromScreenCoords(click?.x, click?.y);
         if (pickedLeftButtonIndex >= 0) {
           const uiState = window.__f18MfdUiState;
-          uiState?.toggleButton?.('left', pickedLeftButtonIndex);
+          uiState?.toggleButtonBySlot?.('left', pickedLeftButtonIndex);
           return;
         }
 
         const pickedRightButtonIndex = this.getRightButtonIndexFromScreenCoords(click?.x, click?.y);
         if (pickedRightButtonIndex >= 0) {
           const uiState = window.__f18MfdUiState;
-          uiState?.toggleButton?.('right', pickedRightButtonIndex);
+          uiState?.toggleButtonBySlot?.('right', pickedRightButtonIndex);
           return;
         }
       }
 
       if (nodeName !== RIGHT_MFD_PART_NAME && nodeName !== RIGHT_MFD_PICK_NODE_NAME) {
-        console.log('NODE NOT', RIGHT_MFD_PART_NAME, RIGHT_MFD_PICK_NODE_NAME);
         return;
       }
 
       const uiState = window.__f18MfdUiState;
-      console.log('NEXT');
       uiState?.nextPage?.();
     }
 
@@ -2214,6 +3500,41 @@
       this.hudModule = new F18HudModule();
       this.mfdModule = new F18MfdModule();
       this.timer = null;
+      this.cameraWatchTimer = null;
+      this.cameraWatchTicks = 0;
+      this.lastMfdRecoveryTick = -999;
+    }
+
+    startCameraWatch() {
+      if (this.cameraWatchTimer) {
+        return;
+      }
+
+      this.cameraWatchTimer = setInterval(() => {
+        this.cameraWatchTicks += 1;
+        const mode = window.geofs?.camera?.currentModeName;
+        const aircraft = window.geofs?.aircraft?.instance;
+        const hasMfdRef = Boolean(window.__f18RightMfdPart);
+        const hasMfdPart = Boolean(aircraft?.parts?.[RIGHT_MFD_PART_NAME]);
+
+        if (mode === 'cockpit' && !hasMfdPart && (this.cameraWatchTicks - this.lastMfdRecoveryTick) >= 4) {
+          this.lastMfdRecoveryTick = this.cameraWatchTicks;
+
+          if (hasMfdRef) {
+            delete window.__f18RightMfdPart;
+          }
+
+          this.mfdModule.ensureLoaded();
+        }
+      }, 250);
+    }
+
+    stopCameraWatch() {
+      if (!this.cameraWatchTimer) {
+        return;
+      }
+      clearInterval(this.cameraWatchTimer);
+      this.cameraWatchTimer = null;
     }
 
     tryInstall() {
@@ -2226,6 +3547,7 @@
       if (this.timer) {
         return;
       }
+      this.startCameraWatch();
 
       this.timer = setInterval(() => {
         if (this.tryInstall()) {
@@ -2240,6 +3562,8 @@
         clearInterval(this.timer);
         this.timer = null;
       }
+      stopWpnGunFireTimer();
+      this.stopCameraWatch();
       this.mfdModule.restore();
       this.hudModule.restore();
     }
