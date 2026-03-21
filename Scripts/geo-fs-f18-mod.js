@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         GeoFS F-18 Mod
+// @name         GeoFS F-18 Addon
 // @namespace    https://github.com/ArjanKw/GeoFS-BlueAngels/
-// @version      1.1.0
+// @version      1.2.3
 // @description  Improves the cockpit with a new HUD and custom MFDs, adjustable seat height and more.
 // @match        https://www.geo-fs.com/*
 // @match        https://geo-fs.com/*
@@ -21,6 +21,9 @@
   const CAMERA_STEP_Z = 0.005;
   const CAMERA_UP_BUTTON_ID = 'f18-hud-camera-up';
   const CAMERA_DOWN_BUTTON_ID = 'f18-hud-camera-down';
+  const PROBE_OPEN_BUTTON_ID = 'f18-probe-open';
+  const PROBE_LABEL_BUTTON_ID = 'f18-probe-label';
+  const PROBE_CLOSE_BUTTON_ID = 'f18-probe-close';
   const F18_OPTIONS_STORAGE_KEY = 'F18Options';
   const F18_WPN_STATE_STORAGE_KEY = 'F18WpnState';
   const DEFAULT_COLOR = '#00ff00';
@@ -28,7 +31,7 @@
 
   let wpnLoadout = {
     'A/A': {
-        gun: 578,
+        gun: 412,
         left: {
             wingtip: {
                 load: 'AIM-9',
@@ -71,7 +74,7 @@
         }
     },
     'L/R A/A': {
-        gun: 578,
+        gun: 412,
         left: {
             wingtip: {
                 load: 'AIM-9',
@@ -114,7 +117,7 @@
         }
     },
     'A/G': {
-        gun: 578,
+        gun: 412,
         left: {
             wingtip: {
                 load: 'AIM-9',
@@ -157,7 +160,7 @@
         }
     },
     'L/R A/G': {
-        gun: 578,
+        gun: 412,
         left: {
             wingtip: {
                 load: 'AIM-9',
@@ -200,7 +203,7 @@
         }
     },
     'L/R': {
-        gun: 578,
+        gun: 412,
         left: {
             wingtip: {
                 load: 'AIM-9',
@@ -879,12 +882,6 @@
     return phase % 2 === 0;
   }
 
-  function getWpnModeFromPage(page) {
-    const modeButton = page?.leftButtons?.find?.((b) => b?.key === 'MODE')
-      ?? page?.rightButtons?.find?.((b) => b?.key === 'MODE');
-    return modeButton?.states?.[modeButton?.stateIndex] ?? 'A/A';
-  }
-
   function getWpnModeLoadout(mode) {
     return wpnCurrentLoadout ?? null;
   }
@@ -1249,86 +1246,435 @@
     mode.position[2] += deltaZ;
   }
 
-  function createCameraPadButton(label, id, onClick) {
-    const outer = document.createElement('div');
-    outer.id = id;
-    outer.className = 'geofs-inline-overlay geofs-textOverlay control-pad geofs-visible geofs-manipulator';
-    outer.style.backgroundSize = '50px 25px';
-    outer.style.marginLeft = '0px';
-    outer.style.marginBottom = '0px';
-    outer.style.zIndex = '60';
-    outer.style.backgroundPosition = '0px 0px';
-    outer.style.width = '50px';
-    outer.style.height = '25px';
-    outer.style.transformOrigin = '0px 25px';
-    outer.style.opacity = '1';
-    outer.style.transform = 'rotate(0deg)';
-    outer.style.position = 'relative';
-    outer.style.cursor = 'pointer';
-
-    if (label === 'UP') {
-        outer.style.borderBottom = '1px solid #333';
-        outer.style.borderRadius = '15px 15px 0 0';
-    } else if (label === 'DOWN') {
-        outer.style.marginTop = '-9px';
-        outer.style.borderRadius = '0 0 15px 15px';
-        outer.style.borderTop = '0';
+  class HelperModule {
+    constructor() {
+      this.padControls = new Map();
     }
 
-    const inner = document.createElement('div');
-    inner.className = 'geofs-overlay geofs-textOverlay control-pad-dyn-label geofs-visible';
-    inner.style.backgroundSize = '50px 25px';
-    inner.style.marginLeft = '0px';
-    inner.style.marginBottom = '0px';
-    inner.style.left = '0px';
-    inner.style.bottom = '0px';
-    inner.style.zIndex = '61';
-    inner.style.backgroundPosition = '0px 0px';
-    inner.style.width = '50px';
-    inner.style.height = '25px';
-    inner.style.transformOrigin = '0px 25px';
-    inner.style.opacity = '1';
-    inner.style.transform = 'rotate(0deg)';
-    inner.textContent = label;
+    getPadsContainer() {
+      return document.querySelector('.geofs-pads-container');
+    }
 
-    outer.appendChild(inner);
-    outer.addEventListener('click', onClick);
-    return outer;
+    createPadButton(options) {
+      const cfg = options ?? {};
+      const label = String(cfg.label ?? 'BTN');
+      const id = String(cfg.id ?? '');
+      const onClick = typeof cfg.onClick === 'function' ? cfg.onClick : () => {};
+
+      const outer = document.createElement('div');
+      if (id) outer.id = id;
+      outer.className = 'geofs-inline-overlay geofs-textOverlay control-pad geofs-visible geofs-manipulator';
+      outer.style.backgroundSize = '50px 25px';
+      outer.style.marginLeft = '0px';
+      outer.style.marginBottom = '0px';
+      outer.style.zIndex = '60';
+      outer.style.backgroundPosition = '0px 0px';
+      outer.style.width = '50px';
+      outer.style.height = '25px';
+      outer.style.transformOrigin = '0px 25px';
+      outer.style.opacity = '1';
+      outer.style.transform = 'rotate(0deg)';
+      outer.style.position = 'relative';
+      outer.style.cursor = 'pointer';
+
+      const inner = document.createElement('div');
+      inner.className = 'geofs-overlay geofs-textOverlay control-pad-dyn-label geofs-visible';
+      inner.style.backgroundSize = '50px 25px';
+      inner.style.marginLeft = '0px';
+      inner.style.marginBottom = '0px';
+      inner.style.left = '0px';
+      inner.style.bottom = '0px';
+      inner.style.zIndex = '61';
+      inner.style.backgroundPosition = '0px 0px';
+      inner.style.width = '50px';
+      inner.style.height = '25px';
+      inner.style.transformOrigin = '0px 25px';
+      inner.style.opacity = '1';
+      inner.style.transform = 'rotate(0deg)';
+      inner.textContent = label;
+
+      if (cfg?.outerStyle && typeof cfg.outerStyle === 'object') {
+        Object.assign(outer.style, cfg.outerStyle);
+      }
+      if (cfg?.innerStyle && typeof cfg.innerStyle === 'object') {
+        Object.assign(inner.style, cfg.innerStyle);
+      }
+
+      outer.appendChild(inner);
+      outer.addEventListener('click', onClick);
+      return outer;
+    }
+
+    installPadControl(options) {
+      const cfg = options ?? {};
+      const id = String(cfg.id ?? '').trim();
+      const element = cfg.element;
+      const prepend = cfg.prepend !== false;
+
+      if (!id || !element) return false;
+
+      const padsContainer = this.getPadsContainer();
+      if (!padsContainer) return false;
+
+      this.removePadControl(id);
+
+      if (prepend) {
+        padsContainer.prepend(element);
+      } else {
+        padsContainer.appendChild(element);
+      }
+
+      this.padControls.set(id, element);
+      return true;
+    }
+
+    removePadControl(id) {
+      const key = String(id ?? '').trim();
+      if (!key) return;
+
+      const element = this.padControls.get(key) ?? document.getElementById(key);
+      if (element) {
+        element.remove();
+      }
+      this.padControls.delete(key);
+    }
   }
 
-  function installCameraControls() {
-    if (window.__f18HudCameraControls) return true;
+  class ChecklistModule {
+    constructor() {
+      this.types = ['PROC', 'EMER', 'OPS', 'FLP'];
+      this.checklistsByType = Object.create(null);
+      this.currentIndexByType = Object.create(null);
 
-    const padsContainer = document.querySelector('.geofs-pads-container');
-    if (!padsContainer) return false;
-
-    const wrapper = document.createElement('div');
-    wrapper.id = 'f18-hud-camera-controls';
-    wrapper.style.display = 'flex';
-    wrapper.style.flexDirection = 'column';
-    wrapper.style.gap = '4px';
-    wrapper.style.alignItems = 'flex-start';
-
-    const upButton = createCameraPadButton('UP', CAMERA_UP_BUTTON_ID, () => {
-      adjustHudCameraZ(CAMERA_STEP_Z);
-    });
-    const downButton = createCameraPadButton('DOWN', CAMERA_DOWN_BUTTON_ID, () => {
-      adjustHudCameraZ(-CAMERA_STEP_Z);
-    });
-
-    wrapper.appendChild(upButton);
-    wrapper.appendChild(downButton);
-    padsContainer.prepend(wrapper);
-
-    window.__f18HudCameraControls = {
-      element: wrapper,
-      remove() {
-        wrapper.remove();
-        delete window.__f18HudCameraControls;
+      for (const type of this.types) {
+        this.checklistsByType[type] = [];
+        this.currentIndexByType[type] = 0;
       }
-    };
+    }
 
-    return true;
+    normalizeType(type) {
+      const value = String(type ?? '').trim().toUpperCase();
+      return this.types.includes(value) ? value : 'PROC';
+    }
+
+    normalizeItemProgress(checklist) {
+      if (!checklist) return [];
+      const items = Array.isArray(checklist.items) ? checklist.items : [];
+      const raw = Array.isArray(checklist.itemCompleted) ? checklist.itemCompleted : [];
+      checklist.itemCompleted = items.map((_, idx) => Boolean(raw[idx]));
+      return checklist.itemCompleted;
+    }
+
+    addChecklist(definition) {
+      const type = this.normalizeType(definition?.type);
+      const list = this.checklistsByType[type];
+      if (!Array.isArray(list)) return false;
+
+      const title = String(definition?.title ?? '').trim();
+      if (!title) return false;
+
+      const items = Array.isArray(definition?.items)
+        ? definition.items.map((item) => String(item ?? '').trim()).filter(Boolean)
+        : [];
+
+      const id = String(definition?.id ?? `${type}-${list.length + 1}`);
+      const checklist = {
+        id,
+        type,
+        title,
+        items,
+        itemCompleted: Array.isArray(definition?.itemCompleted) ? definition.itemCompleted : [],
+        completed: Boolean(definition?.completed)
+      };
+
+      this.normalizeItemProgress(checklist);
+      if (checklist.completed && checklist.itemCompleted.length) {
+        checklist.itemCompleted = checklist.itemCompleted.map(() => true);
+      }
+
+      list.push(checklist);
+
+      const idx = this.currentIndexByType[type] ?? 0;
+      this.currentIndexByType[type] = Math.max(0, Math.min(idx, list.length - 1));
+      return true;
+    }
+
+    getChecklists(type) {
+      const normalized = this.normalizeType(type);
+      return this.checklistsByType[normalized] ?? [];
+    }
+
+    getCurrentIndex(type) {
+      const normalized = this.normalizeType(type);
+      const list = this.getChecklists(normalized);
+      if (!list.length) return 0;
+      const idx = Number(this.currentIndexByType[normalized]);
+      if (!Number.isFinite(idx)) return 0;
+      return Math.max(0, Math.min(list.length - 1, Math.floor(idx)));
+    }
+
+    setCurrentIndex(type, index) {
+      const normalized = this.normalizeType(type);
+      const list = this.getChecklists(normalized);
+      if (!list.length) {
+        this.currentIndexByType[normalized] = 0;
+        return 0;
+      }
+      const idx = Number(index);
+      const clamped = Number.isFinite(idx)
+        ? Math.max(0, Math.min(list.length - 1, Math.floor(idx)))
+        : 0;
+      this.currentIndexByType[normalized] = clamped;
+      return clamped;
+    }
+
+    nextChecklist(type) {
+      const normalized = this.normalizeType(type);
+      const list = this.getChecklists(normalized);
+      if (!list.length) return null;
+      const next = (this.getCurrentIndex(normalized) + 1) % list.length;
+      this.currentIndexByType[normalized] = next;
+      return list[next];
+    }
+
+    prevChecklist(type) {
+      const normalized = this.normalizeType(type);
+      const list = this.getChecklists(normalized);
+      if (!list.length) return null;
+      const next = (this.getCurrentIndex(normalized) - 1 + list.length) % list.length;
+      this.currentIndexByType[normalized] = next;
+      return list[next];
+    }
+
+    getCurrentChecklist(type) {
+      const normalized = this.normalizeType(type);
+      const list = this.getChecklists(normalized);
+      if (!list.length) return null;
+      return list[this.getCurrentIndex(normalized)] ?? null;
+    }
+
+    hasNextChecklist(type) {
+      const normalized = this.normalizeType(type);
+      const list = this.getChecklists(normalized);
+      if (!list.length) return false;
+      return this.getCurrentIndex(normalized) < (list.length - 1);
+    }
+
+    nextChecklistNoWrap(type) {
+      const normalized = this.normalizeType(type);
+      const list = this.getChecklists(normalized);
+      if (!list.length) return null;
+
+      const current = this.getCurrentIndex(normalized);
+      if (current >= list.length - 1) {
+        return list[current] ?? null;
+      }
+
+      const next = current + 1;
+      this.currentIndexByType[normalized] = next;
+      return list[next] ?? null;
+    }
+
+    setCurrentCompleted(type, completed) {
+      const checklist = this.getCurrentChecklist(type);
+      if (!checklist) return false;
+      const nextCompleted = Boolean(completed);
+      checklist.completed = nextCompleted;
+
+      const states = this.normalizeItemProgress(checklist);
+      for (let i = 0; i < states.length; i++) {
+        states[i] = nextCompleted;
+      }
+
+      return true;
+    }
+
+    toggleCurrentCompleted(type) {
+      const checklist = this.getCurrentChecklist(type);
+      if (!checklist) return false;
+      return this.setCurrentCompleted(type, !checklist.completed);
+    }
+
+    getCurrentItemCompleted(type) {
+      const checklist = this.getCurrentChecklist(type);
+      if (!checklist) return [];
+      return this.normalizeItemProgress(checklist);
+    }
+
+    markNextCurrentItem(type) {
+      const checklist = this.getCurrentChecklist(type);
+      if (!checklist) return false;
+
+      const states = this.normalizeItemProgress(checklist);
+      const nextItemIndex = states.findIndex((value) => !value);
+      if (nextItemIndex < 0) {
+        if (states.length) {
+          checklist.completed = true;
+        }
+        return false;
+      }
+
+      states[nextItemIndex] = true;
+      checklist.completed = states.length > 0 && states.every(Boolean);
+      return true;
+    }
+
+    resetCurrent(type) {
+      return this.setCurrentCompleted(type, false);
+    }
+
+    resetType(type) {
+      const normalized = this.normalizeType(type);
+      const list = this.getChecklists(normalized);
+      for (const checklist of list) {
+        checklist.completed = false;
+        this.normalizeItemProgress(checklist).fill(false);
+      }
+      this.currentIndexByType[normalized] = 0;
+      return true;
+    }
+  }
+
+  function createDefaultChecklistModule() {
+    const module = new ChecklistModule();
+    module.addChecklist({
+      type: 'PROC',
+      title: 'Engine Start',
+      items: ['Parking Brake ON', 'Flight Plan LOADED', 'Briefing CHECKED', 'Master Arm OFF', 'Weapon Config SELECTED', 'Rearming FINISHED', 'Area CLEAR', 'Engine ON', 'Instruments CHECK'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'PROC',
+      title: 'Before Taxi',
+      items: ['Ladder UP', 'Tailhook UP', 'Fuel Probe CLOSED', 'Wings LOCKED', 'Flaps MAN', 'Canopy AS DESIRED', 'Recording AS DESIRED', 'Taxi REQUESTED'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'PROC',
+      title: 'Taxi / Before Takeoff',
+      items: ['Taxi Clearance GRANTED', 'Parking Brake OFF', 'Flaps ONE', 'HUD Bright/LVL AS DESIRED', 'Trim SET T/O', 'Canopy CLOSED', 'Spoiler UP', 'Brakes CHECK', 'Flight Controls CHECK', 'Instruments CHECK', 'Takeoff Clearance REQUESTED'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'PROC',
+      title: 'Takeoff',
+      items: ['Takeoff Clearance GRANTED', 'Runway CLEAR', 'Runway ALIGNED', 'Flaps ONE CHECK','Brakes ON', 'Engine 30%', 'Brakes RELEASED', 'Engine 100%', 'Speed 175 KN', 'Climb POSITIVE', 'Gear UP'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'PROC',
+      title: 'Climb',
+      items: ['Flaps AUTO', 'Attitude SET', 'Trim SET'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'PROC',
+      title: 'Cruise',
+      items: ['Altitude AS BRIEFED', 'Speed AS BRIEFED', 'Trim SET', 'HUD Brightness AS DESIRED', 'HUD Level AS DESIRED'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'PROC',
+      title: 'Descent',
+      items: ['Trim SET'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'PROC',
+      title: 'Before landing',
+      items: ['Master Arm OFF', 'TODO'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'PROC',
+      title: 'Landing',
+      items: ['TODO'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'PROC',
+      title: 'Taxi',
+      items: ['TODO'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'PROC',
+      title: 'Shutdown',
+      items: ['TODO'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'EMER',
+      title: 'Engine Fire',
+      items: ['Throttle IDLE', 'Engine OFF', 'Divert NEAREST', 'Descent GLIDE', 'Airspeed SET OPTIMAL', 'Radio MAYDAY', 'Land ASAP'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'OPS',
+      title: 'IFF Codebook',
+      items: ['Say \'IFF [CS] - Code [NO.]\'', 'Respond with \'IFF [Code]\'', '┌─────────────────────┐', '│  01: 457 │  02: 701 │ ', '│  03: 337 │  04: 241 │ ', '│  05: 612 │  06: 135 │ ', '│  07: 402 │  08: 984 │ ', '│  09: 264 │  10: 753 │ ', '│  11: 755 │  12: 588 │ ', '│  13: 284 │  14: 000 │ ',, '└─────────────────────┘'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'OPS',
+      title: 'Formation (Re)join',
+      items: ['Lock TARGET', 'Closure > 1 nm - +60knots', 'Closure 6000 ft - 60 knots', 'Closure 2000 ft - 40 knots', 'Closure 500 ft - 20 knots', 'Visual Contact', 'Take position'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'OPS',
+      title: 'Overhead Break (Landing)',
+      items: ['TODO'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'FLP',
+      title: 'Briefing - Flight',
+      items: ['Flight Callsign BA', 'Start Time 1300Z', 'Start Taxi 1305Z', 'Start T/O 1310Z', 'End Time 1400Z'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'FLP',
+      title: 'Briefing - Positions',
+      items: ['#1 - BigE', '#2 - Natrium', '#3 - Merpati', '#4 - Sonic'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'FLP',
+      title: 'Briefing - Enroute',
+      items: ['ALT FL10', 'SPD 300 knots', 'Route as planned'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'FLP',
+      title: 'Briefing - Landing',
+      items: ['Primary KNPA', 'Alternate KPNS', 'Runway 25L', 'Pattern OVERHEAD BREAK', 'Formation DELTA', 'ALT Entry 200ft', 'SPD Entry 300 kn', 'Pitch int. 3s', 'Downwind 200 kn'],
+      completed: false
+    });
+    return module;
+  }
+
+  function getChecklistModule() {
+    if (!window.__f18ChecklistModule) {
+      window.__f18ChecklistModule = createDefaultChecklistModule();
+      window.F18ChecklistModule = {
+        getModule: () => window.__f18ChecklistModule,
+        addChecklist: (definition) => window.__f18ChecklistModule.addChecklist(definition),
+        getChecklists: (type) => window.__f18ChecklistModule.getChecklists(type),
+        getCurrentChecklist: (type) => window.__f18ChecklistModule.getCurrentChecklist(type),
+        getCurrentItemCompleted: (type) => window.__f18ChecklistModule.getCurrentItemCompleted(type),
+        markNextCurrentItem: (type) => window.__f18ChecklistModule.markNextCurrentItem(type),
+        setCurrentIndex: (type, index) => window.__f18ChecklistModule.setCurrentIndex(type, index),
+        nextChecklist: (type) => window.__f18ChecklistModule.nextChecklist(type),
+        nextChecklistNoWrap: (type) => window.__f18ChecklistModule.nextChecklistNoWrap(type),
+        prevChecklist: (type) => window.__f18ChecklistModule.prevChecklist(type),
+        setCurrentCompleted: (type, completed) => window.__f18ChecklistModule.setCurrentCompleted(type, completed),
+        toggleCurrentCompleted: (type) => window.__f18ChecklistModule.toggleCurrentCompleted(type),
+        resetCurrent: (type) => window.__f18ChecklistModule.resetCurrent(type),
+        resetType: (type) => window.__f18ChecklistModule.resetType(type)
+      };
+    }
+    return window.__f18ChecklistModule;
   }
 
   class F18MfdUiState {
@@ -1345,7 +1691,7 @@
           leftButtons: [
             {
               key: 'STATE',
-              label: 'STATE',
+              label: 'REC',
               states: ['OFF'],
               stateIndex: 0,
               managedExternally: true,
@@ -1427,11 +1773,11 @@
         {
           title: 'HUD',
           leftButtons: [
-            { key: 'BRIGHT', label: 'BRIGHT', states: ['NORM', 'DAY', 'NIGHT'], stateIndex: 0 },
-            { key: 'LEVEL', label: 'LEVEL', states: ['FULL', 'DECLUTTERED', 'MIN'], stateIndex: 0 },
+            { key: 'BRIGHT', label: 'BRT', states: ['NORM', 'DAY', 'NIGHT'], stateIndex: 0 },
+            { key: 'LEVEL', label: 'LVL', states: ['FULL', 'DECLUTTERED', 'MIN'], stateIndex: 0 },
             {
               key: 'MAX_G',
-              label: 'MAX G',
+              label: 'MAXG',
               states: ['RESET'],
               stateIndex: 0,
               onClick: () => {
@@ -1441,16 +1787,19 @@
             },
           ],
           rightButtons: [
-            { key: 'COLOR', label: 'MFD COLOR', states: ['GREEN', 'WHITE', 'BLUE', 'RED'], values: ['#00FF00', '#FFFFFF', '#00fffb', '#FF0000'], stateIndex: 0 },
+            { key: 'COLOR', label: 'COLOR', states: ['GREEN', 'WHITE', 'BLUE', 'RED'], values: ['#00FF00', '#FFFFFF', '#00fffb', '#FF0000'], stateIndex: 0 },
           ],
           lines: []
         },
         {
           title: 'SYS',
           leftButtons: [
-            { key: 'FLAPS', label: 'FLAPS', states: ['MAN', 'AUTO'], stateIndex: 0 }
+            { key: 'FLAPS', label: 'FLAP', states: ['MAN', 'AUTO'], stateIndex: 0 },
+            { key: 'NA', label: '', states: [''], stateIndex: 0 },
+            { key: 'SPEEDBRAKE', label: 'SPLR', states: ['MAX', '25%', '50%', '75%'], stateIndex: 0 },
           ],
           rightButtons: [
+            { key: 'REFUELING', label: 'FUEL', states: ['CLOSED', 'OPEN'], stateIndex: 0 }
           ],
           lines: [],
           render: (renderer, renderContext) => {
@@ -1466,19 +1815,185 @@
         {
           title: 'CHK',
           leftButtons: [
-            { key: 'CHECKLIST', label: 'CHECKLIST', states: ['Start', 'Taxi', 'Takeoff', 'Cruise', 'Landing'], stateIndex: 0 },
+            {
+              key: 'PREV',
+              label: 'PREV',
+              states: [''],
+              stateIndex: 0,
+              managedExternally: true,
+              onClick: () => {
+                const type = getF18Option('CHK', 'TYPE', 'PROC');
+                getChecklistModule().prevChecklist(type);
+              }
+            },
+            { key: 'N/A1', label: '', states: [''], stateIndex: 0 },
+            { key: 'ALL', label: 'SHOW', states: ['ONE', 'ALL'], stateIndex: 0 },
+            { key: 'N/A2', label: '', states: [''], stateIndex: 0 },
+            {
+              key: 'TYPE',
+              label: 'TYPE',
+              states: ['PROC', 'EMER', 'OPS', 'FLP'],
+              stateIndex: 0,
+              onClick: ({ nextState }) => {
+                setF18Option('CHK', 'ALL', 'ALL'); // Show all checklists of this type when switching type.
+                getChecklistModule().setCurrentIndex(nextState, 0);
+              }
+            },
           ],
           rightButtons: [
+            {
+              key: 'NEXT',
+              label: 'NEXT',
+              states: [''],
+              stateIndex: 0,
+              managedExternally: true,
+              onClick: () => {
+                const type = getF18Option('CHK', 'TYPE', 'PROC');
+                getChecklistModule().nextChecklist(type);
+              }
+            },
+            { key: 'N/A3', label: '', states: [''], stateIndex: 0 },
+            { key: 'N/A31', label: '', states: [''], show: () => { return getF18Option('CHK', 'ALL', 'ONE') !== 'ONE'; }, stateIndex: 0 },
+            {
+              key: 'CHECK_ITEM',
+              label: 'CHK',
+              states: [''],
+              stateIndex: 0,
+              managedExternally: true,
+              show: () => { return getF18Option('CHK', 'ALL', 'ONE') === 'ONE'; },
+              onClick: () => {
+                const type = getF18Option('CHK', 'TYPE', 'PROC');
+                getChecklistModule().markNextCurrentItem(type);
+              }
+            },
+            {
+              key: 'RESET',
+              label: 'RST',
+              states: [''],
+              stateIndex: 0,
+              managedExternally: true,
+              onClick: () => {
+                const isAllMode = String(getF18Option('CHK', 'ALL', 'ONE') ?? 'ONE').toUpperCase() === 'ALL';
+                const type = getF18Option('CHK', 'TYPE', 'PROC');
+                const checklistModule = getChecklistModule();
+
+                if (isAllMode) {
+                  checklistModule.resetType(type);
+                  return;
+                }
+
+                checklistModule.resetCurrent(type);
+              }
+            },
+            {
+              key: 'COMPLETE',
+              label: 'DONE',
+              states: [''],
+              stateIndex: 0,
+              managedExternally: true,
+              onClick: () => {
+                const isAllMode = String(getF18Option('CHK', 'ALL', 'ONE') ?? 'ONE').toUpperCase() === 'ALL';
+                const type = getF18Option('CHK', 'TYPE', 'PROC');
+                const checklistModule = getChecklistModule();
+
+                if (isAllMode) {
+                  checklistModule.toggleCurrentCompleted(type);
+                  checklistModule.nextChecklistNoWrap(type);
+                  return;
+                }
+
+                // Single checklist mode: DONE should always set completed=true,
+                // then advance to next checklist if available (no wrap-around).
+                checklistModule.setCurrentCompleted(type, true);
+                checklistModule.nextChecklistNoWrap(type);
+              }
+            },
           ],
-          lines: []
+          lines: [],
+          render: (renderer, renderContext) => {
+            const ctx = renderContext?.ctx ?? renderer?.canvasAPI?.context;
+            const w = renderContext?.w ?? renderer?.canvasAPI?.canvas?.width ?? 512;
+            const h = renderContext?.h ?? renderer?.canvasAPI?.canvas?.height ?? 512;
+            const color = renderContext?.color ?? '#00ff66';
+            if (!ctx) return;
+
+            const checklistModule = getChecklistModule();
+            const selectedType = String(getF18Option('CHK', 'TYPE', 'PROC') ?? 'PROC').toUpperCase();
+            const showAll = String(getF18Option('CHK', 'ALL', 'ONE') ?? 'ONE').toUpperCase() === 'ALL';
+            const checklists = checklistModule.getChecklists(selectedType);
+
+            ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.fillStyle = color;
+            ctx.strokeStyle = color;
+            ctx.textBaseline = 'middle';
+            const contentX = w * 0.22;
+            const textPx = Math.round(h * 0.045);
+
+            ctx.textAlign = 'left';
+            ctx.font = `bold ${textPx}px monospace`;
+            ctx.fillText(`TYPE ${selectedType}  MODE ${showAll ? 'ALL' : 'ONE'}`, contentX, h * 0.16);
+
+            if (!checklists.length) {
+              ctx.font = `bold ${textPx}px monospace`;
+              ctx.fillText('NO CHECKLISTS', contentX, h * 0.24);
+              ctx.restore();
+              return;
+            }
+
+            if (showAll) {
+              const startX = contentX;
+              const startY = h * 0.22;
+              const rowStep = h * 0.062;
+              const boxSize = h * 0.032;
+
+              ctx.textAlign = 'left';
+              ctx.font = `bold ${textPx}px monospace`;
+
+              for (let i = 0; i < checklists.length; i++) {
+                const rowY = startY + i * rowStep;
+                if (rowY > h * 0.88) break;
+
+                const checklist = checklists[i];
+                ctx.strokeRect(startX, rowY - boxSize * 0.5, boxSize, boxSize);
+                if (checklist?.completed) {
+                  ctx.fillRect(startX + 2, rowY - boxSize * 0.5 + 2, Math.max(0, boxSize - 4), Math.max(0, boxSize - 4));
+                }
+
+                const currentMark = i === checklistModule.getCurrentIndex(selectedType) ? '>' : ' ';
+                ctx.fillText(`${currentMark} ${checklist?.title ?? `Checklist ${i + 1}`}`, startX + boxSize + w * 0.02, rowY);
+              }
+            } else {
+              const current = checklistModule.getCurrentChecklist(selectedType);
+              const completedTag = current?.completed ? '[X]' : '[ ]';
+
+              ctx.textAlign = 'left';
+              ctx.font = `bold ${textPx}px monospace`;
+              ctx.fillText(`${completedTag} ${current?.title ?? 'Checklist'}`, contentX, h * 0.24);
+
+              ctx.textAlign = 'left';
+              ctx.font = `bold ${textPx}px monospace`;
+              const items = Array.isArray(current?.items) ? current.items : [];
+              const itemCompleted = checklistModule.getCurrentItemCompleted(selectedType);
+              let y = h * 0.295;
+              for (let i = 0; i < items.length; i++) {
+                if (y > h * 0.88) break;
+                const marker = itemCompleted[i] ? 'v' : '-';
+                ctx.fillText(`${marker} ${items[i]}`, contentX, y);
+                y += h * 0.055;
+              }
+            }
+
+            ctx.restore();
+          }
         },
         {
           title: 'WPN',
           leftButtons: [
-            { key: 'MASTER', label: 'MASTER', states: ['OFF', 'ON', 'SIM'], stateIndex: 0 },
+            { key: 'MASTER', label: 'MSTR', states: ['OFF', 'ON', 'SIM'], stateIndex: 0 },
             {
               key: 'SELECT',
-              label: 'SELECT',
+              label: 'SEL',
               states: ['NEXT'],
               stateIndex: 0,
               onClick: ({ page }) => {
@@ -1490,7 +2005,7 @@
             },
             {
               key: 'CONFIG',
-              label: 'CONFIG',
+              label: 'CFG',
               states: ['A/A', 'L/R A/A', 'A/G', 'L/R A/G', 'L/R', 'MIN', 'CLEAN'],
               stateIndex: 0,
               show: () => controls?.gear?.position === 0 && !geofs?.animation?.values?.enginesOn
@@ -1512,7 +2027,7 @@
             },
             {
               key: 'JETTISON',
-              label: 'JETTISON',
+              label: 'JETT',
               states: ['N/A'],
               stateIndex: 0,
               onClick: ({ page }) => {
@@ -1520,11 +2035,11 @@
                 const modeLoadout = getWpnModeLoadout(mode);
                 jettisonSelectedWpnWeapon(mode, modeLoadout);
               },
-              show: () => controls?.gear?.position === 1 && geofs?.animation?.values?.haglFeet > 50 && getF18Option('WPN', 'MASTER', 'OFF') !== 'OFF' && getF18Option('WPN', 'MODE', 'NAV') == 'JETTISON'
+              show: () => controls?.gear?.position === 1 && geofs?.animation?.values?.haglFeet > 50 && getF18Option('WPN', 'MODE', 'NAV') == 'JETTISON'
             },
             {
               key: 'REARM',
-              label: 'REARM',
+              label: 'ARM',
               states: ['START'],
               stateIndex: 0,
               onClick: ({ page }) => {
@@ -1954,10 +2469,10 @@
       const leftButtons = [];
       const rightButtons = [];
       const rowStartY = frame.top + h * 0.14;
-      const rowStep = h * 0.155;
+      const rowStep = h * 0.155 + 3;
       const rowH = h * 0.08;
 
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < 5; i++) {
         const y = rowStartY + i * rowStep;
         leftButtons.push({ index: i, x: frame.left + w * 0.028, y, w: w * 0.40, h: rowH });
         rightButtons.push({ index: i, x: frame.left + frame.width - w * 0.428, y, w: w * 0.40, h: rowH });
@@ -2037,22 +2552,47 @@
       const visibleLeftButtons = this.getVisibleButtonEntries('left', page);
       const visibleRightButtons = this.getVisibleButtonEntries('right', page);
 
+      const drawStackedLabel = (text, centerX, centerY, stepPx) => {
+        const chars = String(text ?? '').split('');
+        const totalHeight = Math.max(0, (chars.length - 1) * stepPx);
+        const startY = centerY - totalHeight * 0.5;
+        for (let c = 0; c < chars.length; c++) {
+          ctx.fillText(chars[c], centerX, startY + c * stepPx);
+        }
+      };
+
       for (let i = 0; i < visibleLeftButtons.length && i < layout.leftButtons.length; i++) {
         const slot = layout.leftButtons[i];
         const combinedGroup = this.getCombinedGroupForSlot('left', i, page);
         if (combinedGroup) {
           const btn = visibleLeftButtons[i].button;
           const actionText = btn?.states?.[0] ?? btn?.label ?? '';
-          const bracketX = slot.x + slot.w * 0.56;
-          const actionX = bracketX + w * 0.026;
-          ctx.fillText(`${actionText}`, actionX, slot.y + slot.h * 0.55);
+          const rowCenterY = slot.y + slot.h * 0.55;
+          const actionX = slot.x + w * 0.016;
+
+          ctx.save();
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(`${actionText}`, actionX, rowCenterY);
+          ctx.restore();
           continue;
         }
 
         const btn = visibleLeftButtons[i].button;
         const label = btn.label;
         const state = this.getStateLabel(btn, page, visibleLeftButtons[i].actualIndex, 'left');
-        ctx.fillText(`${label}   ${state}`, slot.x + 2, slot.y + slot.h * 0.55);
+        const rowCenterY = slot.y + slot.h * 0.55;
+        const labelX = slot.x + w * 0.016;
+        const stateX = slot.x + w * 0.060;
+        const labelStep = h * 0.038;
+
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        drawStackedLabel(label, labelX, rowCenterY, labelStep);
+        ctx.restore();
+
+        ctx.fillText(`${state}`, stateX, rowCenterY);
       }
 
       for (let i = 0; i < visibleRightButtons.length && i < layout.rightButtons.length; i++) {
@@ -2070,7 +2610,23 @@
         const btn = visibleRightButtons[i].button;
         const label = btn.label;
         const state = this.getStateLabel(btn, page, visibleRightButtons[i].actualIndex, 'right');
-        ctx.fillText(`${label}   ${state}`, slot.x + 2, slot.y + slot.h * 0.55);
+        const rowCenterY = slot.y + slot.h * 0.55;
+        const labelX = slot.x + slot.w - w * 0.016;
+        const labelStateGap = w * (0.060 - 0.016);
+        const stateRightX = labelX - labelStateGap;
+        const labelStep = h * 0.033;
+
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        drawStackedLabel(label, labelX, rowCenterY, labelStep);
+        ctx.restore();
+
+        ctx.save();
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`${state}`, stateRightX, rowCenterY);
+        ctx.restore();
       }
 
       const drawCombinedBracket = (side) => {
@@ -2099,17 +2655,31 @@
           const yBottom = endSlot.y + endSlot.h * 0.78;
           const yMid = (yTop + yBottom) * 0.5;
 
-          const bracketX = startSlot.x + startSlot.w * 0.56;
+          const bracketX = side === 'left'
+            ? (startSlot.x + startSlot.w * 0.38)
+            : (startSlot.x + startSlot.w * 0.56);
           const bracketArm = w * 0.012;
+          const labelOffset = w * 0.048;
 
           ctx.beginPath();
-          ctx.moveTo(bracketX + bracketArm, yTop);
-          ctx.lineTo(bracketX, yTop);
-          ctx.lineTo(bracketX, yBottom);
-          ctx.lineTo(bracketX + bracketArm, yBottom);
+          if (side === 'left') {
+            // Left side should point left: ']'
+            ctx.moveTo(bracketX - bracketArm, yTop);
+            ctx.lineTo(bracketX, yTop);
+            ctx.lineTo(bracketX, yBottom);
+            ctx.lineTo(bracketX - bracketArm, yBottom);
+          } else {
+            // Right side keeps mirrored style.
+            ctx.moveTo(bracketX + bracketArm, yTop);
+            ctx.lineTo(bracketX, yTop);
+            ctx.lineTo(bracketX, yBottom);
+            ctx.lineTo(bracketX + bracketArm, yBottom);
+          }
           ctx.stroke();
 
-          const labelX = bracketX - w * 0.048;
+          const labelX = side === 'left'
+            ? (bracketX + labelOffset)
+            : (bracketX - labelOffset);
           const labelChars = String(groupLabel ?? '').split('');
           const lineStep = h * 0.038;
           const totalHeight = Math.max(0, (labelChars.length - 1) * lineStep);
@@ -2810,10 +3380,15 @@
     const hookRaw = Number(window.controls?.accessories?.position);
     const hookPos = Number.isFinite(hookRaw) ? Math.max(0, Math.min(1, hookRaw)) : 0;
 
-    const left = isMfd ? w * 0.10 : w * 0.02;
     const top = isMfd ? h * 0.27 : h * 0.02;
-    const blockW = isMfd ? w * 0.24 : w * 0.24;
-    const gapW = isMfd ? w * 0.05 : w * 0.04;
+
+    // Keep the 3 indicators centered, but make the total footprint narrower.
+    const clusterCenterX = w * 0.5;
+    const clusterW = isMfd ? w * 0.58 : w * 0.50;
+    const gapGearToFlap = clusterW * (isMfd ? 0.07 : 0.06);
+    const gapFlapToHook = clusterW * (isMfd ? 0.045 : 0.035); // hook closer to flap
+    const blockW = (clusterW - gapGearToFlap - gapFlapToHook) / 3;
+    const left = clusterCenterX - (clusterW * 0.5);
 
     const indicatorTopY = top;
     const indicatorBottomY = top + (isMfd ? h * 0.12 : h * 0.14);
@@ -2832,19 +3407,19 @@
 
     // --- GEAR indicator (3 boxes) ---
     const gearX = left;
-    const boxW = blockW * (isMfd ? 0.14 : 0.14);
-    const boxH = h * (isMfd ? 0.045 : 0.11);
-    const topBoxX = gearX + blockW * 0.43;
+    const boxW = blockW * (isMfd ? 0.13 : 0.11);
+    const boxH = h * (isMfd ? 0.042 : 0.10);
+    const topBoxX = gearX + blockW * 0.445;
     const topBoxY = indicatorTopY - (isMfd ? boxH * 0.80 : 0);
-    const leftBoxX = gearX + blockW * 0.10;
+    const leftBoxX = gearX + blockW * 0.20;
     const leftBoxY = indicatorBottomY - boxH;
-    const rightBoxX = gearX + blockW * 0.76;
+    const rightBoxX = gearX + blockW * 0.70;
     const rightBoxY = indicatorBottomY - boxH;
 
     const isGearDown = gearPos <= 0;
     const isGearUp = gearPos >= 1;
     const isGearTrans = !isGearDown && !isGearUp;
-    const gearFill = isGearDown ? '#2bb24c' : isGearTrans ? '#ff8a24' : null;
+    const gearFill = isGearDown ? '#00ff00' : isGearTrans ? '#ff8a24' : null;
 
     const drawGearBox = (x, y) => {
       ctx.strokeRect(x, y, boxW, boxH);
@@ -2864,7 +3439,7 @@
     else if (isGearTrans) gearStatus = 'GEAR TRANS';
 
     // --- FLAP indicator ---
-    const flapX = gearX + blockW + gapW;
+    const flapX = gearX + blockW + gapGearToFlap;
     const flapWingY = top + (isMfd ? h * 0.03 : h * 0.045);
     const wingStartX = flapX + blockW * 0.08;
     const wingEndX = flapX + blockW * 0.62;
@@ -2928,7 +3503,7 @@
     }
 
     // --- HOOK indicator ---
-    const hookX = flapX + blockW + gapW;
+    const hookX = flapX + blockW + gapFlapToHook;
     const hookWingY = flapWingY;
     const hookHingeX = hookX + blockW * 0.38;
     const hookLen = blockW * (isMfd ? 0.36 : 0.24);
@@ -3131,7 +3706,7 @@
       if (!this.install()) {
         return false;
       }
-      return installCameraControls();
+      return true;
     }
 
     restore() {
@@ -3140,10 +3715,6 @@
       }
       this.originalRenderer = null;
       this.installed = false;
-
-      if (window.__f18HudCameraControls) {
-        window.__f18HudCameraControls.remove();
-      }
     }
   }
 
@@ -3298,17 +3869,119 @@
       }
     };
 
-    constructor() {
+    constructor(helperModule) {
+      this.helperModule = helperModule;
       this.installed = false;
       this.originalModesByIndex = new Map();
+      this.boundModesRef = null;
+    }
+
+    createCameraPadButton(label, id, onClick) {
+      const outerStyle = {};
+      if (label === 'UP') {
+        outerStyle.borderBottom = '1px solid #333';
+        outerStyle.borderRadius = '15px 15px 0 0';
+      } else if (label === 'DOWN') {
+        outerStyle.marginTop = '-9px';
+        outerStyle.borderRadius = '0 0 15px 15px';
+        outerStyle.borderTop = '0';
+      }
+
+      return this.helperModule?.createPadButton({
+        label,
+        id,
+        onClick,
+        outerStyle
+      }) ?? null;
+    }
+
+    installCameraControls() {
+      if (document.getElementById('f18-hud-camera-controls')) return true;
+      if (!this.helperModule) return false;
+
+      const wrapper = document.createElement('div');
+      wrapper.id = 'f18-hud-camera-controls';
+      wrapper.style.display = 'flex';
+      wrapper.style.flexDirection = 'column';
+      wrapper.style.gap = '4px';
+      wrapper.style.alignItems = 'flex-start';
+
+      const upButton = this.createCameraPadButton('UP', CAMERA_UP_BUTTON_ID, () => {
+        adjustHudCameraZ(CAMERA_STEP_Z);
+      });
+      const seatLabelButton = this.helperModule?.createPadButton({
+        label: 'SEAT',
+        id: 'f18-seat-label',
+        onClick: () => {},
+        outerStyle: {
+          marginTop: '-9px',
+          borderRadius: '0',
+          borderTop: '0',
+          cursor: 'default',
+          pointerEvents: 'none'
+        },
+        innerStyle: {
+          fontWeight: '700'
+        }
+      });
+      const downButton = this.createCameraPadButton('DOWN', CAMERA_DOWN_BUTTON_ID, () => {
+        adjustHudCameraZ(-CAMERA_STEP_Z);
+      });
+
+      if (!upButton || !seatLabelButton || !downButton) return false;
+
+      wrapper.appendChild(upButton);
+      wrapper.appendChild(seatLabelButton);
+      wrapper.appendChild(downButton);
+      return this.helperModule.installPadControl({
+        id: wrapper.id,
+        element: wrapper,
+        prepend: true
+      });
+    }
+
+    removeCameraControls() {
+      this.helperModule?.removePadControl('f18-hud-camera-controls');
+    }
+
+    isAircraftCameraReady() {
+      const aircraft = window.geofs?.aircraft?.instance;
+      const parts = aircraft?.parts;
+      const mode1 = window.geofs?.camera?.modes?.[1];
+      return Boolean(parts && Object.keys(parts).length > 0 && mode1?.position);
+    }
+
+    hasCustomModes(modes) {
+      if (!modes) return false;
+      return Object.entries(CameraModule.CAMERA_MODE_DEFINITIONS).every(([indexKey, definition]) => {
+        const index = Number(indexKey);
+        const current = modes[index];
+        return Boolean(current && current.name === definition.name && current.view === definition.view);
+      });
     }
 
     ensureLoaded() {
-      if (this.installed) return true;
-      if (!isF18Active()) return false;
+      if (!isF18Active()) {
+        this.removeCameraControls();
+        return false;
+      }
 
       const modes = window.geofs?.camera?.modes;
       if (!modes) return false;
+      if (!this.isAircraftCameraReady()) return false;
+
+      if (!this.installCameraControls()) return false;
+
+      const modesRefChanged = this.boundModesRef && this.boundModesRef !== modes;
+      const customModesPresent = this.hasCustomModes(modes);
+
+      if (this.installed && !modesRefChanged && customModesPresent) {
+        return true;
+      }
+
+      if (!this.installed || modesRefChanged) {
+        this.originalModesByIndex.clear();
+      }
 
       for (const [indexKey, definition] of Object.entries(CameraModule.CAMERA_MODE_DEFINITIONS)) {
         const index = Number(indexKey);
@@ -3326,14 +3999,17 @@
       }
 
       this.installed = true;
+      this.boundModesRef = modes;
       return true;
     }
 
     restore() {
-      if (!this.installed) return;
+      this.removeCameraControls();
+
+      if (!this.installed && this.originalModesByIndex.size === 0) return;
 
       const modes = window.geofs?.camera?.modes;
-      if (modes) {
+      if (modes && (!this.boundModesRef || modes === this.boundModesRef)) {
         for (const [index, originalState] of this.originalModesByIndex.entries()) {
           if (originalState?.exists) {
             modes[index] = deepCloneJson(originalState.value);
@@ -3345,6 +4021,7 @@
 
       this.originalModesByIndex.clear();
       this.installed = false;
+      this.boundModesRef = null;
     }
   }
 
@@ -3354,6 +4031,8 @@
       this.timer = null;
       this.lastFlapsMode = null;
       this.lastAutoTarget = null;
+      this.originalSetPartAnimationDelta = null;
+      this.airbrakeDeltaHookInstalled = false;
     }
 
     ensureLoaded() {
@@ -3376,6 +4055,85 @@
 
     getFlapsMode() {
       return String(getF18Option('SYS', 'FLAPS', 'MAN') ?? 'MAN').toUpperCase();
+    }
+
+    getSpeedbrakeCapNormalized() {
+      const raw = String(getF18Option('SYS', 'SPEEDBRAKE', 'MAX') ?? 'MAX').trim().toUpperCase();
+      if (raw === 'MAX') return 1;
+
+      const percentMatch = raw.match(/^(\d+(?:\.\d+)?)%$/);
+      if (percentMatch) {
+        const pct = Number(percentMatch[1]);
+        if (Number.isFinite(pct)) {
+          return clampValue(pct / 100, 0, 1);
+        }
+      }
+
+      // Safe fallback: no limitation when option is unknown.
+      return 1;
+    }
+
+    installAirbrakeDeltaHook(controlsApi) {
+      if (!controlsApi || typeof controlsApi.setPartAnimationDelta !== 'function') return false;
+      if (this.airbrakeDeltaHookInstalled) return true;
+
+      this.originalSetPartAnimationDelta = controlsApi.setPartAnimationDelta;
+      const self = this;
+
+      controlsApi.setPartAnimationDelta = function (part) {
+        const airbrakes = controlsApi.airbrakes;
+        if (part && airbrakes && part === airbrakes) {
+          const cap = self.getSpeedbrakeCapNormalized();
+
+          const target = Number(airbrakes.target);
+          if (Number.isFinite(target) && target > cap) {
+            airbrakes.target = cap;
+          }
+
+          const positionTarget = Number(airbrakes.positionTarget);
+          if (Number.isFinite(positionTarget) && positionTarget > cap) {
+            airbrakes.positionTarget = cap;
+          }
+        }
+
+        return self.originalSetPartAnimationDelta.call(this, part);
+      };
+
+      this.airbrakeDeltaHookInstalled = true;
+      return true;
+    }
+
+    enforceAirbrakeTargetCap(controlsApi) {
+      const airbrakes = controlsApi?.airbrakes;
+      if (!airbrakes) return;
+
+      const cap = this.getSpeedbrakeCapNormalized();
+      let changed = false;
+
+      const target = Number(airbrakes.target);
+      if (Number.isFinite(target) && target > cap) {
+        airbrakes.target = cap;
+        changed = true;
+      }
+
+      const positionTarget = Number(airbrakes.positionTarget);
+      if (Number.isFinite(positionTarget) && positionTarget > cap) {
+        airbrakes.positionTarget = cap;
+        changed = true;
+      }
+
+      if (changed && typeof controlsApi.setPartAnimationDelta === 'function') {
+        controlsApi.setPartAnimationDelta(airbrakes);
+      }
+    }
+
+    uninstallAirbrakeDeltaHook() {
+      const controlsApi = window.controls;
+      if (this.airbrakeDeltaHookInstalled && controlsApi && this.originalSetPartAnimationDelta) {
+        controlsApi.setPartAnimationDelta = this.originalSetPartAnimationDelta;
+      }
+      this.originalSetPartAnimationDelta = null;
+      this.airbrakeDeltaHookInstalled = false;
     }
 
     computeAutoFlapsTarget() {
@@ -3446,24 +4204,35 @@
       }
 
       const controlsApi = window.controls;
-      if (!controlsApi?.flaps) return;
+      if (!controlsApi) return;
 
-      const flapsMode = this.getFlapsMode();
-      if (flapsMode === 'AUTO') {
-        const target = this.computeAutoFlapsTarget();
-        this.applyFlapsTarget(target);
-      } else if (this.lastFlapsMode === 'AUTO') {
-        // Critical handback behavior: reset to 0 when leaving AUTO,
-        // otherwise manual mode can stay latched.
-        this.lastAutoTarget = null;
-        this.applyFlapsTarget(0);
+      this.installAirbrakeDeltaHook(controlsApi);
+
+      if (controlsApi.flaps) {
+        const flapsMode = this.getFlapsMode();
+        if (flapsMode === 'AUTO') {
+          const target = this.computeAutoFlapsTarget();
+          this.applyFlapsTarget(target);
+        } else if (this.lastFlapsMode === 'AUTO') {
+          // Critical handback behavior: reset to 0 when leaving AUTO,
+          // otherwise manual mode can stay latched.
+          this.lastAutoTarget = null;
+          this.applyFlapsTarget(0);
+        }
+
+        this.lastFlapsMode = flapsMode;
+      } else {
+        this.lastFlapsMode = null;
       }
 
-      this.lastFlapsMode = flapsMode;
+      // Override max speedbrake effectiveness based on SYS.SPEEDBRAKE option.
+      // Cap targets (not live position) to avoid visible oscillation/jitter.
+      this.enforceAirbrakeTargetCap(controlsApi);
     }
 
     restore() {
       this.stopLoop();
+      this.uninstallAirbrakeDeltaHook();
 
       if (isF18Active()) {
         this.lastAutoTarget = null;
@@ -3472,6 +4241,611 @@
 
       this.lastFlapsMode = null;
       this.installed = false;
+    }
+  }
+
+  class ControlModule {
+    constructor(helperModule = null) {
+      this.helperModule = helperModule;
+      this.installed = false;
+      this.timer = null;
+      this.controls = new Map();
+      this.lastAircraftId = null;
+      this.probeControlsWrapperId = 'f18-probe-controls';
+      this.registerDefaultControls();
+    }
+
+    registerDefaultControls() {
+      this.registerControl({
+        key: 'SYS.REFUELING',
+        defaultState: 'CLOSED',
+        durationMs: 1200,
+        parts: [
+          {
+            partName: 'Probe',
+            motion: {
+              OPEN: { delayMs: 2600, durationMs: 2200 },
+              CLOSED: { delayMs: 0, durationMs: 2200 }
+            },
+            channels: {
+              ProbeRotXDeg: { OPEN: -40, CLOSED: 0 },
+              ProbeRotYDeg: { OPEN: 10, CLOSED: 0 },
+              ProbeRotZDeg: { OPEN: 20, CLOSED: 0 }
+            }
+          },
+          {
+            partName: 'RefDoor1',
+            motion: {
+              OPEN: { delayMs: 2600, durationMs: 2200 },
+              CLOSED: { delayMs: 0, durationMs: 2200 }
+            },
+            channels: {
+              RefDoor1RotXDeg: { OPEN: -40, CLOSED: 0 },
+              RefDoor1RotYDeg: { OPEN: 10, CLOSED: 0 },
+              RefDoor1RotZDeg: { OPEN: 30, CLOSED: 0 }
+            }
+          },
+          {
+            partName: 'RefDoor2',
+            motion: {
+              OPEN: { delayMs: 0, durationMs: 2000 },
+              CLOSED: { delayMs: 2400, durationMs: 2000 }
+            },
+            channels: {
+              RefDoor2RotXDeg: { OPEN: -10, CLOSED: 0 },
+              RefDoor2RotYDeg: { OPEN: 60, CLOSED: 0 },
+              RefDoor2RotZDeg: { OPEN: -20, CLOSED: 0 }
+            }
+          }
+        ]
+      });
+    }
+
+    registerControl(definition) {
+      const key = String(definition?.key || '').trim().toUpperCase();
+      if (!key) return false;
+
+      const control = {
+        key,
+        defaultState: String(definition?.defaultState || 'CLOSED').toUpperCase(),
+        durationMs: Math.max(0, Number(definition?.durationMs) || 0),
+        parts: Array.isArray(definition?.parts) ? definition.parts : [],
+        runtime: {
+          initialized: false,
+          currentState: null,
+          targetState: null,
+          transitionStartMs: 0,
+          timingByValueKey: Object.create(null),
+          fromValues: Object.create(null),
+          toValues: Object.create(null),
+          currentValues: Object.create(null)
+        }
+      };
+
+      this.controls.set(key, control);
+      return true;
+    }
+
+    ensureLoaded() {
+      if (this.installed) return true;
+      this.installed = true;
+      this.exposeDebugApi();
+      this.installProbeControls();
+      this.startLoop();
+      return true;
+    }
+
+    setProbeState(state) {
+      const value = String(state || '').trim().toUpperCase();
+      if (value !== 'OPEN' && value !== 'CLOSED') return false;
+      setF18Option('SYS', 'REFUELING', value);
+      return true;
+    }
+
+    createProbePadButton(label, id, onClick, outerStyle = {}, innerStyle = {}) {
+      return this.helperModule?.createPadButton({
+        label,
+        id,
+        onClick,
+        outerStyle,
+        innerStyle
+      }) ?? null;
+    }
+
+    installProbeControls() {
+      if (!this.helperModule || !isF18Active()) return false;
+      if (document.getElementById(this.probeControlsWrapperId)) return true;
+
+      const wrapper = document.createElement('div');
+      wrapper.id = this.probeControlsWrapperId;
+      wrapper.style.display = 'flex';
+      wrapper.style.flexDirection = 'column';
+      wrapper.style.gap = '0px';
+      wrapper.style.alignItems = 'flex-start';
+
+      const openButton = this.createProbePadButton('OPEN', PROBE_OPEN_BUTTON_ID, () => {
+        this.setProbeState('OPEN');
+      }, {
+        borderBottom: '1px solid #333',
+        borderRadius: '15px 15px 0 0'
+      });
+
+      const probeLabel = this.createProbePadButton('PROBE', PROBE_LABEL_BUTTON_ID, () => {}, {
+        marginTop: '-9px',
+        borderRadius: '0',
+        borderTop: '0',
+        cursor: 'default',
+        pointerEvents: 'none'
+      }, {
+        fontWeight: '700'
+      });
+
+      const closeButton = this.createProbePadButton('CLOSE', PROBE_CLOSE_BUTTON_ID, () => {
+        this.setProbeState('CLOSED');
+      }, {
+        marginTop: '-9px',
+        borderRadius: '0 0 15px 15px',
+        borderTop: '0'
+      });
+
+      if (!openButton || !probeLabel || !closeButton) return false;
+
+      wrapper.appendChild(openButton);
+      wrapper.appendChild(probeLabel);
+      wrapper.appendChild(closeButton);
+
+      return this.helperModule.installPadControl({
+        id: wrapper.id,
+        element: wrapper,
+        prepend: true
+      });
+    }
+
+    removeProbeControls() {
+      this.helperModule?.removePadControl(this.probeControlsWrapperId);
+    }
+
+    exposeDebugApi() {
+      const self = this;
+      window.F18ControlModule = {
+        list: () => [...self.controls.keys()],
+        get: (key) => self.getControlSnapshot(key),
+        setDuration: (key, durationMs) => self.setControlDuration(key, durationMs),
+        setChannel: (key, partName, valueKey, state, value) => self.setChannelValue(key, partName, valueKey, state, value),
+        setByValueKey: (key, valueKey, state, value) => { self.setChannelValueByValueKey(key, valueKey, state, value); self.reanimateAllControlsToOption(key); },
+        setPartTiming: (key, partName, state, delayMs, durationMs) => self.setPartTiming(key, partName, state, delayMs, durationMs),
+        reanimate: (key) => self.reanimateControlToOption(key),
+        reanimateAll: () => self.reanimateAllControlsToOption(),
+        values: () => ({ ...(window.geofs?.animation?.values || {}) })
+      };
+    }
+
+    startLoop() {
+      if (this.timer) return;
+      this.timer = setInterval(() => this.tick(), 50);
+    }
+
+    stopLoop() {
+      if (!this.timer) return;
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+
+    parseConfigKey(configKey) {
+      const raw = String(configKey || '').trim();
+      const [page, key] = raw.split('.');
+      return {
+        page: String(page || '').toUpperCase(),
+        key: String(key || '').toUpperCase()
+      };
+    }
+
+    getRequestedState(control) {
+      const tokens = this.parseConfigKey(control?.key);
+      if (!tokens.page || !tokens.key) return control.defaultState;
+
+      const runtime = control?.runtime || {};
+      const raw = getF18Option(tokens.page, tokens.key, null);
+      if (raw == null || raw === '') {
+        return String(runtime.targetState || runtime.currentState || control.defaultState).toUpperCase();
+      }
+
+      return String(raw).toUpperCase();
+    }
+
+    getAnimationValue(valueKey, fallback = 0) {
+      const raw = Number(window.geofs?.animation?.values?.[valueKey]);
+      return Number.isFinite(raw) ? raw : Number(fallback) || 0;
+    }
+
+    resolveControlKey(controlKey) {
+      const key = String(controlKey || '').trim().toUpperCase();
+      return key;
+    }
+
+    getControlByKey(controlKey) {
+      const key = this.resolveControlKey(controlKey);
+      if (!key) return null;
+      return this.controls.get(key) || null;
+    }
+
+    getControlSnapshot(controlKey) {
+      const control = this.getControlByKey(controlKey);
+      if (!control) return null;
+      return {
+        key: control.key,
+        defaultState: control.defaultState,
+        durationMs: control.durationMs,
+        parts: JSON.parse(JSON.stringify(control.parts || [])),
+        runtime: {
+          initialized: !!control.runtime?.initialized,
+          currentState: control.runtime?.currentState ?? null,
+          targetState: control.runtime?.targetState ?? null,
+          currentValues: { ...(control.runtime?.currentValues || {}) }
+        }
+      };
+    }
+
+    setControlDuration(controlKey, durationMs) {
+      const control = this.getControlByKey(controlKey);
+      if (!control) return false;
+      const next = Math.max(0, Number(durationMs) || 0);
+      control.durationMs = next;
+      return true;
+    }
+
+    setChannelValue(controlKey, partName, valueKey, state, value) {
+      const control = this.getControlByKey(controlKey);
+      if (!control) return false;
+
+      const partNameNorm = String(partName || '').trim();
+      const valueKeyNorm = String(valueKey || '').trim();
+      const stateNorm = String(state || '').trim().toUpperCase();
+      const numericValue = Number(value);
+      if (!partNameNorm || !valueKeyNorm || !stateNorm || !Number.isFinite(numericValue)) return false;
+
+      const partDef = control.parts.find((p) => String(p?.partName || '').trim() === partNameNorm);
+      if (!partDef) return false;
+
+      partDef.channels = partDef.channels || {};
+      partDef.channels[valueKeyNorm] = partDef.channels[valueKeyNorm] || {};
+      partDef.channels[valueKeyNorm][stateNorm] = numericValue;
+      return true;
+    }
+
+    setChannelValueByValueKey(controlKey, valueKey, state, value) {
+      const control = this.getControlByKey(controlKey);
+      if (!control) return false;
+
+      const valueKeyNorm = String(valueKey || '').trim();
+      const stateNorm = String(state || '').trim().toUpperCase();
+      const numericValue = Number(value);
+      if (!valueKeyNorm || !stateNorm || !Number.isFinite(numericValue)) return false;
+
+      const matches = control.parts.filter((p) => Object.prototype.hasOwnProperty.call(p?.channels || {}, valueKeyNorm));
+      if (matches.length !== 1) {
+        return false;
+      }
+
+      const partDef = matches[0];
+      partDef.channels = partDef.channels || {};
+      partDef.channels[valueKeyNorm] = partDef.channels[valueKeyNorm] || {};
+      partDef.channels[valueKeyNorm][stateNorm] = numericValue;
+      return true;
+    }
+
+    setPartTiming(controlKey, partName, state, delayMs, durationMs) {
+      const control = this.getControlByKey(controlKey);
+      if (!control) return false;
+
+      const partNameNorm = String(partName || '').trim();
+      const stateNorm = String(state || '').trim().toUpperCase();
+      const delay = Number(delayMs);
+      const duration = Number(durationMs);
+      if (!partNameNorm || !stateNorm) return false;
+
+      const partDef = control.parts.find((p) => String(p?.partName || '').trim() === partNameNorm);
+      if (!partDef) return false;
+
+      partDef.motion = partDef.motion || {};
+      partDef.motion[stateNorm] = {
+        delayMs: Number.isFinite(delay) ? Math.max(0, delay) : 0,
+        durationMs: Number.isFinite(duration) ? Math.max(1, duration) : Math.max(1, Number(control.durationMs) || 1)
+      };
+      return true;
+    }
+
+    reanimateControlToOption(controlKey) {
+      const control = this.getControlByKey(controlKey);
+      if (!control) return false;
+      control.runtime.initialized = false;
+      return true;
+    }
+
+    reanimateAllControlsToOption() {
+      for (const control of this.controls.values()) {
+        control.runtime.initialized = false;
+      }
+      return true;
+    }
+
+    findNodeNameLoose(model, wanted) {
+      const target = String(wanted || '').trim();
+      if (!target || !model) return null;
+
+      const tries = [target, target.toLowerCase(), target.toUpperCase()];
+      for (const candidate of tries) {
+        try {
+          const node = model.getNode(candidate);
+          if (node) return String(node.name || node._name || node.id || target);
+        } catch { }
+      }
+
+      try {
+        const wantedLow = target.toLowerCase();
+        const arr = model._runtime?.nodes || model._nodes || [];
+        for (const node of arr) {
+          const nodeName = String(node?.name || node?._name || node?.id || '').trim();
+          if (nodeName && nodeName.toLowerCase() === wantedLow) return nodeName;
+        }
+      } catch { }
+
+      return null;
+    }
+
+    ensurePartExists(partName) {
+      const aircraft = window.geofs?.aircraft?.instance;
+      const model = aircraft?.object3d?.model?._model;
+      if (!aircraft || !model) return null;
+
+      let part = aircraft.parts?.[partName] || null;
+      if (part?.object3d) return part;
+
+      const nodeName = this.findNodeNameLoose(model, partName);
+      if (!nodeName) return null;
+
+      const partDef = {
+        name: partName,
+        node: nodeName,
+        parent: 'root',
+        animations: []
+      };
+
+      aircraft.definition.parts = Array.isArray(aircraft.definition?.parts) ? aircraft.definition.parts : [];
+      if (!aircraft.definition.parts.some((p) => String(p?.name || '') === partName)) {
+        aircraft.definition.parts.push(partDef);
+      }
+
+      try {
+        aircraft.addParts([partDef], aircraft.aircraftRecord?.fullPath, aircraft.definition?.scale || 1, aircraft.definition?.orientation);
+      } catch {
+        return null;
+      }
+
+      part = aircraft.parts?.[partName] || null;
+      return part?.object3d ? part : null;
+    }
+
+    inferAxisFromValueKey(valueKey) {
+      const m = String(valueKey || '').match(/Rot([XYZ])Deg$/i);
+      return m ? m[1].toUpperCase() : null;
+    }
+
+    ensurePartAnimations(partName, channels) {
+      const part = this.ensurePartExists(partName);
+      if (!part?.object3d) return null;
+
+      part.animations = Array.isArray(part.animations) ? part.animations : [];
+
+      for (const valueKey of Object.keys(channels || {})) {
+        const axis = this.inferAxisFromValueKey(valueKey);
+        if (!axis) continue;
+
+        const existing = part.animations.some((a) => String(a?.value || '') === valueKey);
+        if (existing) continue;
+
+        const rotationMethod = part.object3d[`rotate${axis}`];
+        if (typeof rotationMethod !== 'function') continue;
+
+        part.animations.push({
+          name: valueKey,
+          type: 'rotate',
+          axis,
+          value: valueKey,
+          rotationMethod
+        });
+      }
+
+      return part;
+    }
+
+    ensureControlBindings(control) {
+      let allBound = true;
+
+      for (const partDef of control.parts || []) {
+        const channels = partDef?.channels || {};
+        const part = this.ensurePartAnimations(partDef?.partName, channels);
+        if (!part?.object3d) {
+          allBound = false;
+          continue;
+        }
+
+        for (const valueKey of Object.keys(channels)) {
+          const exists = (part.animations || []).some((a) => String(a?.value || '') === String(valueKey));
+          if (!exists) {
+            allBound = false;
+          }
+        }
+      }
+
+      return allBound;
+    }
+
+    buildTargetValues(control, state) {
+      const targetState = String(state || control.defaultState).toUpperCase();
+      const values = Object.create(null);
+
+      for (const partDef of control.parts) {
+        this.ensurePartAnimations(partDef?.partName, partDef?.channels);
+        const channels = partDef?.channels || {};
+        for (const [valueKey, byState] of Object.entries(channels)) {
+          const fallback = Number(byState?.[control.defaultState]);
+          const raw = byState?.[targetState];
+          const target = Number(raw);
+          values[valueKey] = Number.isFinite(target)
+            ? target
+            : (Number.isFinite(fallback) ? fallback : 0);
+        }
+      }
+
+      return values;
+    }
+
+    resolvePartMotion(partDef, targetState, control) {
+      const state = String(targetState || control?.defaultState || 'CLOSED').toUpperCase();
+      const cfg = partDef?.motion?.[state] || {};
+      const delayRaw = Number(cfg?.delayMs);
+      const durationRaw = Number(cfg?.durationMs);
+      const fallbackDuration = Math.max(1, Number(control?.durationMs) || 1);
+
+      return {
+        delayMs: Number.isFinite(delayRaw) ? Math.max(0, delayRaw) : 0,
+        durationMs: Number.isFinite(durationRaw) ? Math.max(1, durationRaw) : fallbackDuration
+      };
+    }
+
+    buildTimingByValueKey(control, targetState) {
+      const map = Object.create(null);
+
+      for (const partDef of control.parts || []) {
+        const channels = partDef?.channels || {};
+        const timing = this.resolvePartMotion(partDef, targetState, control);
+        for (const valueKey of Object.keys(channels)) {
+          map[valueKey] = {
+            delayMs: timing.delayMs,
+            durationMs: timing.durationMs
+          };
+        }
+      }
+
+      return map;
+    }
+
+    applyCurrentValues(runtime) {
+      for (const [valueKey, value] of Object.entries(runtime.currentValues || {})) {
+        window.geofs?.animation?.setValue?.(valueKey, Number(value) || 0);
+      }
+    }
+
+    updateControl(control, nowMs) {
+      const runtime = control.runtime;
+
+      const hasBindings = this.ensureControlBindings(control);
+      if (!hasBindings) {
+        runtime.initialized = false;
+        return;
+      }
+
+      const requestedState = this.getRequestedState(control);
+
+      if (!runtime.initialized) {
+        const initialTargetValues = this.buildTargetValues(control, requestedState);
+        const initialFromValues = Object.create(null);
+        for (const key of Object.keys(initialTargetValues || {})) {
+          initialFromValues[key] = this.getAnimationValue(key, initialTargetValues[key]);
+        }
+
+        runtime.initialized = true;
+        runtime.currentState = null;
+        runtime.targetState = requestedState;
+        runtime.timingByValueKey = this.buildTimingByValueKey(control, requestedState);
+        runtime.fromValues = { ...initialFromValues };
+        runtime.toValues = { ...initialTargetValues };
+        runtime.currentValues = { ...initialFromValues };
+        runtime.transitionStartMs = nowMs;
+
+        if (Math.max(0, Number(control.durationMs) || 0) === 0) {
+          runtime.currentState = requestedState;
+          runtime.currentValues = { ...runtime.toValues };
+          this.applyCurrentValues(runtime);
+        }
+        return;
+      }
+
+      if (requestedState !== runtime.targetState) {
+        runtime.fromValues = { ...runtime.currentValues };
+        runtime.toValues = this.buildTargetValues(control, requestedState);
+        runtime.timingByValueKey = this.buildTimingByValueKey(control, requestedState);
+        runtime.transitionStartMs = nowMs;
+        runtime.targetState = requestedState;
+      }
+
+      if (runtime.targetState !== runtime.currentState) {
+        const elapsedMs = Math.max(0, nowMs - runtime.transitionStartMs);
+        const keys = new Set([...Object.keys(runtime.fromValues || {}), ...Object.keys(runtime.toValues || {})]);
+        let allDone = true;
+
+        for (const key of keys) {
+          const from = Number(runtime.fromValues?.[key]);
+          const to = Number(runtime.toValues?.[key]);
+          const a = Number.isFinite(from) ? from : 0;
+          const b = Number.isFinite(to) ? to : 0;
+
+          const timing = runtime.timingByValueKey?.[key] || { delayMs: 0, durationMs: Math.max(1, Number(control.durationMs) || 1) };
+          const delayMs = Math.max(0, Number(timing?.delayMs) || 0);
+          const durationMs = Math.max(1, Number(timing?.durationMs) || 1);
+          const localT = Math.max(0, Math.min(1, (elapsedMs - delayMs) / durationMs));
+
+          runtime.currentValues[key] = a + (b - a) * localT;
+          if (localT < 1) allDone = false;
+        }
+
+        if (allDone) {
+          runtime.currentState = runtime.targetState;
+          runtime.currentValues = { ...runtime.toValues };
+        }
+      }
+
+      this.applyCurrentValues(runtime);
+    }
+
+    tick() {
+      if (!isF18Active()) {
+        this.removeProbeControls();
+        this.lastAircraftId = null;
+        for (const control of this.controls.values()) {
+          control.runtime.initialized = false;
+        }
+        return;
+      }
+
+      this.installProbeControls();
+
+      const aircraftId = String(window.geofs?.aircraft?.instance?.id ?? '');
+      if (aircraftId !== this.lastAircraftId) {
+        this.lastAircraftId = aircraftId;
+        for (const control of this.controls.values()) {
+          control.runtime.initialized = false;
+        }
+      }
+
+      const nowMs = Date.now();
+      for (const control of this.controls.values()) {
+        this.updateControl(control, nowMs);
+      }
+    }
+
+    restore() {
+      this.stopLoop();
+      this.removeProbeControls();
+      for (const control of this.controls.values()) {
+        control.runtime.initialized = false;
+      }
+      if (window.F18ControlModule) {
+        delete window.F18ControlModule;
+      }
+      this.installed = false;
+      this.lastAircraftId = null;
     }
   }
 
@@ -3495,7 +4869,8 @@
       MFD_TOP_BUTTON_VISUAL_SCALE: 2 / 3,
       MFD_CLICK_HALF_WIDTH: 0.36,
       MFD_CLICK_HALF_HEIGHT: 0.36,
-      MFD_PART_MODEL_URL: 'models/gauges/glassPanel/glassPanel.gltf'
+      MFD_PART_MODEL_URL: 'models/gauges/glassPanel/glassPanel.gltf',
+      defaultPageTitle: null
     };
 
     constructor(config = {}) {
@@ -3526,6 +4901,7 @@
       this.runtimeRefKey = `__mfdPartRef_${this.slotName}`;
       this.nodeClickHandlerInstalled = false;
       this.onNodeClickBound = this.onNodeClick.bind(this);
+      this.defaultPageApplied = false;
     }
 
     get partName() {
@@ -3554,6 +4930,19 @@
       if (!window[this.uiStateKey]) {
         window[this.uiStateKey] = new F18MfdUiState();
       }
+
+      if (!this.defaultPageApplied) {
+        const desiredTitle = String(this.cfg.defaultPageTitle || '').trim().toUpperCase();
+        const uiState = window[this.uiStateKey];
+        if (desiredTitle && Array.isArray(uiState?.pages)) {
+          const idx = uiState.pages.findIndex((p) => String(p?.title || '').trim().toUpperCase() === desiredTitle);
+          if (idx >= 0) {
+            uiState.setPage(idx);
+          }
+        }
+        this.defaultPageApplied = true;
+      }
+
       window.__mfdUiStates = window.__mfdUiStates || {};
       window.__mfdUiStates[this.slotName] = window[this.uiStateKey];
       if (!window.__mfdUiPagesCatalog) {
@@ -4184,14 +5573,17 @@
     restore() {
       this.removeNodeClickHandler();
       window[this.runtimeRefKey]?.remove?.();
+      this.defaultPageApplied = false;
     }
   }
 
   class F18MainPlugin {
     constructor() {
+      this.helperModule = new HelperModule();
       this.hudModule = new F18HudModule();
-      this.cameraModule = new CameraModule();
+      this.cameraModule = new CameraModule(this.helperModule);
       this.fmcModule = new FMCModule();
+      this.controlModule = new ControlModule(this.helperModule);
       this.mfdModules = [];
       this.mfdPickNodeHandlerInstalled = false;
       this.onMfdPickNodeClickBound = this.onMfdPickNodeClick.bind(this);
@@ -4206,14 +5598,16 @@
         name: 'RIGHT',
         position: [0.2167, 6.158, 0.584],
         rotation: [8, 0, 0],
-        scale: [0.29, 0.29, 0.285]
+        scale: [0.29, 0.29, 0.285],
+        defaultPageTitle: 'SYS'
       });
 
       this.addMfd({
         name: 'LEFT',
         position: [-0.2167, 6.158, 0.584],
         rotation: [8, 0, 0],
-        scale: [0.29, 0.29, 0.285]
+        scale: [0.29, 0.29, 0.285],
+        defaultPageTitle: 'CHK'
       });
     }
 
@@ -4324,6 +5718,11 @@
 
       this.cameraWatchTimer = setInterval(() => {
         this.cameraWatchTicks += 1;
+
+        // Self-heal camera modes when GeoFS reinitializes camera definitions
+        // after aircraft/model loading has completed.
+        this.cameraModule.ensureLoaded();
+
         const mode = window.geofs?.camera?.currentModeName;
         const aircraft = window.geofs?.aircraft?.instance;
         for (const mfdModule of this.mfdModules) {
@@ -4355,10 +5754,11 @@
       const hudReady = this.hudModule.ensureLoaded();
       const cameraReady = this.cameraModule.ensureLoaded();
       const fmcReady = this.fmcModule.ensureLoaded();
+      const controlsReady = this.controlModule.ensureLoaded();
       const mfdReady = this.mfdModules.every((mfdModule) => mfdModule.ensureLoaded());
       const pickNodeReady = this.ensureGlobalMfdPickNodeHandler();
       const nodeBridgeReady = this.ensureRunNodeClickBridge();
-      return Boolean(hudReady && cameraReady && fmcReady && mfdReady && pickNodeReady && nodeBridgeReady);
+      return Boolean(hudReady && cameraReady && fmcReady && controlsReady && mfdReady && pickNodeReady && nodeBridgeReady);
     }
 
     start() {
@@ -4385,6 +5785,7 @@
       this.removeGlobalMfdPickNodeHandler();
       this.removeRunNodeClickBridge();
       this.mfdModules.forEach((mfdModule) => mfdModule.restore());
+      this.controlModule.restore();
       this.fmcModule.restore();
       this.cameraModule.restore();
       this.hudModule.restore();
