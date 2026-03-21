@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoFS Flight Recorder
 // @namespace    https://github.com/ArjanKw/GeoFS-BlueAngels/
-// @version      1.1.9
+// @version      1.2.0
 // @description  Record and replay GeoFS flights with lightweight gear state playback.
 // @match        https://www.geo-fs.com/*
 // @grant        none
@@ -11,7 +11,7 @@
   'use strict';
 
   /* ---------- Config ---------- */
-  const VERSION = '1.1.9';
+  const VERSION = '1.2.0';
   const LS_CALLSIGN_KEY = 'FlightRecorder100Callsign';
   const IDB_NAME = 'FlightRecorder100DB';
   const IDB_VERSION = 1;
@@ -856,8 +856,151 @@
     } catch { }
   }
 
+  function getTrackPlaybackState(track) {
+    if (!track?._play?.playing) return 'IDLE';
+    if (track._play.paused) return 'PAUSED';
+    return 'PLAYING';
+  }
+
+  function resolveApiTracks(trackIds, options = {}) {
+    const playableOnly = options.playableOnly !== false;
+    const source = playableOnly ? tracks.filter((t) => t?.lla?.length) : tracks.slice();
+    if (trackIds == null) return source;
+
+    const ids = Array.isArray(trackIds) ? trackIds : [trackIds];
+    const idSet = new Set(ids.map((id) => String(id || '').trim()).filter(Boolean));
+    if (!idSet.size) return [];
+    return source.filter((t) => idSet.has(String(t?.id || '')));
+  }
+
+  function getPlaybackStateSnapshot(trackIds) {
+    const targetTracks = resolveApiTracks(trackIds, { playableOnly: true });
+    return {
+      state: playState,
+      tracks: targetTracks.map((tr) => ({
+        id: tr.id,
+        name: tr.name,
+        playbackState: getTrackPlaybackState(tr),
+        idx: Number(tr?._play?.idx || 0),
+        sampleCount: Number(tr?.lla?.length || 0),
+        sampleMs: Number(tr?.sampleMs || 0)
+      }))
+    };
+  }
+
+  function startPlaybackFromApi(trackIds) {
+    if (recordState !== 'IDLE') {
+      return { ok: false, reason: 'RECORDING_ACTIVE' };
+    }
+
+    const targetTracks = resolveApiTracks(trackIds, { playableOnly: true });
+    if (!targetTracks.length) {
+      return { ok: false, reason: 'NO_TRACKS' };
+    }
+
+    const t0 = now();
+    for (const tr of targetTracks) {
+      if (!tr._play.playing) startPlaybackAt(tr, t0);
+      else if (tr._play.paused) pausePlayback(tr, false);
+    }
+    updateUi();
+    return {
+      ok: true,
+      state: playState,
+      trackIds: targetTracks.map((t) => t.id)
+    };
+  }
+
+  function pausePlaybackFromApi(trackIds) {
+    const targetTracks = resolveApiTracks(trackIds, { playableOnly: true });
+    if (!targetTracks.length) {
+      return { ok: false, reason: 'NO_TRACKS' };
+    }
+
+    let changed = 0;
+    for (const tr of targetTracks) {
+      if (tr._play.playing && !tr._play.paused) {
+        pausePlayback(tr, true);
+        changed++;
+      }
+    }
+    updateUi();
+    return {
+      ok: changed > 0,
+      changed,
+      state: playState,
+      trackIds: targetTracks.map((t) => t.id)
+    };
+  }
+
+  function stopPlaybackFromApi(trackIds) {
+    const targetTracks = resolveApiTracks(trackIds, { playableOnly: true });
+    if (!targetTracks.length) {
+      return { ok: false, reason: 'NO_TRACKS' };
+    }
+
+    let changed = 0;
+    for (const tr of targetTracks) {
+      if (tr._play.playing) {
+        stopPlayback(tr);
+        changed++;
+      }
+    }
+    updateUi();
+    return {
+      ok: changed > 0,
+      changed,
+      state: playState,
+      trackIds: targetTracks.map((t) => t.id)
+    };
+  }
+
+  function startRecordingFromApi() {
+    if (recordState !== 'IDLE') {
+      return { ok: false, reason: 'ALREADY_RECORDING', state: recordState };
+    }
+    startRecordingWithSelectedPlaybacks();
+    return { ok: recordState === 'RECORDING', state: recordState };
+  }
+
+  function stopRecordingFromApi() {
+    if (recordState !== 'RECORDING') {
+      return { ok: false, reason: 'NOT_RECORDING', state: recordState };
+    }
+    stopRecording();
+    return { ok: true, state: recordState };
+  }
+
+  function getRecorderStateSnapshot(trackIds) {
+    return {
+      version: VERSION,
+      recordState,
+      playState,
+      recording: {
+        state: recordState,
+        isRecording: recordState === 'RECORDING'
+      },
+      playback: getPlaybackStateSnapshot(trackIds)
+    };
+  }
+
   function exposeDebugApi() {
     window.FlightRecorder = window.FlightRecorder || {};
+    window.FlightRecorder.api = {
+      getVersion: () => VERSION,
+      getState: (trackIds) => getRecorderStateSnapshot(trackIds),
+      recording: {
+        start: () => startRecordingFromApi(),
+        stop: () => stopRecordingFromApi(),
+        getState: () => ({ state: recordState, isRecording: recordState === 'RECORDING' })
+      },
+      playback: {
+        start: (trackIds) => startPlaybackFromApi(trackIds),
+        pause: (trackIds) => pausePlaybackFromApi(trackIds),
+        stop: (trackIds) => stopPlaybackFromApi(trackIds),
+        getState: (trackIds) => getPlaybackStateSnapshot(trackIds)
+      }
+    };
     window.FlightRecorder.debugApi = {
       version: VERSION,
       getPanelElement: () => document.getElementById(FR_PANEL_ID),
