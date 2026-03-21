@@ -12,15 +12,12 @@
 (function () {
   'use strict';
 
+  const VERSION = '1.3.0';
   const F18_AIRCRAFT_ID = '27';
+
+  const FLIGHT_RECORDER_MIN_VERSION = '1.2.0';
   const RAD_TO_DEG = 180 / Math.PI;
   const CAMERA_TO_HUD_DISTANCE_M = 0.92;
-  const HUD_PHYSICAL_HEIGHT_M = 0.30;
-  const DEFAULT_HUD_CAMERA_Z = 0.925;
-  const HUD_PARALLAX_GAIN = 1.65;
-  const CAMERA_STEP_Z = 0.005;
-  const CAMERA_UP_BUTTON_ID = 'f18-hud-camera-up';
-  const CAMERA_DOWN_BUTTON_ID = 'f18-hud-camera-down';
   const PROBE_OPEN_BUTTON_ID = 'f18-probe-open';
   const PROBE_LABEL_BUTTON_ID = 'f18-probe-label';
   const PROBE_CLOSE_BUTTON_ID = 'f18-probe-close';
@@ -36,7 +33,213 @@
     mainPlugin: null
   };
 
-  let wpnLoadout = {
+  class F18MainPlugin {
+    // Creates and wires all runtime modules used by the addon.
+    constructor() {
+      this.helperModule = new HelperModule();
+      this.hudModule = new F18HudModule();
+      this.cameraModule = new CameraModule(this.helperModule);
+      this.fmcModule = new FMCModule();
+      this.controlModule = new ControlModule(this.helperModule);
+      this.mfdModules = [];
+      this.mfdPickNodeHandlerInstalled = false;
+      this.onMfdPickNodeClickBound = this.onMfdPickNodeClick.bind(this);
+      this.runNodeBridgeInstalled = false;
+      this.originalRunNodeClickHandlers = null;
+      this.timer = null;
+      this.cameraWatchTimer = null;
+      this.cameraWatchTicks = 0;
+      this.lastMfdRecoveryTick = -999;
+
+      this.addMfd({
+        name: 'RIGHT',
+        position: [0.2167, 6.158, 0.584],
+        rotation: [8, 0, 0],
+        scale: [0.29, 0.29, 0.285],
+        defaultPageTitle: 'SYS'
+      });
+
+      this.addMfd({
+        name: 'LEFT',
+        position: [-0.2160, 6.158, 0.584],
+        rotation: [8, 0, 0],
+        scale: [0.29, 0.29, 0.285],
+        defaultPageTitle: 'CHK'
+      });
+    }
+
+    // Adds a new MFD module instance to the active plugin.
+    addMfd(config) {
+      const module = new MfdModule(config);
+      this.mfdModules.push(module);
+      return module;
+    }
+
+    // Resolves the MFD instance closest to a screen click position.
+    getMfdAtScreenPoint(x, y) {
+      let targetModule = null;
+      let bestScore = Infinity;
+
+      for (const mfdModule of this.mfdModules) {
+        const score = mfdModule.getPickScore(x, y);
+        if (score < bestScore) {
+          bestScore = score;
+          targetModule = mfdModule;
+        }
+      }
+
+      return Number.isFinite(bestScore) ? targetModule : null;
+    }
+
+    // Routes pick-node clicks to the correct MFD interaction handler.
+    onMfdPickNodeClick(nodeName) {
+      if (nodeName !== 'glassPanel') {
+        for (const mfdModule of this.mfdModules) {
+          if (mfdModule.onNodeClick(nodeName)) {
+            return;
+          }
+        }
+        return;
+      }
+
+      const click = this.helperModule.getClickScreenCoords();
+      if (!click) return;
+
+      const targetModule = this.getMfdAtScreenPoint(click.x, click.y);
+      targetModule?.handlePickClick(click);
+    }
+
+    // Installs the global glassPanel click handler used by MFD picking.
+    ensureGlobalMfdPickNodeHandler() {
+      const controlsApi = window.controls;
+      if (!controlsApi?.addNodeClickHandler) return false;
+      controlsApi.addNodeClickHandler('glassPanel', this.onMfdPickNodeClickBound);
+      this.mfdPickNodeHandlerInstalled = true;
+      return true;
+    }
+
+    // Wraps GeoFS node click dispatch so MFD fallback picking remains active.
+    ensureRunNodeClickBridge() {
+      const controlsApi = window.controls;
+      if (!controlsApi?.runNodeClickHandlers) return false;
+      if (this.runNodeBridgeInstalled) return true;
+
+      this.originalRunNodeClickHandlers = controlsApi.runNodeClickHandlers.bind(controlsApi);
+      controlsApi.runNodeClickHandlers = (nodeName) => {
+        this.originalRunNodeClickHandlers?.(nodeName);
+
+        // Fallback only: avoid double-processing nodes that already have a direct handler.
+        if (controlsApi?.nodeClickHandlers?.[nodeName]) {
+          return;
+        }
+
+        this.onMfdPickNodeClick(nodeName);
+      };
+
+      this.runNodeBridgeInstalled = true;
+      return true;
+    }
+
+    removeGlobalMfdPickNodeHandler() {
+      const controlsApi = window.controls;
+      if (!this.mfdPickNodeHandlerInstalled || !controlsApi?.nodeClickHandlers) return;
+      delete controlsApi.nodeClickHandlers.glassPanel;
+      this.mfdPickNodeHandlerInstalled = false;
+    }
+
+    removeRunNodeClickBridge() {
+      const controlsApi = window.controls;
+      if (!this.runNodeBridgeInstalled || !controlsApi) return;
+      if (this.originalRunNodeClickHandlers) {
+        controlsApi.runNodeClickHandlers = this.originalRunNodeClickHandlers;
+      }
+      this.originalRunNodeClickHandlers = null;
+      this.runNodeBridgeInstalled = false;
+    }
+
+    startCameraWatch() {
+      if (this.cameraWatchTimer) {
+        return;
+      }
+
+      this.cameraWatchTimer = setInterval(() => {
+        this.cameraWatchTicks += 1;
+
+        // Self-heal camera modes when GeoFS reinitializes camera definitions
+        // after aircraft/model loading has completed.
+        this.cameraModule.ensureLoaded();
+
+        const mode = window.geofs?.camera?.currentModeName;
+        const aircraft = window.geofs?.aircraft?.instance;
+        for (const mfdModule of this.mfdModules) {
+          const hasMfdRef = Boolean(addonRuntime.mfdRuntimeRefs[mfdModule.slotName]);
+          const hasMfdPart = Boolean(aircraft?.parts?.[mfdModule.partName]);
+
+          if (mode === 'cockpit' && !hasMfdPart && (this.cameraWatchTicks - this.lastMfdRecoveryTick) >= 4) {
+            this.lastMfdRecoveryTick = this.cameraWatchTicks;
+
+            if (hasMfdRef) {
+              delete addonRuntime.mfdRuntimeRefs[mfdModule.slotName];
+            }
+
+            mfdModule.ensureLoaded();
+          }
+        }
+      }, 250);
+    }
+
+    stopCameraWatch() {
+      if (!this.cameraWatchTimer) {
+        return;
+      }
+      clearInterval(this.cameraWatchTimer);
+      this.cameraWatchTimer = null;
+    }
+
+    tryInstall() {
+      const hudReady = this.hudModule.ensureLoaded();
+      const cameraReady = this.cameraModule.ensureLoaded();
+      const fmcReady = this.fmcModule.ensureLoaded();
+      const controlsReady = this.controlModule.ensureLoaded();
+      const mfdReady = this.mfdModules.every((mfdModule) => mfdModule.ensureLoaded());
+      const pickNodeReady = this.ensureGlobalMfdPickNodeHandler();
+      const nodeBridgeReady = this.ensureRunNodeClickBridge();
+      return Boolean(hudReady && cameraReady && fmcReady && controlsReady && mfdReady && pickNodeReady && nodeBridgeReady);
+    }
+
+    start() {
+      if (this.timer) {
+        return;
+      }
+      this.startCameraWatch();
+
+      this.timer = setInterval(() => {
+        if (this.tryInstall()) {
+          clearInterval(this.timer);
+          this.timer = null;
+        }
+      }, 400);
+    }
+
+    stop() {
+      if (this.timer) {
+        clearInterval(this.timer);
+        this.timer = null;
+      }
+      stopWpnGunFireTimer();
+      this.stopCameraWatch();
+      this.removeGlobalMfdPickNodeHandler();
+      this.removeRunNodeClickBridge();
+      this.mfdModules.forEach((mfdModule) => mfdModule.restore());
+      this.controlModule.restore();
+      this.fmcModule.restore();
+      this.cameraModule.restore();
+      this.hudModule.restore();
+    }
+  }
+
+  class WeaponModule {
+    static LOADOUT_BY_CONFIG = {
     'A/A': {
         gun: 412,
         left: {
@@ -338,27 +541,29 @@
             }
         }
     },
-    
+
+    };
+
+    static STATION_RENDER_ORDER = [
+      { side: 'center', station: 'gun' },
+      { side: 'left', station: 'wingtip' },
+      { side: 'left', station: 'hardpoint1' },
+      { side: 'left', station: 'hardpoint2' },
+      { side: 'right', station: 'hardpoint2' },
+      { side: 'right', station: 'hardpoint1' },
+      { side: 'right', station: 'wingtip' }
+    ];
+
+    static FIRE_BLINK_INTERVAL_MS = 500;
+    static FIRE_BLINK_PHASES = 4;
+    static GUN_FIRE_RATE_RPS = 66;
+    static GUN_ROUNDS_PER_BURST = 100;
+    static GUN_FIRE_TICK_MS = Math.max(1, Math.round(1000 / WeaponModule.GUN_FIRE_RATE_RPS));
+    static REARM_DURATION_MS = 60_000;
   }
 
-  const WPN_STATION_RENDER_ORDER = [
-    { side: 'center', station: 'gun' },
-    { side: 'left', station: 'wingtip' },
-    { side: 'left', station: 'hardpoint1' },
-    { side: 'left', station: 'hardpoint2' },
-    { side: 'right', station: 'hardpoint2' },
-    { side: 'right', station: 'hardpoint1' },
-    { side: 'right', station: 'wingtip' }
-  ];
-
   const wpnSelectedWeaponByMode = {};
-  const WPN_FIRE_BLINK_INTERVAL_MS = 500;
-  const WPN_FIRE_BLINK_PHASES = 4;
-  const WPN_GUN_FIRE_RATE_RPS = 66;
-  const WPN_GUN_ROUNDS_PER_BURST = 100;
-  const WPN_GUN_FIRE_TICK_MS = Math.max(1, Math.round(1000 / WPN_GUN_FIRE_RATE_RPS));
-  const WPN_REARM_DURATION_MS = 60_000;
-  const wpnLoadoutTemplates = JSON.parse(JSON.stringify(wpnLoadout));
+  const wpnLoadoutTemplates = JSON.parse(JSON.stringify(WeaponModule.LOADOUT_BY_CONFIG));
   let wpnCurrentLoadout = JSON.parse(JSON.stringify(
     wpnLoadoutTemplates?.['A/A']
     ?? Object.values(wpnLoadoutTemplates ?? {})[0]
@@ -368,7 +573,7 @@
     active: false,
     startTime: 0,
     progress: 0,
-    durationMs: WPN_REARM_DURATION_MS,
+    durationMs: WeaponModule.REARM_DURATION_MS,
     config: 'A/A',
     status: 'IDLE',
     lastSavedPercent: -1
@@ -379,8 +584,6 @@
     mode: null,
     roundsRemainingInBurst: 0
   };
-
-  const FLIGHT_RECORDER_MIN_VERSION = '1.2.0';
 
   function parseSemver(version) {
     const value = String(version ?? '').trim();
@@ -743,7 +946,7 @@
     }
 
     const elapsed = Date.now() - wpnRearmState.startTime;
-    const duration = Math.max(1, Number.isFinite(wpnRearmState.durationMs) ? wpnRearmState.durationMs : WPN_REARM_DURATION_MS);
+    const duration = Math.max(1, Number.isFinite(wpnRearmState.durationMs) ? wpnRearmState.durationMs : WeaponModule.REARM_DURATION_MS);
     const progress = Math.max(0, Math.min(1, elapsed / duration));
 
     wpnRearmState.progress = progress;
@@ -829,12 +1032,12 @@
       return;
     }
 
-    wpnGunFireState.timerId = setTimeout(processWpnGunFireTick, WPN_GUN_FIRE_TICK_MS);
+    wpnGunFireState.timerId = setTimeout(processWpnGunFireTick, WeaponModule.GUN_FIRE_TICK_MS);
   }
 
   function ensureWpnGunFireTimerRunning() {
     if (wpnGunFireState.timerId) return;
-    wpnGunFireState.timerId = setTimeout(processWpnGunFireTick, WPN_GUN_FIRE_TICK_MS);
+    wpnGunFireState.timerId = setTimeout(processWpnGunFireTick, WeaponModule.GUN_FIRE_TICK_MS);
   }
 
   function startWpnGunFire(mode, modeLoadout) {
@@ -846,7 +1049,7 @@
 
     wpnGunFireState.mode = mode;
 
-    wpnGunFireState.roundsRemainingInBurst += WPN_GUN_ROUNDS_PER_BURST;
+    wpnGunFireState.roundsRemainingInBurst += WeaponModule.GUN_ROUNDS_PER_BURST;
     if (wasIdle) {
       processWpnGunFireTick();
     } else {
@@ -878,14 +1081,14 @@
     if (!wpnFireFlash.startTime) return false;
 
     const elapsed = Date.now() - wpnFireFlash.startTime;
-    const totalDuration = WPN_FIRE_BLINK_INTERVAL_MS * WPN_FIRE_BLINK_PHASES;
+    const totalDuration = WeaponModule.FIRE_BLINK_INTERVAL_MS * WeaponModule.FIRE_BLINK_PHASES;
     if (elapsed >= totalDuration) {
       wpnFireFlash.startTime = 0;
       wpnFireFlash.label = 'FIRE';
       return false;
     }
 
-    const phase = Math.floor(elapsed / WPN_FIRE_BLINK_INTERVAL_MS);
+    const phase = Math.floor(elapsed / WeaponModule.FIRE_BLINK_INTERVAL_MS);
     return phase % 2 === 0;
   }
 
@@ -967,12 +1170,12 @@
 
     const current = ensureWpnSelectedWeapon(mode, modeLoadout);
     const currentIndex = current
-      ? Math.max(0, WPN_STATION_RENDER_ORDER.findIndex((s) => s.side === current.side && s.station === current.station))
+      ? Math.max(0, WeaponModule.STATION_RENDER_ORDER.findIndex((s) => s.side === current.side && s.station === current.station))
       : -1;
 
-    for (let step = 1; step <= WPN_STATION_RENDER_ORDER.length; step++) {
-      const index = (currentIndex + step) % WPN_STATION_RENDER_ORDER.length;
-      const candidate = WPN_STATION_RENDER_ORDER[index];
+    for (let step = 1; step <= WeaponModule.STATION_RENDER_ORDER.length; step++) {
+      const index = (currentIndex + step) % WeaponModule.STATION_RENDER_ORDER.length;
+      const candidate = WeaponModule.STATION_RENDER_ORDER[index];
       if (!canUseStationForMode(mode, modeLoadout, candidate.side, candidate.station, minimumQuantity)) continue;
       wpnSelectedWeaponByMode[mode] = { side: candidate.side, station: candidate.station };
       saveWpnStateToStorage();
@@ -992,12 +1195,12 @@
     if (!currentLoadType) return false;
     if (!isModeCompatibleStation(mode, selected.station, currentStation)) return false;
 
-    const selectedIndex = WPN_STATION_RENDER_ORDER.findIndex((s) => s.side === selected.side && s.station === selected.station);
+    const selectedIndex = WeaponModule.STATION_RENDER_ORDER.findIndex((s) => s.side === selected.side && s.station === selected.station);
     if (selectedIndex < 0) return false;
 
-    for (let step = 1; step <= WPN_STATION_RENDER_ORDER.length; step++) {
-      const index = (selectedIndex + step) % WPN_STATION_RENDER_ORDER.length;
-      const candidate = WPN_STATION_RENDER_ORDER[index];
+    for (let step = 1; step <= WeaponModule.STATION_RENDER_ORDER.length; step++) {
+      const index = (selectedIndex + step) % WeaponModule.STATION_RENDER_ORDER.length;
+      const candidate = WeaponModule.STATION_RENDER_ORDER[index];
       if (!candidate?.station || !String(candidate.station).startsWith('hardpoint')) continue;
 
       const candidateStation = modeLoadout?.[candidate.side]?.[candidate.station];
@@ -1247,7 +1450,7 @@
 
   function getCurrentCameraZ() {
     const mode = window.geofs?.camera?.modes?.[1];
-    const baseZ = mode?.position?.[2] ?? DEFAULT_HUD_CAMERA_Z;
+    const baseZ = mode?.position?.[2] ?? CameraModule.DEFAULT_HUD_CAMERA_Z;
     const offsetZ = mode?.offsets?.current?.[2] ?? 0;
     return baseZ + offsetZ;
   }
@@ -1256,20 +1459,45 @@
     const mode = window.geofs?.camera?.modes?.[1];
     if (!mode?.position) return;
     if (!Number.isFinite(mode.position[2])) {
-      mode.position[2] = DEFAULT_HUD_CAMERA_Z;
+      mode.position[2] = CameraModule.DEFAULT_HUD_CAMERA_Z;
     }
     mode.position[2] += deltaZ;
   }
 
   class HelperModule {
+    // Creates helper state for runtime UI controls.
     constructor() {
       this.padControls = new Map();
     }
 
+    // Returns normalized screen click coordinates from the GeoFS mouse state.
+    static getClickScreenCoords() {
+      const mouse = window.controls?.mouse;
+      if (!mouse) return null;
+
+      const rawX = mouse.lastX ?? mouse.originalX;
+      const rawY = mouse.lastY ?? mouse.originalY;
+      const oX = mouse.oX ?? 0;
+      const oY = mouse.oY ?? 0;
+      if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) return null;
+
+      return {
+        x: rawX - oX,
+        y: rawY - oY
+      };
+    }
+
+    // Returns normalized screen click coordinates from the current frame.
+    getClickScreenCoords() {
+      return HelperModule.getClickScreenCoords();
+    }
+
+    // Gets the main GeoFS pad container element.
     getPadsContainer() {
       return document.querySelector('.geofs-pads-container');
     }
 
+    // Builds a styled control-pad button element.
     createPadButton(options) {
       const cfg = options ?? {};
       const label = String(cfg.label ?? 'BTN');
@@ -1320,6 +1548,7 @@
       return outer;
     }
 
+    // Inserts or replaces a pad control element in the GeoFS UI.
     installPadControl(options) {
       const cfg = options ?? {};
       const id = String(cfg.id ?? '').trim();
@@ -1343,6 +1572,7 @@
       return true;
     }
 
+    // Removes a previously installed pad control by id.
     removePadControl(id) {
       const key = String(id ?? '').trim();
       if (!key) return;
@@ -2141,13 +2371,13 @@
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.font = `bold ${Math.round(h * 0.048)}px monospace`;
-            
+
             if (selectedWeapon?.station === 'gun') {
               const boxW = w * 0.12;
               const boxH = h * 0.06;
               ctx.strokeRect(cx - boxW * 0.5, topY - boxH * 0.5, boxW, boxH);
             }
-            
+
             ctx.fillText(String(gunRounds), cx, topY);
             ctx.beginPath();
             ctx.moveTo(leftRootX, topY);
@@ -2225,6 +2455,116 @@
               ctx.fillText('Rearm with Engine OFF, Master OFF on ground.', cx, rearmTextY);
             }
 
+            ctx.restore();
+          }
+        },
+        {
+          title: 'AUX1',
+          leftButtons: [],
+          rightButtons: [],
+          lines: [],
+          render: (renderer, renderContext) => {
+            const ctx = renderContext?.ctx ?? renderer?.canvasAPI?.context;
+            const w = renderContext?.w ?? renderer?.canvasAPI?.canvas?.width ?? 512;
+            const h = renderContext?.h ?? renderer?.canvasAPI?.canvas?.height ?? 512;
+            const color = renderContext?.color ?? '#00ff66';
+            if (!ctx) return;
+
+            ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.fillStyle = color;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = `bold ${Math.round(h * 0.06)}px monospace`;
+            ctx.fillText('AUX PAGE 1', w * 0.5, h * 0.5);
+            ctx.restore();
+          }
+        },
+        {
+          title: 'AUX2',
+          leftButtons: [],
+          rightButtons: [],
+          lines: [],
+          render: (renderer, renderContext) => {
+            const ctx = renderContext?.ctx ?? renderer?.canvasAPI?.context;
+            const w = renderContext?.w ?? renderer?.canvasAPI?.canvas?.width ?? 512;
+            const h = renderContext?.h ?? renderer?.canvasAPI?.canvas?.height ?? 512;
+            const color = renderContext?.color ?? '#00ff66';
+            if (!ctx) return;
+
+            ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.fillStyle = color;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = `bold ${Math.round(h * 0.06)}px monospace`;
+            ctx.fillText('AUX PAGE 2', w * 0.5, h * 0.5);
+            ctx.restore();
+          }
+        },
+        {
+          title: 'AUX3',
+          leftButtons: [],
+          rightButtons: [],
+          lines: [],
+          render: (renderer, renderContext) => {
+            const ctx = renderContext?.ctx ?? renderer?.canvasAPI?.context;
+            const w = renderContext?.w ?? renderer?.canvasAPI?.canvas?.width ?? 512;
+            const h = renderContext?.h ?? renderer?.canvasAPI?.canvas?.height ?? 512;
+            const color = renderContext?.color ?? '#00ff66';
+            if (!ctx) return;
+
+            ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.fillStyle = color;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = `bold ${Math.round(h * 0.06)}px monospace`;
+            ctx.fillText('AUX PAGE 3', w * 0.5, h * 0.5);
+            ctx.restore();
+          }
+        },
+        {
+          title: 'AUX4',
+          leftButtons: [],
+          rightButtons: [],
+          lines: [],
+          render: (renderer, renderContext) => {
+            const ctx = renderContext?.ctx ?? renderer?.canvasAPI?.context;
+            const w = renderContext?.w ?? renderer?.canvasAPI?.canvas?.width ?? 512;
+            const h = renderContext?.h ?? renderer?.canvasAPI?.canvas?.height ?? 512;
+            const color = renderContext?.color ?? '#00ff66';
+            if (!ctx) return;
+
+            ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.fillStyle = color;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = `bold ${Math.round(h * 0.06)}px monospace`;
+            ctx.fillText('AUX PAGE 4', w * 0.5, h * 0.5);
+            ctx.restore();
+          }
+        },
+        {
+          title: 'AUX5',
+          leftButtons: [],
+          rightButtons: [],
+          lines: [],
+          render: (renderer, renderContext) => {
+            const ctx = renderContext?.ctx ?? renderer?.canvasAPI?.context;
+            const w = renderContext?.w ?? renderer?.canvasAPI?.canvas?.width ?? 512;
+            const h = renderContext?.h ?? renderer?.canvasAPI?.canvas?.height ?? 512;
+            const color = renderContext?.color ?? '#00ff66';
+            if (!ctx) return;
+
+            ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.fillStyle = color;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = `bold ${Math.round(h * 0.06)}px monospace`;
+            ctx.fillText('AUX PAGE 5', w * 0.5, h * 0.5);
             ctx.restore();
           }
         }
@@ -2449,18 +2789,35 @@
         height: h
       };
 
+      const maxTabButtons = 5;
       const tabY = frame.top + h * 0.022;
+      const bottomTabY = frame.top + h * 0.92;
       const tabW = w * 0.14;
       const tabH = h * 0.06;
       const tabGap = w * 0.03;
-      const tabsTotalW = this.pages.length * tabW + (this.pages.length - 1) * tabGap;
+      const topPages = this.pages.slice(0, maxTabButtons);
+      const bottomPages = this.pages.slice(maxTabButtons, maxTabButtons * 2);
+      const topTabCount = topPages.length;
+      const bottomTabCount = bottomPages.length;
+      const tabsTotalW = topTabCount * tabW + Math.max(0, topTabCount - 1) * tabGap;
       const tabStartX = frame.left + (frame.width - tabsTotalW) * 0.5;
+      const bottomTabsTotalW = bottomTabCount * tabW + Math.max(0, bottomTabCount - 1) * tabGap;
+      const bottomTabStartX = frame.left + (frame.width - bottomTabsTotalW) * 0.5;
 
-      const tabs = this.pages.map((p, i) => ({
+      const topTabs = topPages.map((p, i) => ({
         index: i,
         title: p.title,
         x: tabStartX + i * (tabW + tabGap) - w * 0.012,
         y: tabY - h * 0.01,
+        w: tabW + w * 0.024,
+        h: tabH + h * 0.02
+      }));
+
+      const bottomTabs = bottomPages.map((p, i) => ({
+        index: i + maxTabButtons,
+        title: p.title,
+        x: bottomTabStartX + i * (tabW + tabGap) - w * 0.012,
+        y: bottomTabY - h * 0.01,
         w: tabW + w * 0.024,
         h: tabH + h * 0.02
       }));
@@ -2477,7 +2834,7 @@
         rightButtons.push({ index: i, x: frame.left + frame.width - w * 0.428, y, w: w * 0.40, h: rowH });
       }
 
-      return { frame, tabs, leftButtons, rightButtons };
+      return { frame, topTabs, bottomTabs, leftButtons, rightButtons };
     }
 
     handleLocalClick(nx, ny) {
@@ -2491,7 +2848,14 @@
       const page = this.getCurrentPage();
       const layout = this.getLayout(w, h);
 
-      for (const tab of layout.tabs) {
+      for (const tab of layout.topTabs) {
+        if (x >= tab.x && x <= tab.x + tab.w && y >= tab.y && y <= tab.y + tab.h) {
+          this.setPage(tab.index);
+          return true;
+        }
+      }
+
+      for (const tab of layout.bottomTabs) {
         if (x >= tab.x && x <= tab.x + tab.w && y >= tab.y && y <= tab.y + tab.h) {
           this.setPage(tab.index);
           return true;
@@ -2538,7 +2902,14 @@
       ctx.textBaseline = 'middle';
       ctx.font = `bold ${Math.round(h * 0.045)}px monospace`;
 
-      for (const tab of layout.tabs) {
+      for (const tab of layout.topTabs) {
+        ctx.fillText(tab.title, tab.x + tab.w / 2, tab.y + tab.h / 2);
+        if (tab.index === this.pageIndex) {
+          ctx.strokeRect(tab.x - 4, tab.y - 2, tab.w + 8, tab.h + 4);
+        }
+      }
+
+      for (const tab of layout.bottomTabs) {
         ctx.fillText(tab.title, tab.x + tab.w / 2, tab.y + tab.h / 2);
         if (tab.index === this.pageIndex) {
           ctx.strokeRect(tab.x - 4, tab.y - 2, tab.w + 8, tab.h + 4);
@@ -2732,14 +3103,14 @@
   // Returns pixelsPerDeg (vertical), pixelsPerDegX (horizontal) and
   // cameraOffsetPx (vertical eye-height parallax correction in pixels).
   function computeHudGeometry(w, h) {
-    const hudVerticalFovDeg = 2 * Math.atan((HUD_PHYSICAL_HEIGHT_M / 2) / CAMERA_TO_HUD_DISTANCE_M) * RAD_TO_DEG;
+    const hudVerticalFovDeg = 2 * Math.atan((F18HudModule.HUD_PHYSICAL_HEIGHT_M / 2) / CAMERA_TO_HUD_DISTANCE_M) * RAD_TO_DEG;
     const pixelsPerDeg = h / hudVerticalFovDeg;
-    const hudPhysicalWidthM = HUD_PHYSICAL_HEIGHT_M * (w / h);
+    const hudPhysicalWidthM = F18HudModule.HUD_PHYSICAL_HEIGHT_M * (w / h);
     const hudHorizontalFovDeg = 2 * Math.atan((hudPhysicalWidthM / 2) / CAMERA_TO_HUD_DISTANCE_M) * RAD_TO_DEG;
     const pixelsPerDegX = w / hudHorizontalFovDeg;
-    const cameraDeltaZ = getCurrentCameraZ() - DEFAULT_HUD_CAMERA_Z;
+    const cameraDeltaZ = getCurrentCameraZ() - CameraModule.DEFAULT_HUD_CAMERA_Z;
     const cameraOffsetDeg = Math.atan2(cameraDeltaZ, CAMERA_TO_HUD_DISTANCE_M) * RAD_TO_DEG;
-    const cameraOffsetPx = cameraOffsetDeg * pixelsPerDeg * HUD_PARALLAX_GAIN;
+    const cameraOffsetPx = cameraOffsetDeg * pixelsPerDeg * F18HudModule.HUD_PARALLAX_GAIN;
     return { pixelsPerDeg, pixelsPerDegX, cameraOffsetPx };
   }
 
@@ -3673,11 +4044,16 @@
   // ---------------------------------------------------------------------------
 
   class F18HudModule {
+    static HUD_PHYSICAL_HEIGHT_M = 0.30;
+    static HUD_PARALLAX_GAIN = 1.65;
+
+    // Prepares HUD module state and renderer references.
     constructor() {
       this.originalRenderer = null;
       this.installed = false;
     }
 
+    // Installs the custom HUD renderer while preserving the original one.
     install() {
       if (this.installed) {
         return true;
@@ -3701,6 +4077,7 @@
       return true;
     }
 
+    // Ensures the HUD renderer is installed and active.
     ensureLoaded() {
       if (!this.install()) {
         return false;
@@ -3708,6 +4085,7 @@
       return true;
     }
 
+    // Restores the original HUD renderer and clears install state.
     restore() {
       if (this.originalRenderer && window.instruments?.renderers) {
         window.instruments.renderers.genericHUD = this.originalRenderer;
@@ -3718,6 +4096,11 @@
   }
 
   class CameraModule {
+    static DEFAULT_HUD_CAMERA_Z = 0.925;
+    static CAMERA_STEP_Z = 0.005;
+    static CAMERA_UP_BUTTON_ID = 'f18-hud-camera-up';
+    static CAMERA_DOWN_BUTTON_ID = 'f18-hud-camera-down';
+
     static CAMERA_MODE_DEFINITIONS = {
       6: {
         distance: 0,
@@ -3905,8 +4288,8 @@
       wrapper.style.gap = '4px';
       wrapper.style.alignItems = 'flex-start';
 
-      const upButton = this.createCameraPadButton('UP', CAMERA_UP_BUTTON_ID, () => {
-        adjustHudCameraZ(CAMERA_STEP_Z);
+      const upButton = this.createCameraPadButton('UP', CameraModule.CAMERA_UP_BUTTON_ID, () => {
+        adjustHudCameraZ(CameraModule.CAMERA_STEP_Z);
       });
       const seatLabelButton = this.helperModule?.createPadButton({
         label: 'SEAT',
@@ -3923,8 +4306,8 @@
           fontWeight: '700'
         }
       });
-      const downButton = this.createCameraPadButton('DOWN', CAMERA_DOWN_BUTTON_ID, () => {
-        adjustHudCameraZ(-CAMERA_STEP_Z);
+      const downButton = this.createCameraPadButton('DOWN', CameraModule.CAMERA_DOWN_BUTTON_ID, () => {
+        adjustHudCameraZ(-CameraModule.CAMERA_STEP_Z);
       });
 
       if (!upButton || !seatLabelButton || !downButton) return false;
@@ -4832,20 +5215,25 @@
   class MfdModule {
     static DEFAULTS = {
       MFD_TOP_BUTTON_COUNT: 5,
+      MFD_BOTTOM_BUTTON_COUNT: 5,
       MFD_LEFT_BUTTON_COUNT: 5,
       MFD_RIGHT_BUTTON_COUNT: 5,
-      MFD_TOP_BUTTON_START_X: -0.049,
-      MFD_TOP_BUTTON_STEP_X: 0.0225,
+      MFD_TOP_BUTTON_START_X: -0.048,
+      MFD_TOP_BUTTON_STEP_X: 0.023,
       MFD_TOP_BUTTON_Y: -0.01,
       MFD_TOP_BUTTON_Z: 0.092,
-      MFD_LEFT_BUTTON_X: -0.0865,
+      MFD_BOTTOM_BUTTON_START_X: -0.048,
+      MFD_BOTTOM_BUTTON_STEP_X: 0.023,
+      MFD_BOTTOM_BUTTON_Y: -0.01,
+      MFD_BOTTOM_BUTTON_Z: -0.08,
+      MFD_LEFT_BUTTON_X: -0.085,
       MFD_LEFT_BUTTON_Y: -0.01,
-      MFD_LEFT_BUTTON_START_Z: 0.054,
-      MFD_LEFT_BUTTON_STEP_Z: 0.025,
+      MFD_LEFT_BUTTON_START_Z: 0.05,
+      MFD_LEFT_BUTTON_STEP_Z: 0.023,
       MFD_RIGHT_BUTTON_X: 0.0835,
       MFD_RIGHT_BUTTON_Y: -0.01,
-      MFD_RIGHT_BUTTON_START_Z: 0.054,
-      MFD_RIGHT_BUTTON_STEP_Z: 0.025,
+      MFD_RIGHT_BUTTON_START_Z: 0.05,
+      MFD_RIGHT_BUTTON_STEP_Z: 0.023,
       MFD_TOP_BUTTON_VISUAL_SCALE: 2 / 3,
       MFD_CLICK_HALF_WIDTH: 0.36,
       MFD_CLICK_HALF_HEIGHT: 0.36,
@@ -4873,6 +5261,7 @@
         MFD_TOP_BUTTON_RENDERER_NAME: `mfdTopButtonRenderer${this.slotName}`,
         MFD_TOP_BUTTON_INCLUDE_KEY_BASE: `mfd-top-button-include-${this.slotNameLower}`,
         MFD_TOP_BUTTON_PART_NAME_BASE: `mfdTopButtonPart${this.slotName}_`,
+        MFD_BOTTOM_BUTTON_PART_NAME_BASE: `mfdBottomButtonPart${this.slotName}_`,
         MFD_LEFT_BUTTON_PART_NAME_BASE: `mfdLeftButtonPart${this.slotName}_`,
         MFD_RIGHT_BUTTON_PART_NAME_BASE: `mfdRightButtonPart${this.slotName}_`
       };
@@ -4894,12 +5283,17 @@
       return `${this.names.MFD_LEFT_BUTTON_PART_NAME_BASE}${index}`;
     }
 
+    getBottomButtonPartName(index) {
+      return `${this.names.MFD_BOTTOM_BUTTON_PART_NAME_BASE}${index}`;
+    }
+
     getRightButtonPartName(index) {
       return `${this.names.MFD_RIGHT_BUTTON_PART_NAME_BASE}${index}`;
     }
 
     getButtonPartName(side, index) {
       if (side === 'top') return this.getTopButtonPartName(index);
+      if (side === 'bottom') return this.getBottomButtonPartName(index);
       if (side === 'left') return this.getLeftButtonPartName(index);
       return this.getRightButtonPartName(index);
     }
@@ -5082,6 +5476,8 @@
 
       const count = side === 'top'
         ? this.cfg.MFD_TOP_BUTTON_COUNT
+        : side === 'bottom'
+          ? this.cfg.MFD_BOTTOM_BUTTON_COUNT
         : side === 'left'
           ? this.cfg.MFD_LEFT_BUTTON_COUNT
           : this.cfg.MFD_RIGHT_BUTTON_COUNT;
@@ -5098,6 +5494,12 @@
               this.cfg.MFD_TOP_BUTTON_Y,
               this.cfg.MFD_TOP_BUTTON_Z
             ]
+          : side === 'bottom'
+            ? [
+                this.cfg.MFD_BOTTOM_BUTTON_START_X + i * this.cfg.MFD_BOTTOM_BUTTON_STEP_X,
+                this.cfg.MFD_BOTTOM_BUTTON_Y,
+                this.cfg.MFD_BOTTOM_BUTTON_Z
+              ]
           : side === 'left'
             ? [
                 this.cfg.MFD_LEFT_BUTTON_X,
@@ -5189,6 +5591,7 @@
       }
 
       if (!this.installButtonGroup('top')) return false;
+      if (!this.installButtonGroup('bottom')) return false;
       if (!this.installButtonGroup('left')) return false;
       if (!this.installButtonGroup('right')) return false;
 
@@ -5219,6 +5622,9 @@
       for (let i = 0; i < this.cfg.MFD_TOP_BUTTON_COUNT; i++) {
         this.removePartByName(this.getTopButtonPartName(i));
       }
+      for (let i = 0; i < this.cfg.MFD_BOTTOM_BUTTON_COUNT; i++) {
+        this.removePartByName(this.getBottomButtonPartName(i));
+      }
       for (let i = 0; i < this.cfg.MFD_LEFT_BUTTON_COUNT; i++) {
         this.removePartByName(this.getLeftButtonPartName(i));
       }
@@ -5236,6 +5642,9 @@
       if (handlers[this.names.MFD_PART_NAME] !== this.onNodeClickBound) return false;
       for (let i = 0; i < this.cfg.MFD_TOP_BUTTON_COUNT; i++) {
         if (handlers[this.getTopButtonPartName(i)] !== this.onNodeClickBound) return false;
+      }
+      for (let i = 0; i < this.cfg.MFD_BOTTOM_BUTTON_COUNT; i++) {
+        if (handlers[this.getBottomButtonPartName(i)] !== this.onNodeClickBound) return false;
       }
       for (let i = 0; i < this.cfg.MFD_LEFT_BUTTON_COUNT; i++) {
         if (handlers[this.getLeftButtonPartName(i)] !== this.onNodeClickBound) return false;
@@ -5266,6 +5675,9 @@
       for (let i = 0; i < this.cfg.MFD_TOP_BUTTON_COUNT; i++) {
         controlsApi.addNodeClickHandler(this.getTopButtonPartName(i), this.onNodeClickBound);
       }
+      for (let i = 0; i < this.cfg.MFD_BOTTOM_BUTTON_COUNT; i++) {
+        controlsApi.addNodeClickHandler(this.getBottomButtonPartName(i), this.onNodeClickBound);
+      }
       for (let i = 0; i < this.cfg.MFD_LEFT_BUTTON_COUNT; i++) {
         controlsApi.addNodeClickHandler(this.getLeftButtonPartName(i), this.onNodeClickBound);
       }
@@ -5283,6 +5695,9 @@
       delete controlsApi.nodeClickHandlers[this.names.MFD_PART_NAME];
       for (let i = 0; i < this.cfg.MFD_TOP_BUTTON_COUNT; i++) {
         delete controlsApi.nodeClickHandlers[this.getTopButtonPartName(i)];
+      }
+      for (let i = 0; i < this.cfg.MFD_BOTTOM_BUTTON_COUNT; i++) {
+        delete controlsApi.nodeClickHandlers[this.getBottomButtonPartName(i)];
       }
       for (let i = 0; i < this.cfg.MFD_LEFT_BUTTON_COUNT; i++) {
         delete controlsApi.nodeClickHandlers[this.getLeftButtonPartName(i)];
@@ -5384,20 +5799,9 @@
       return dx * dx + dy * dy;
     }
 
+    // Returns normalized click coordinates for MFD hit-testing.
     getClickScreenCoords() {
-      const mouse = window.controls?.mouse;
-      if (!mouse) return null;
-
-      const rawX = mouse.lastX ?? mouse.originalX;
-      const rawY = mouse.lastY ?? mouse.originalY;
-      const oX = mouse.oX ?? 0;
-      const oY = mouse.oY ?? 0;
-      if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) return null;
-
-      return {
-        x: rawX - oX,
-        y: rawY - oY
-      };
+      return HelperModule.getClickScreenCoords();
     }
 
     getButtonIndexFromScreenCoords(side, x, y) {
@@ -5418,6 +5822,8 @@
 
       const count = side === 'top'
         ? this.cfg.MFD_TOP_BUTTON_COUNT
+        : side === 'bottom'
+          ? this.cfg.MFD_BOTTOM_BUTTON_COUNT
         : side === 'left'
           ? this.cfg.MFD_LEFT_BUTTON_COUNT
           : this.cfg.MFD_RIGHT_BUTTON_COUNT;
@@ -5444,6 +5850,9 @@
       if (nodeName === this.names.MFD_PART_NAME) return true;
       for (let i = 0; i < this.cfg.MFD_TOP_BUTTON_COUNT; i++) {
         if (nodeName === this.getTopButtonPartName(i)) return true;
+      }
+      for (let i = 0; i < this.cfg.MFD_BOTTOM_BUTTON_COUNT; i++) {
+        if (nodeName === this.getBottomButtonPartName(i)) return true;
       }
       for (let i = 0; i < this.cfg.MFD_LEFT_BUTTON_COUNT; i++) {
         if (nodeName === this.getLeftButtonPartName(i)) return true;
@@ -5476,6 +5885,19 @@
       if (topButtonIndex >= 0) {
         const uiState = this.getUiState();
         uiState?.setPage?.(topButtonIndex);
+        return true;
+      }
+
+      const bottomButtonIndex = (() => {
+        for (let i = 0; i < this.cfg.MFD_BOTTOM_BUTTON_COUNT; i++) {
+          if (nodeName === this.getBottomButtonPartName(i)) return i;
+        }
+        return -1;
+      })();
+
+      if (bottomButtonIndex >= 0) {
+        const uiState = this.getUiState();
+        uiState?.setPage?.(this.cfg.MFD_TOP_BUTTON_COUNT + bottomButtonIndex);
         return true;
       }
 
@@ -5530,6 +5952,12 @@
         return true;
       }
 
+      const pickedBottomButtonIndex = this.getButtonIndexFromScreenCoords('bottom', click.x, click.y);
+      if (pickedBottomButtonIndex >= 0) {
+        uiState?.setPage?.(this.cfg.MFD_TOP_BUTTON_COUNT + pickedBottomButtonIndex);
+        return true;
+      }
+
       const pickedLeftButtonIndex = this.getButtonIndexFromScreenCoords('left', click.x, click.y);
       if (pickedLeftButtonIndex >= 0) {
         uiState?.toggleButtonBySlot?.('left', pickedLeftButtonIndex);
@@ -5553,229 +5981,53 @@
     }
   }
 
-  class F18MainPlugin {
-    constructor() {
-      this.helperModule = new HelperModule();
-      this.hudModule = new F18HudModule();
-      this.cameraModule = new CameraModule(this.helperModule);
-      this.fmcModule = new FMCModule();
-      this.controlModule = new ControlModule(this.helperModule);
-      this.mfdModules = [];
-      this.mfdPickNodeHandlerInstalled = false;
-      this.onMfdPickNodeClickBound = this.onMfdPickNodeClick.bind(this);
-      this.runNodeBridgeInstalled = false;
-      this.originalRunNodeClickHandlers = null;
-      this.timer = null;
-      this.cameraWatchTimer = null;
-      this.cameraWatchTicks = 0;
-      this.lastMfdRecoveryTick = -999;
-
-      this.addMfd({
-        name: 'RIGHT',
-        position: [0.2167, 6.158, 0.584],
-        rotation: [8, 0, 0],
-        scale: [0.29, 0.29, 0.285],
-        defaultPageTitle: 'SYS'
-      });
-
-      this.addMfd({
-        name: 'LEFT',
-        position: [-0.2167, 6.158, 0.584],
-        rotation: [8, 0, 0],
-        scale: [0.29, 0.29, 0.285],
-        defaultPageTitle: 'CHK'
-      });
-    }
-
-    addMfd(config) {
-      const module = new MfdModule(config);
-      this.mfdModules.push(module);
-      return module;
-    }
-
-    getClickScreenCoords() {
-      const mouse = window.controls?.mouse;
-      if (!mouse) return null;
-
-      const rawX = mouse.lastX ?? mouse.originalX;
-      const rawY = mouse.lastY ?? mouse.originalY;
-      const oX = mouse.oX ?? 0;
-      const oY = mouse.oY ?? 0;
-      if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) return null;
-
-      return {
-        x: rawX - oX,
-        y: rawY - oY
-      };
-    }
-
-    getMfdAtScreenPoint(x, y) {
-      let targetModule = null;
-      let bestScore = Infinity;
-
-      for (const mfdModule of this.mfdModules) {
-        const score = mfdModule.getPickScore(x, y);
-        if (score < bestScore) {
-          bestScore = score;
-          targetModule = mfdModule;
-        }
-      }
-
-      return Number.isFinite(bestScore) ? targetModule : null;
-    }
-
-    onMfdPickNodeClick(nodeName) {
-      if (nodeName !== 'glassPanel') {
-        for (const mfdModule of this.mfdModules) {
-          if (mfdModule.onNodeClick(nodeName)) {
-            return;
-          }
-        }
-        return;
-      }
-
-      const click = this.getClickScreenCoords();
-      if (!click) return;
-
-      const targetModule = this.getMfdAtScreenPoint(click.x, click.y);
-      targetModule?.handlePickClick(click);
-    }
-
-    ensureGlobalMfdPickNodeHandler() {
-      const controlsApi = window.controls;
-      if (!controlsApi?.addNodeClickHandler) return false;
-      controlsApi.addNodeClickHandler('glassPanel', this.onMfdPickNodeClickBound);
-      this.mfdPickNodeHandlerInstalled = true;
-      return true;
-    }
-
-    ensureRunNodeClickBridge() {
-      const controlsApi = window.controls;
-      if (!controlsApi?.runNodeClickHandlers) return false;
-      if (this.runNodeBridgeInstalled) return true;
-
-      this.originalRunNodeClickHandlers = controlsApi.runNodeClickHandlers.bind(controlsApi);
-      controlsApi.runNodeClickHandlers = (nodeName) => {
-        this.originalRunNodeClickHandlers?.(nodeName);
-
-        // Fallback only: avoid double-processing nodes that already have a direct handler.
-        if (controlsApi?.nodeClickHandlers?.[nodeName]) {
-          return;
-        }
-
-        this.onMfdPickNodeClick(nodeName);
-      };
-
-      this.runNodeBridgeInstalled = true;
-      return true;
-    }
-
-    removeGlobalMfdPickNodeHandler() {
-      const controlsApi = window.controls;
-      if (!this.mfdPickNodeHandlerInstalled || !controlsApi?.nodeClickHandlers) return;
-      delete controlsApi.nodeClickHandlers.glassPanel;
-      this.mfdPickNodeHandlerInstalled = false;
-    }
-
-    removeRunNodeClickBridge() {
-      const controlsApi = window.controls;
-      if (!this.runNodeBridgeInstalled || !controlsApi) return;
-      if (this.originalRunNodeClickHandlers) {
-        controlsApi.runNodeClickHandlers = this.originalRunNodeClickHandlers;
-      }
-      this.originalRunNodeClickHandlers = null;
-      this.runNodeBridgeInstalled = false;
-    }
-
-    startCameraWatch() {
-      if (this.cameraWatchTimer) {
-        return;
-      }
-
-      this.cameraWatchTimer = setInterval(() => {
-        this.cameraWatchTicks += 1;
-
-        // Self-heal camera modes when GeoFS reinitializes camera definitions
-        // after aircraft/model loading has completed.
-        this.cameraModule.ensureLoaded();
-
-        const mode = window.geofs?.camera?.currentModeName;
-        const aircraft = window.geofs?.aircraft?.instance;
-        for (const mfdModule of this.mfdModules) {
-          const hasMfdRef = Boolean(addonRuntime.mfdRuntimeRefs[mfdModule.slotName]);
-          const hasMfdPart = Boolean(aircraft?.parts?.[mfdModule.partName]);
-
-          if (mode === 'cockpit' && !hasMfdPart && (this.cameraWatchTicks - this.lastMfdRecoveryTick) >= 4) {
-            this.lastMfdRecoveryTick = this.cameraWatchTicks;
-
-            if (hasMfdRef) {
-              delete addonRuntime.mfdRuntimeRefs[mfdModule.slotName];
-            }
-
-            mfdModule.ensureLoaded();
-          }
-        }
-      }, 250);
-    }
-
-    stopCameraWatch() {
-      if (!this.cameraWatchTimer) {
-        return;
-      }
-      clearInterval(this.cameraWatchTimer);
-      this.cameraWatchTimer = null;
-    }
-
-    tryInstall() {
-      const hudReady = this.hudModule.ensureLoaded();
-      const cameraReady = this.cameraModule.ensureLoaded();
-      const fmcReady = this.fmcModule.ensureLoaded();
-      const controlsReady = this.controlModule.ensureLoaded();
-      const mfdReady = this.mfdModules.every((mfdModule) => mfdModule.ensureLoaded());
-      const pickNodeReady = this.ensureGlobalMfdPickNodeHandler();
-      const nodeBridgeReady = this.ensureRunNodeClickBridge();
-      return Boolean(hudReady && cameraReady && fmcReady && controlsReady && mfdReady && pickNodeReady && nodeBridgeReady);
-    }
-
-    start() {
-      if (this.timer) {
-        return;
-      }
-      this.startCameraWatch();
-
-      this.timer = setInterval(() => {
-        if (this.tryInstall()) {
-          clearInterval(this.timer);
-          this.timer = null;
-        }
-      }, 400);
-    }
-
-    stop() {
-      if (this.timer) {
-        clearInterval(this.timer);
-        this.timer = null;
-      }
-      stopWpnGunFireTimer();
-      this.stopCameraWatch();
-      this.removeGlobalMfdPickNodeHandler();
-      this.removeRunNodeClickBridge();
-      this.mfdModules.forEach((mfdModule) => mfdModule.restore());
-      this.controlModule.restore();
-      this.fmcModule.restore();
-      this.cameraModule.restore();
-      this.hudModule.restore();
-    }
-  }
-
   function getMfdSlotState(slotName) {
     const slot = normalizeOptionToken(slotName || 'LEFT') || 'LEFT';
     return addonRuntime.mfdUiStates?.[slot] ?? null;
   }
 
+  // Ensures MFD UI state objects exist before external MFD page operations.
+  function ensureMfdUiStatesReady() {
+    addonRuntime.mainPlugin?.mfdModules?.forEach((mfdModule) => {
+      mfdModule?.ensureUiState?.();
+    });
+    return Object.values(addonRuntime.mfdUiStates ?? {});
+  }
+
+  // Normalizes an external page definition to the expected MFD page structure.
+  function normalizeMfdPageDefinition(pageDefinition, fallbackTitle = 'PAGE') {
+    const source = (pageDefinition && typeof pageDefinition === 'object') ? pageDefinition : {};
+    const titleRaw = String(source.title ?? fallbackTitle).trim();
+    const title = titleRaw || String(fallbackTitle || 'PAGE').trim() || 'PAGE';
+    const leftButtons = Array.isArray(source.leftButtons) ? source.leftButtons : [];
+    const rightButtons = Array.isArray(source.rightButtons) ? source.rightButtons : [];
+    const lines = Array.isArray(source.lines) ? source.lines : [];
+    const render = typeof source.render === 'function' ? source.render : null;
+    return {
+      ...source,
+      title,
+      leftButtons,
+      rightButtons,
+      lines,
+      render
+    };
+  }
+
+  // Resolves a page target to an index using number or title lookup.
+  function resolveMfdPageTargetIndex(uiState, target) {
+    if (!uiState || !Array.isArray(uiState.pages)) return -1;
+    if (Number.isInteger(target)) {
+      return target >= 0 && target < uiState.pages.length ? target : -1;
+    }
+
+    const titleToken = String(target ?? '').trim().toUpperCase();
+    if (!titleToken) return -1;
+    return uiState.pages.findIndex((p) => String(p?.title ?? '').trim().toUpperCase() === titleToken);
+  }
+
   function createAddonApi() {
     return {
-      version: '1.2.3',
+      version: VERSION,
       helper: {
         normalizeToken: normalizeOptionToken,
         isAircraftActive: isF18Active
@@ -5836,6 +6088,60 @@
       },
       mfd: {
         getSlots: () => Object.keys(addonRuntime.mfdUiStates),
+        addPage: (pageDefinition, insertIndex = null) => {
+          const states = ensureMfdUiStatesReady();
+          if (!states.length) return { ok: false, reason: 'NO_MFD_STATES' };
+
+          const baseIndex = Number.isInteger(insertIndex) ? insertIndex : states[0].pages.length;
+          const nextIndex = Math.max(0, Math.min(states[0].pages.length, baseIndex));
+          const fallbackTitle = `PAGE_${nextIndex + 1}`;
+
+          for (const uiState of states) {
+            const normalized = normalizeMfdPageDefinition(pageDefinition, fallbackTitle);
+            uiState.pages.splice(nextIndex, 0, normalized);
+            if (uiState.pageIndex >= nextIndex) {
+              uiState.pageIndex += 1;
+            }
+            uiState.ensureDefaultsInStorage();
+          }
+
+          addonRuntime.mfdPagesCatalog = states[0].pages;
+          return { ok: true, index: nextIndex, title: states[0].pages[nextIndex]?.title ?? fallbackTitle };
+        },
+        setPageDefinition: (target, pageDefinition) => {
+          const states = ensureMfdUiStatesReady();
+          if (!states.length) return { ok: false, reason: 'NO_MFD_STATES' };
+
+          const resolvedIndex = resolveMfdPageTargetIndex(states[0], target);
+          if (resolvedIndex < 0) return { ok: false, reason: 'PAGE_NOT_FOUND' };
+
+          for (const uiState of states) {
+            const currentTitle = uiState.pages?.[resolvedIndex]?.title ?? `PAGE_${resolvedIndex + 1}`;
+            const normalized = normalizeMfdPageDefinition(pageDefinition, currentTitle);
+            uiState.pages[resolvedIndex] = normalized;
+            if (uiState.pageIndex >= uiState.pages.length) {
+              uiState.pageIndex = Math.max(0, uiState.pages.length - 1);
+            }
+            uiState.ensureDefaultsInStorage();
+          }
+
+          addonRuntime.mfdPagesCatalog = states[0].pages;
+          return { ok: true, index: resolvedIndex, title: states[0].pages[resolvedIndex]?.title ?? null };
+        },
+        addDisplay: (config = {}) => {
+          if (!addonRuntime.mainPlugin) {
+            addonRuntime.mainPlugin = new F18MainPlugin();
+            addonRuntime.mainPlugin.start();
+          }
+
+          const mfdModule = addonRuntime.mainPlugin.addMfd(config);
+          mfdModule?.ensureLoaded?.();
+
+          return {
+            slotName: mfdModule?.slotName ?? null,
+            partName: mfdModule?.partName ?? null
+          };
+        },
         getDisplayState: (slotName) => getMfdSlotState(slotName),
         setPage: (slotName, pageIndex) => {
           const uiState = getMfdSlotState(slotName);

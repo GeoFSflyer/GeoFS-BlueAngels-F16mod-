@@ -64,6 +64,9 @@ window.F18Addon
 
 #### `window.F18Addon.mfd`
 - `getSlots()`
+- `addPage(pageDefinition, insertIndex?)`
+- `setPageDefinition(target, pageDefinition)`
+- `addDisplay(config?)`
 - `getDisplayState(slotName)`
 - `setPage(slotName, pageIndex)`
 - `nextPage(slotName)`
@@ -140,6 +143,87 @@ if (!addon) throw new Error('F18Addon not ready');
 
 addon.mfd.setPage('LEFT', 3);  // only LEFT display changes page
 addon.mfd.setPage('RIGHT', 1); // only RIGHT display changes page
+```
+
+### Example: add an extra MFD via API
+
+```js
+const addon = window.F18Addon;
+if (!addon) throw new Error('F18Addon not ready');
+
+const extra = addon.mfd.addDisplay({
+  name: 'CENTER',
+  position: [0, 6.158, 0.584],
+  rotation: [8, 0, 0],
+  scale: [0.29, 0.29, 0.285],
+  defaultPageTitle: 'HUD'
+});
+
+console.log('Added MFD slot:', extra.slotName, 'part:', extra.partName);
+```
+
+### Example: add a custom MFD page
+
+```js
+const addon = window.F18Addon;
+if (!addon) throw new Error('F18Addon not ready');
+
+addon.mfd.addPage({
+  title: 'TACT',
+  leftButtons: [
+    { key: 'MODE', label: 'MODE', states: ['A', 'B', 'C'], stateIndex: 0 }
+  ],
+  rightButtons: [
+    { key: 'RNG', label: 'RNG', states: ['10', '20', '40'], stateIndex: 1 }
+  ],
+  lines: [],
+  render: (renderer, renderContext) => {
+    const ctx = renderContext?.ctx ?? renderer?.canvasAPI?.context;
+    const w = renderContext?.w ?? renderer?.canvasAPI?.canvas?.width ?? 512;
+    const h = renderContext?.h ?? renderer?.canvasAPI?.canvas?.height ?? 512;
+    if (!ctx) return;
+
+    ctx.save();
+    ctx.fillStyle = renderContext?.color ?? '#00ff66';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `bold ${Math.round(h * 0.06)}px monospace`;
+    ctx.fillText('TACTICAL PAGE', w * 0.5, h * 0.5);
+    ctx.restore();
+  }
+});
+```
+
+### Example: overwrite an existing page
+
+```js
+const addon = window.F18Addon;
+if (!addon) throw new Error('F18Addon not ready');
+
+addon.mfd.setPageDefinition('AUX1', {
+  title: 'MAP',
+  leftButtons: [
+    { key: 'LAYER', label: 'MAP', states: ['OFF', 'ON'], stateIndex: 1 }
+  ],
+  rightButtons: [
+    { key: 'ZOOM', label: 'ZOOM', states: ['1X', '2X', '4X'], stateIndex: 0 }
+  ],
+  lines: [],
+  render: (renderer, renderContext) => {
+    const ctx = renderContext?.ctx ?? renderer?.canvasAPI?.context;
+    const w = renderContext?.w ?? renderer?.canvasAPI?.canvas?.width ?? 512;
+    const h = renderContext?.h ?? renderer?.canvasAPI?.canvas?.height ?? 512;
+    if (!ctx) return;
+
+    ctx.save();
+    ctx.fillStyle = renderContext?.color ?? '#00ff66';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `bold ${Math.round(h * 0.06)}px monospace`;
+    ctx.fillText('CUSTOM MAP PAGE', w * 0.5, h * 0.5);
+    ctx.restore();
+  }
+});
 ```
 
 ## Flight Recorder API
