@@ -11,12 +11,6 @@ The addon now exposes a single global namespace:
 window.F18Addon
 ```
 
-### Design rules
-- **One global only**: `window.F18Addon`
-- **MFD state is per display** (LEFT/RIGHT are independent)
-- **Options are shared** between displays through `F18Options` storage
-- Addon logic is still F-18-only (aircraft id check), but module API names are generic
-
 ### Modules overview
 
 #### `window.F18Addon.lifecycle`
@@ -71,6 +65,87 @@ window.F18Addon
 - `setPage(slotName, pageIndex)`
 - `nextPage(slotName)`
 - `toggleButton(slotName, side, index)`
+
+### MFD page/button definition options
+When you add or overwrite an MFD page, use this structure:
+
+```js
+{
+  title: 'PAGE',
+  leftButtons: [/* button defs */],
+  rightButtons: [/* button defs */],
+  lines: [],
+  render: (renderer, renderContext) => {}
+}
+```
+
+Each button object can use:
+
+- `key`: logical option key (stored as `PAGE.KEY`)
+- `label`: button label shown on MFD
+- `states`: selectable states (cycled on click)
+- `stateIndex`: default state index
+- `values`: optional mapped values for states (used by `options.getValue`)
+- `onClick(ctx)`: custom click callback
+- `show(ctx)`: conditionally show/hide button
+- `managedExternally: true`: do not auto-cycle/persist after click (you handle it in `onClick`)
+- `combinedAction: true`: mark as part of a grouped action block
+- `combinedGroupLabel`: label shown for grouped block
+
+`onClick` and `show` receive a context object with:
+- `page`
+- `button`
+- `uiState`
+- `side`
+- `index`
+- (for `onClick`) `currentIndex`, `nextIndex`, `nextState`
+
+### Example: conditional button with `show()`
+
+```js
+{
+  key: 'FIRE',
+  label: 'FIRE',
+  states: ['N/A'],
+  stateIndex: 0,
+  show: () => window.F18Addon.options.get('WPN', 'MASTER', 'OFF') !== 'OFF',
+  onClick: () => window.F18Addon.weapons.fireSelected()
+}
+```
+
+### Example: grouped buttons (`combinedAction`)
+
+```js
+rightButtons: [
+  {
+    key: 'PLAYBACK',
+    label: 'START',
+    states: ['START'],
+    combinedAction: true,
+    combinedGroupLabel: 'PLAYBACK',
+    managedExternally: true,
+    onClick: () => window.FlightRecorder?.api?.playback?.start?.()
+  },
+  {
+    key: 'PLAYBACK',
+    label: 'PAUSE',
+    states: ['PAUSE'],
+    combinedAction: true,
+    combinedGroupLabel: 'PLAYBACK',
+    managedExternally: true,
+    onClick: () => window.FlightRecorder?.api?.playback?.pause?.()
+  },
+  {
+    key: 'PLAYBACK',
+    label: 'STOP',
+    states: ['STOP'],
+    combinedAction: true,
+    combinedGroupLabel: 'PLAYBACK',
+    managedExternally: true,
+    onClick: () => window.FlightRecorder?.api?.playback?.stop?.()
+  }
+]
+```
 
 ### Shared option keys (via `F18Options`)
 The MFD writes and reads shared options using normalized keys like `PAGE.BUTTON`.
@@ -131,8 +206,11 @@ const poll = setInterval(() => {
 const addon = window.F18Addon;
 if (!addon) throw new Error('F18Addon not ready');
 
+// Set the WPN.MASTER (Master arm switch) to ON.
 addon.options.set('WPN', 'MASTER', 'ON');
-console.log(addon.options.get('WPN', 'MASTER', 'OFF')); // ON
+
+// Get the WPN.MASTER state, with a default value of OFF if it isn't set.
+console.log(addon.options.get('WPN', 'MASTER', 'OFF')); // Returns ON
 ```
 
 ### Example: per-display MFD state
