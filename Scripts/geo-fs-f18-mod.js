@@ -27,6 +27,7 @@
   let currentHudColor = DEFAULT_COLOR;
   const addonRuntime = {
     checklistModule: null,
+    communicationModule: null,
     mfdUiStates: Object.create(null),
     mfdPagesCatalog: null,
     mfdRuntimeRefs: Object.create(null),
@@ -41,6 +42,8 @@
       this.cameraModule = new CameraModule(this.helperModule);
       this.fmcModule = new FMCModule();
       this.controlModule = new ControlModule(this.helperModule);
+      this.communicationModule = new CommunicationModule();
+      addonRuntime.communicationModule = this.communicationModule;
       this.mfdModules = [];
       this.mfdPickNodeHandlerInstalled = false;
       this.onMfdPickNodeClickBound = this.onMfdPickNodeClick.bind(this);
@@ -201,10 +204,11 @@
       const cameraReady = this.cameraModule.ensureLoaded();
       const fmcReady = this.fmcModule.ensureLoaded();
       const controlsReady = this.controlModule.ensureLoaded();
+      const communicationReady = this.communicationModule.ensureLoaded();
       const mfdReady = this.mfdModules.every((mfdModule) => mfdModule.ensureLoaded());
       const pickNodeReady = this.ensureGlobalMfdPickNodeHandler();
       const nodeBridgeReady = this.ensureRunNodeClickBridge();
-      return Boolean(hudReady && cameraReady && fmcReady && controlsReady && mfdReady && pickNodeReady && nodeBridgeReady);
+      return Boolean(hudReady && cameraReady && fmcReady && controlsReady && communicationReady && mfdReady && pickNodeReady && nodeBridgeReady);
     }
 
     start() {
@@ -231,6 +235,7 @@
       this.removeGlobalMfdPickNodeHandler();
       this.removeRunNodeClickBridge();
       this.mfdModules.forEach((mfdModule) => mfdModule.restore());
+      this.communicationModule.restore();
       this.controlModule.restore();
       this.fmcModule.restore();
       this.cameraModule.restore();
@@ -1906,6 +1911,385 @@
     return addonRuntime.checklistModule;
   }
 
+  class CommunicationModule {
+    static HISTORY_LIMIT = 120;
+    static HUD_MESSAGE_VISIBLE_MS = 10000;
+    static VOICE_RATE_OPTIONS = [0.75, 1, 1.25, 1.5, 2, 2.5, 3];
+
+    // Initializes communication state and hook references.
+    constructor() {
+      this.installed = false;
+      this.multiplayerRef = null;
+      this.originalUpdateCallback = null;
+      this.wrappedUpdateCallback = null;
+      this.messages = [];
+      this.hudMessage = null;
+      this.lastVoiceMode = 'NONE';
+      this.voiceEnabledAtServerTime = null;
+      this.voiceEnabledAtLocalMs = 0;
+    }
+
+    // Installs the multiplayer update hook used for incoming chat messages.
+    ensureLoaded() {
+      if (this.installed) return true;
+      return this.installMultiplayerHook();
+    }
+
+    // Restores multiplayer callbacks and clears volatile communication state.
+    restore() {
+      this.uninstallMultiplayerHook();
+      this.hudMessage = null;
+      this.lastVoiceMode = 'NONE';
+      this.voiceEnabledAtServerTime = null;
+      this.voiceEnabledAtLocalMs = 0;
+      this.installed = false;
+    }
+
+    // Installs a safe wrapper around multiplayer.updateCallback.
+    installMultiplayerHook() {
+      const multiplayerRef = window.multiplayer;
+      if (!multiplayerRef || typeof multiplayerRef.updateCallback !== 'function') return false;
+
+      if (this.wrappedUpdateCallback && multiplayerRef.updateCallback === this.wrappedUpdateCallback) {
+        this.installed = true;
+        return true;
+      }
+
+      const original = multiplayerRef.updateCallback;
+      const self = this;
+      this.originalUpdateCallback = original;
+      this.multiplayerRef = multiplayerRef;
+      this.wrappedUpdateCallback = function (payload) {
+        self.onMultiplayerUpdatePayload(payload);
+        return original.apply(this, arguments);
+      };
+
+      multiplayerRef.updateCallback = this.wrappedUpdateCallback;
+      this.installed = true;
+      return true;
+    }
+
+    // Restores the original multiplayer.updateCallback.
+    uninstallMultiplayerHook() {
+      if (!this.multiplayerRef) {
+        this.originalUpdateCallback = null;
+        this.wrappedUpdateCallback = null;
+        return;
+      }
+
+      if (this.wrappedUpdateCallback && this.multiplayerRef.updateCallback === this.wrappedUpdateCallback) {
+        this.multiplayerRef.updateCallback = this.originalUpdateCallback;
+      }
+
+      this.originalUpdateCallback = null;
+      this.wrappedUpdateCallback = null;
+      this.multiplayerRef = null;
+    }
+
+    // Normalizes a callsign filter token and strips optional square brackets.
+    normalizeFilterToken(value) {
+      const raw = String(value ?? '').trim();
+      if (!raw) return '';
+      return raw.replace(/^\[+|\]+$/g, '').trim().toUpperCase();
+    }
+
+    // Returns the configured communication profile.
+    getProfile() {
+      return {
+        group: String(getOption('COMM', 'GROUP', '') ?? ''),
+        flight: String(getOption('COMM', 'FLIGHT', '') ?? ''),
+        wingman: String(getOption('COMM', 'WINGMAN', '') ?? '')
+      };
+    }
+
+    // Stores the configured communication group token.
+    setGroup(value) {
+      const normalized = this.normalizeFilterToken(value);
+      setOption('COMM', 'GROUP', normalized);
+      return normalized;
+    }
+
+    // Stores the configured communication flight token.
+    setFlight(value) {
+      const normalized = this.normalizeFilterToken(value);
+      setOption('COMM', 'FLIGHT', normalized);
+      return normalized;
+    }
+
+    // Stores the configured wingman token.
+    setWingman(value) {
+      const normalized = this.normalizeFilterToken(value);
+      setOption('COMM', 'WINGMAN', normalized);
+      return normalized;
+    }
+
+    // Stores multiple communication profile filters in one call.
+    setProfile(profile = {}) {
+      return {
+        group: this.setGroup(profile.group),
+        flight: this.setFlight(profile.flight),
+        wingman: this.setWingman(profile.wingman)
+      };
+    }
+
+    // Reads the configured voice synthesis language.
+    getVoiceLanguage() {
+      return String(getOption('COMM', 'VOICE_LANG', 'en-US') ?? 'en-US').trim() || 'en-US';
+    }
+
+    // Stores the voice synthesis language.
+    setVoiceLanguage(language) {
+      const next = String(language ?? '').trim() || 'en-US';
+      setOption('COMM', 'VOICE_LANG', next);
+      return next;
+    }
+
+    // Returns the nearest supported speech rate.
+    normalizeVoiceRate(value) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return 1;
+
+      let best = CommunicationModule.VOICE_RATE_OPTIONS[0];
+      let bestDiff = Math.abs(best - numeric);
+      for (const candidate of CommunicationModule.VOICE_RATE_OPTIONS) {
+        const diff = Math.abs(candidate - numeric);
+        if (diff < bestDiff) {
+          best = candidate;
+          bestDiff = diff;
+        }
+      }
+      return best;
+    }
+
+    // Reads the configured speech rate.
+    getVoiceRate() {
+      const raw = getOptionValue('COMM', 'RATE', 1.5);
+      return this.normalizeVoiceRate(raw);
+    }
+
+    // Stores the configured speech rate.
+    setVoiceRate(rate) {
+      const normalized = this.normalizeVoiceRate(rate);
+      setOption('COMM', 'RATE', String(normalized));
+      return normalized;
+    }
+
+    // Decodes URL-encoded multiplayer chat text.
+    decodeChatText(value) {
+      const raw = String(value ?? '');
+      if (!raw) return '';
+      try {
+        return decodeURIComponent(raw.replace(/\+/g, '%20'));
+      } catch {
+        return raw;
+      }
+    }
+
+    // Extracts the spoken callsign by removing all bracketed tags.
+    getSpokenCallsign(callsign) {
+      const raw = String(callsign ?? '').trim();
+      if (!raw) return 'UNKNOWN';
+
+      const withoutTags = raw.replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim();
+      return withoutTags || 'UNKNOWN';
+    }
+
+    // Resolves profile match flags for one callsign.
+    resolveMatches(callsign) {
+      const cs = String(callsign ?? '');
+      const csUpper = cs.toUpperCase();
+      const profile = this.getProfile();
+      const groupToken = this.normalizeFilterToken(profile.group);
+      const flightToken = this.normalizeFilterToken(profile.flight);
+      const wingmanToken = this.normalizeFilterToken(profile.wingman);
+
+      const groupMatch = Boolean(groupToken && csUpper.includes(`[${groupToken}]`));
+      const flightMatch = Boolean(flightToken && csUpper.includes(`[${flightToken}]`));
+      const wingmanMatch = Boolean(wingmanToken && csUpper.includes(wingmanToken));
+      const allMatch = !groupMatch && !flightMatch && !wingmanMatch;
+
+      return {
+        groupMatch,
+        flightMatch,
+        wingmanMatch,
+        allMatch
+      };
+    }
+
+    // Checks if a message matches a selected communication mode.
+    matchesMode(mode, entry) {
+      const normalizedMode = this.normalizeModeToken(mode);
+      if (normalizedMode === 'NONE') return false;
+      if (normalizedMode === 'ALL') return !!entry?.allMatch;
+      if (normalizedMode === 'GROUP') return !!entry?.groupMatch;
+      if (normalizedMode === 'FLIGHT') return !!entry?.flightMatch;
+      if (normalizedMode === 'WINGMAN') return !!entry?.wingmanMatch;
+      return false;
+    }
+
+    // Normalizes display/voice/hud mode tokens (supports short labels and full values).
+    normalizeModeToken(mode) {
+      const token = String(mode ?? 'NONE').trim().toUpperCase();
+      if (!token) return 'NONE';
+
+      if (token === 'NO' || token === 'NONE' || token === 'OFF') return 'NONE';
+      if (token === 'ALL') return 'ALL';
+      if (token === 'GRP' || token === 'GROUP') return 'GROUP';
+      if (token === 'FLT' || token === 'FLIGHT') return 'FLIGHT';
+      if (token === 'W/M' || token === 'WM' || token === 'WINGMAN') return 'WINGMAN';
+
+      return token;
+    }
+
+    // Returns a short category tag for a classified chat message.
+    getCategoryTag(entry) {
+      if (entry?.wingmanMatch) return 'WINGMAN';
+      if (entry?.flightMatch) return 'FLIGHT';
+      if (entry?.groupMatch) return 'GROUP';
+      return 'ALL';
+    }
+
+    // Returns the callsign color used on the COMM MFD message list.
+    getMfdCallsignColor(entry) {
+      if (entry?.category === 'GROUP') return '#ff4444';
+      if (entry?.category === 'FLIGHT') return '#3da2ff';
+      if (entry?.category === 'WINGMAN') return '#33ff66';
+      return '#ffffff';
+    }
+
+    // Trims a line to a fixed character budget.
+    trimLine(text, maxChars = 72) {
+      const value = String(text ?? '').replace(/\s+/g, ' ').trim();
+      if (!value) return '';
+      if (value.length <= maxChars) return value;
+      return `${value.slice(0, Math.max(0, maxChars - 1))}…`;
+    }
+
+    // Handles raw payloads from GeoFS multiplayer updates.
+    onMultiplayerUpdatePayload(payload) {
+      const messages = Array.isArray(payload?.chatMessages) ? payload.chatMessages : [];
+      if (!messages.length) return;
+
+      for (const message of messages) {
+        this.processIncomingMessage(message, payload);
+      }
+    }
+
+    // Updates the voice activation anchor used to suppress old messages.
+    refreshVoiceActivationWindow(voiceMode, payloadServerTime) {
+      const mode = String(voiceMode ?? 'NONE').toUpperCase();
+      const previousMode = this.lastVoiceMode;
+
+      if (mode !== 'NONE' && previousMode === 'NONE') {
+        const serverTime = Number(payloadServerTime);
+        this.voiceEnabledAtServerTime = Number.isFinite(serverTime) ? serverTime : null;
+        this.voiceEnabledAtLocalMs = Date.now();
+      }
+
+      if (mode === 'NONE') {
+        this.voiceEnabledAtServerTime = null;
+        this.voiceEnabledAtLocalMs = 0;
+      }
+
+      this.lastVoiceMode = mode;
+    }
+
+    // Returns true when a message arrived after voice mode was enabled.
+    isMessageNewForVoice(entry) {
+      if (Number.isFinite(this.voiceEnabledAtServerTime) && Number.isFinite(entry?.serverTime)) {
+        return entry.serverTime > this.voiceEnabledAtServerTime;
+      }
+      if (Number.isFinite(this.voiceEnabledAtLocalMs) && this.voiceEnabledAtLocalMs > 0) {
+        return Number(entry?.timestampMs) > this.voiceEnabledAtLocalMs;
+      }
+      return false;
+    }
+
+    // Processes one incoming chat message and dispatches side effects.
+    processIncomingMessage(message, payload) {
+      const callsign = String(message?.cs ?? '').trim() || 'UNKNOWN';
+      const text = this.decodeChatText(message?.msg ?? '').trim();
+      if (!text) return;
+
+      const matches = this.resolveMatches(callsign);
+      const entry = {
+        uid: String(message?.uid ?? ''),
+        acid: Number(message?.acid),
+        callsign,
+        message: text,
+        serverTime: Number(payload?.serverTime) || null,
+        timestampMs: Date.now(),
+        category: this.getCategoryTag(matches),
+        ...matches
+      };
+
+      this.messages.push(entry);
+      if (this.messages.length > CommunicationModule.HISTORY_LIMIT) {
+        this.messages.splice(0, this.messages.length - CommunicationModule.HISTORY_LIMIT);
+      }
+
+      const voiceMode = this.normalizeModeToken(getOptionValue('COMM', 'VOICE', getOption('COMM', 'VOICE', 'NONE') ?? 'NONE'));
+      this.refreshVoiceActivationWindow(voiceMode, payload?.serverTime);
+      if (this.matchesMode(voiceMode, entry) && this.isMessageNewForVoice(entry)) {
+        this.speakMessage(entry);
+      }
+
+      const hudMode = this.normalizeModeToken(getOptionValue('COMM', 'HUD', getOption('COMM', 'HUD', 'NONE') ?? 'NONE'));
+      if (this.matchesMode(hudMode, entry)) {
+        const formatted = [
+          `[${entry.category}]`,
+          this.trimLine(entry.callsign, 44),
+          this.trimLine(entry.message, 88)
+        ].join('\n');
+        this.hudMessage = {
+          text: formatted,
+          expiresAtMs: Date.now() + CommunicationModule.HUD_MESSAGE_VISIBLE_MS
+        };
+      }
+    }
+
+    // Speaks one chat message using the browser speech synthesis API.
+    speakMessage(entry) {
+      const synth = window.speechSynthesis;
+      if (!synth || typeof window.SpeechSynthesisUtterance !== 'function') return false;
+
+      const spokenCallsign = this.getSpokenCallsign(entry.callsign);
+      const utterance = new window.SpeechSynthesisUtterance(`${spokenCallsign}. ${entry.message}`);
+      utterance.lang = this.getVoiceLanguage();
+      utterance.rate = this.getVoiceRate();
+      synth.speak(utterance);
+      return true;
+    }
+
+    // Returns the latest messages for the selected communication mode.
+    getMessagesByMode(mode = 'ALL', limit = 5) {
+      const modeToken = String(mode ?? 'ALL').toUpperCase();
+      const max = Math.max(1, Math.min(50, Number(limit) || 5));
+      const filtered = modeToken === 'ANY'
+        ? this.messages.slice()
+        : this.messages.filter((entry) => this.matchesMode(modeToken, entry));
+      return filtered.slice(Math.max(0, filtered.length - max));
+    }
+
+    // Returns the active HUD overlay text while its visibility timer is valid.
+    getHudOverlayText() {
+      if (!this.hudMessage?.text) return null;
+      if (!Number.isFinite(this.hudMessage.expiresAtMs) || Date.now() > this.hudMessage.expiresAtMs) {
+        this.hudMessage = null;
+        return null;
+      }
+      return this.hudMessage.text;
+    }
+  }
+
+  // Returns the active communication module instance.
+  function getCommunicationModule() {
+    if (addonRuntime.mainPlugin?.communicationModule) {
+      addonRuntime.communicationModule = addonRuntime.mainPlugin.communicationModule;
+    }
+    return addonRuntime.communicationModule;
+  }
+
   class F18MfdUiState {
     constructor() {
       this.pageIndex = 0;
@@ -2459,8 +2843,10 @@
           }
         },
         {
-          title: 'AUX1',
-          leftButtons: [],
+          title: 'NAV',
+          leftButtons: [
+            { key: 'DISPLAY', label: 'DISP', states: ['HSI', 'MAP'], stateIndex: 0 },
+          ],
           rightButtons: [],
           lines: [],
           render: (renderer, renderContext) => {
@@ -2476,12 +2862,12 @@
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.font = `bold ${Math.round(h * 0.06)}px monospace`;
-            ctx.fillText('AUX PAGE 1', w * 0.5, h * 0.5);
+            ctx.fillText('NAV Page', w * 0.5, h * 0.5);
             ctx.restore();
           }
         },
         {
-          title: 'AUX2',
+          title: 'RDR',
           leftButtons: [],
           rightButtons: [],
           lines: [],
@@ -2498,14 +2884,24 @@
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.font = `bold ${Math.round(h * 0.06)}px monospace`;
-            ctx.fillText('AUX PAGE 2', w * 0.5, h * 0.5);
+            ctx.fillText('RADAR PAGE', w * 0.5, h * 0.5);
             ctx.restore();
           }
         },
         {
-          title: 'AUX3',
-          leftButtons: [],
-          rightButtons: [],
+          title: 'COMM',
+          leftButtons: [
+            { key: 'SHOW', label: 'SHOW', states: ['MSG', 'CFG'], stateIndex: 0 },
+            { key: 'N/A1', label: '', states: [''], stateIndex: 0 },
+            { key: 'DISPLAY', label: 'DISP', states: ['NO', 'ALL', 'GRP', 'FLT', 'W/M'], values: ['NONE', 'ALL', 'GROUP', 'FLIGHT', 'WINGMAN'], stateIndex: 0, show: () => String(getOption('COMM', 'SHOW', 'MSG') ?? 'MSG').toUpperCase() === 'MSG' },
+            { key: 'N/A2', label: '', states: [''], stateIndex: 0 },
+            { key: 'HUD', label: 'HUD', states: ['NO', 'ALL', 'GRP', 'FLT', 'W/M'], values: ['NONE', 'ALL', 'GROUP', 'FLIGHT', 'WINGMAN'], stateIndex: 0, show: () => String(getOption('COMM', 'SHOW', 'MSG') ?? 'MSG').toUpperCase() === 'MSG' },
+          ],
+          rightButtons: [
+            { key: 'VOICE', label: 'VOICE', states: ['NONE', 'ALL', 'GROUP', 'FLIGHT', 'WINGMAN'], stateIndex: 0, show: () => String(getOption('COMM', 'SHOW', 'MSG') ?? 'MSG').toUpperCase() === 'CFG' },
+            { key: 'N/A3', label: '', states: [''], stateIndex: 0 },
+            { key: 'RATE', label: 'RATE', states: ['0.75', '1', '1.25', '1.5', '2', '2.5', '3'], values: [0.75, 1, 1.25, 1.5, 2, 2.5, 3], stateIndex: 3, show: () => String(getOption('COMM', 'SHOW', 'MSG') ?? 'MSG').toUpperCase() === 'CFG' },
+          ],
           lines: [],
           render: (renderer, renderContext) => {
             const ctx = renderContext?.ctx ?? renderer?.canvasAPI?.context;
@@ -2514,13 +2910,155 @@
             const color = renderContext?.color ?? '#00ff66';
             if (!ctx) return;
 
+            const communicationModule = getCommunicationModule();
+            const profile = communicationModule?.getProfile?.() ?? { group: '', flight: '', wingman: '' };
+            const voiceLanguage = communicationModule?.getVoiceLanguage?.() ?? 'en-US';
+            const voiceRate = communicationModule?.getVoiceRate?.() ?? 1.5;
+            const voiceMode = communicationModule?.normalizeModeToken?.(getOptionValue('COMM', 'VOICE', getOption('COMM', 'VOICE', 'NONE') ?? 'NONE'))
+              ?? String(getOptionValue('COMM', 'VOICE', getOption('COMM', 'VOICE', 'NONE') ?? 'NONE') ?? 'NONE').toUpperCase();
+            const displayMode = communicationModule?.normalizeModeToken?.(getOptionValue('COMM', 'DISPLAY', getOption('COMM', 'DISPLAY', getOption('COMM', 'MFD', 'NONE')) ?? 'NONE'))
+              ?? String(getOptionValue('COMM', 'DISPLAY', getOption('COMM', 'DISPLAY', getOption('COMM', 'MFD', 'NONE')) ?? 'NONE') ?? 'NONE').toUpperCase();
+            const hudMode = communicationModule?.normalizeModeToken?.(getOptionValue('COMM', 'HUD', getOption('COMM', 'HUD', 'NONE') ?? 'NONE'))
+              ?? String(getOptionValue('COMM', 'HUD', getOption('COMM', 'HUD', 'NONE') ?? 'NONE') ?? 'NONE').toUpperCase();
+            const showMode = String(getOption('COMM', 'SHOW', 'MSG') ?? 'MSG').toUpperCase();
+            const mfdMessageMode = displayMode === 'ALL' ? 'ANY' : displayMode;
+
+            const recentMessages = communicationModule?.getMessagesByMode?.(mfdMessageMode, 5) ?? [];
+
+            const fmt = (value, withBrackets = false) => {
+              const token = String(value ?? '').trim();
+              if (!token) return '-';
+              return withBrackets ? `[${token}]` : token;
+            };
+            const trimMessageLine = (text, maxChars = 64) => {
+              if (typeof communicationModule?.trimLine === 'function') {
+                return communicationModule.trimLine(text, maxChars);
+              }
+              const raw = String(text ?? '').replace(/\s+/g, ' ').trim();
+              if (raw.length <= maxChars) return raw;
+              return `${raw.slice(0, Math.max(0, maxChars - 1))}…`;
+            };
+            const wrapFixed = (text, lineLen = 32, maxLines = 2) => {
+              const cleaned = String(text ?? '').replace(/\s+/g, ' ').trim();
+              if (!cleaned) return [''];
+              const lines = [];
+              let cursor = 0;
+              while (cursor < cleaned.length && lines.length < maxLines) {
+                const remaining = cleaned.slice(cursor);
+                if (remaining.length <= lineLen) {
+                  lines.push(remaining);
+                  cursor = cleaned.length;
+                  break;
+                }
+
+                let cut = lineLen;
+                const lastSpace = remaining.slice(0, lineLen + 1).lastIndexOf(' ');
+                if (lastSpace > Math.floor(lineLen * 0.6)) {
+                  cut = lastSpace;
+                }
+
+                lines.push(remaining.slice(0, cut).trim());
+                cursor += cut;
+                while (cleaned[cursor] === ' ') cursor += 1;
+              }
+
+              if (cursor < cleaned.length && lines.length) {
+                const last = lines.length - 1;
+                lines[last] = trimMessageLine(lines[last], lineLen);
+              }
+
+              return lines.slice(0, maxLines);
+            };
+
             ctx.save();
             ctx.setTransform(1, 0, 0, 1, 0, 0);
             ctx.fillStyle = color;
-            ctx.textAlign = 'center';
+            ctx.strokeStyle = color;
+            ctx.lineWidth = Math.max(1.2, w * 0.0022);
+            ctx.textAlign = 'left';
             ctx.textBaseline = 'middle';
-            ctx.font = `bold ${Math.round(h * 0.06)}px monospace`;
-            ctx.fillText('AUX PAGE 3', w * 0.5, h * 0.5);
+
+            if (showMode === 'CFG') {
+              const cfgX = w * 0.33;
+              let y = h * 0.16;
+              const cfgTextPx = Math.round(h * 0.045);
+              const colorGroup = communicationModule?.getMfdCallsignColor?.({ category: 'GROUP' }) ?? '#ff4444';
+              const colorFlight = communicationModule?.getMfdCallsignColor?.({ category: 'FLIGHT' }) ?? '#3da2ff';
+              const colorWingman = communicationModule?.getMfdCallsignColor?.({ category: 'WINGMAN' }) ?? '#33ff66';
+
+              ctx.font = `bold ${cfgTextPx}px monospace`;
+              ctx.fillStyle = color;
+              ctx.fillText(`VOICE ${voiceMode}`, cfgX, y);
+              y += h * 0.046;
+              ctx.fillText(`DISP ${displayMode}`, cfgX, y);
+              y += h * 0.046;
+              ctx.fillText(`HUD ${hudMode}`, cfgX, y);
+
+              y += h * 0.056;
+              ctx.fillStyle = colorGroup;
+              ctx.fillText(`GROUP ${fmt(profile.group, true)}`, cfgX, y);
+
+              y += h * 0.046;
+              ctx.fillStyle = colorFlight;
+              ctx.fillText(`FLIGHT ${fmt(profile.flight, true)}`, cfgX, y);
+
+              y += h * 0.046;
+              ctx.fillStyle = colorWingman;
+              ctx.fillText(`WINGMAN ${fmt(profile.wingman, false)}`, cfgX, y);
+
+              y += h * 0.046;
+              ctx.fillStyle = color;
+              ctx.fillText(`LANG ${fmt(voiceLanguage, false)}`, cfgX, y);
+
+              y += h * 0.046;
+              ctx.fillText(`RATE ${fmt(String(voiceRate), false)}`, cfgX, y);
+            } else {
+              const panelX = w * 0.19;
+              const panelW = w * 0.78;
+              const rowH = h * 0.145;
+              const rowTopMargin = h * 0.11;
+              const rowBottomMargin = h * 0.11;
+              const firstRowCenterY = rowTopMargin + rowH * 0.5;
+              const lastRowCenterY = h - rowBottomMargin - rowH * 0.5;
+              const rowStep = (lastRowCenterY - firstRowCenterY) / 4;
+              const rowStartY = firstRowCenterY;
+
+              const callsignFontPx = Math.round(h * 0.038);
+              const messageFontPx = Math.round(h * 0.044);
+              const msgLineStep = h * 0.040;
+
+              for (let i = 0; i < 5; i++) {
+                const rowY = rowStartY + i * rowStep;
+                const rowTop = rowY - rowH * 0.48;
+
+                const item = recentMessages[recentMessages.length - 1 - i] ?? null;
+                const rowColor = item
+                  ? (communicationModule?.getMfdCallsignColor?.(item) ?? '#ffffff')
+                  : color;
+                ctx.strokeStyle = rowColor;
+                ctx.strokeRect(panelX, rowTop, panelW, rowH);
+
+                if (!item) {
+                  ctx.fillStyle = color;
+                  ctx.font = `bold ${messageFontPx}px monospace`;
+                  ctx.fillText('--', panelX + w * 0.012, rowY);
+                  continue;
+                }
+
+                const callsignLine = trimMessageLine(`[${item.category}] ${item.callsign}`, 56);
+                const wrappedMessageLines = wrapFixed(item.message, 35, 2);
+
+                ctx.fillStyle = rowColor;
+                ctx.font = `bold ${callsignFontPx}px monospace`;
+                ctx.fillText(callsignLine, panelX + w * 0.012, rowY - h * 0.036);
+
+                ctx.fillStyle = rowColor;
+                ctx.font = `bold ${messageFontPx}px monospace`;
+                ctx.fillText(wrappedMessageLines[0] ?? '', panelX + w * 0.012, rowY - h * 0.001);
+                ctx.fillText(wrappedMessageLines[1] ?? '', panelX + w * 0.012, rowY - h * 0.001 + msgLineStep);
+              }
+            }
+
             ctx.restore();
           }
         },
@@ -4035,6 +4573,24 @@
       o.textBaseline = 'middle';
       o.font = `${Math.round(h * 0.15)}px monospace`;
       o.fillText(getWpnActionFlashLabel(), w * 0.5, h * 0.52);
+      o.restore();
+    }
+
+    const communicationModule = getCommunicationModule();
+    const commHudText = communicationModule?.getHudOverlayText?.();
+    if (commHudText) {
+      o.save();
+      o.setTransform(1, 0, 0, 1, 0, 0);
+      o.fillStyle = currentHudColor;
+      o.textAlign = 'center';
+      o.textBaseline = 'bottom';
+      o.font = `bold ${Math.round(h * 0.038)}px monospace`;
+      const lines = String(commHudText ?? '').split('\n').map((line) => line.trim()).filter(Boolean);
+      const lineHeight = h * 0.045;
+      const startY = h * 0.96 - ((lines.length - 1) * lineHeight);
+      for (let i = 0; i < lines.length; i++) {
+        o.fillText(lines[i], w * 0.5, startY + i * lineHeight);
+      }
       o.restore();
     }
   }
@@ -6086,6 +6642,23 @@
         setProbeState: (state) => addonRuntime.mainPlugin?.controlModule?.setProbeState?.(state) ?? false,
         getProbeState: () => getOption('SYS', 'REFUELING', 'CLOSED')
       },
+      communication: {
+        getModule: () => getCommunicationModule(),
+        getProfile: () => getCommunicationModule()?.getProfile?.() ?? { group: '', flight: '', wingman: '' },
+        setProfile: (profile) => getCommunicationModule()?.setProfile?.(profile) ?? null,
+        getGroup: () => getCommunicationModule()?.getProfile?.().group ?? '',
+        setGroup: (value) => getCommunicationModule()?.setGroup?.(value) ?? '',
+        getFlight: () => getCommunicationModule()?.getProfile?.().flight ?? '',
+        setFlight: (value) => getCommunicationModule()?.setFlight?.(value) ?? '',
+        getWingman: () => getCommunicationModule()?.getProfile?.().wingman ?? '',
+        setWingman: (value) => getCommunicationModule()?.setWingman?.(value) ?? '',
+        getVoiceLanguage: () => getCommunicationModule()?.getVoiceLanguage?.() ?? 'en-US',
+        setVoiceLanguage: (language) => getCommunicationModule()?.setVoiceLanguage?.(language) ?? 'en-US',
+        getVoiceRate: () => getCommunicationModule()?.getVoiceRate?.() ?? 1.5,
+        setVoiceRate: (rate) => getCommunicationModule()?.setVoiceRate?.(rate) ?? 1.5,
+        getMessages: (mode = 'ALL', limit = 5) => getCommunicationModule()?.getMessagesByMode?.(mode, limit) ?? [],
+        getHudMessage: () => getCommunicationModule()?.getHudOverlayText?.() ?? null
+      },
       mfd: {
         getSlots: () => Object.keys(addonRuntime.mfdUiStates),
         addPage: (pageDefinition, insertIndex = null) => {
@@ -6173,6 +6746,7 @@
         stop: () => {
           addonRuntime.mainPlugin?.stop?.();
           addonRuntime.mainPlugin = null;
+          addonRuntime.communicationModule = null;
           addonRuntime.mfdRuntimeRefs = Object.create(null);
           return true;
         },

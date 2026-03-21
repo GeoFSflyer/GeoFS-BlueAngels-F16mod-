@@ -267,13 +267,278 @@ geofs?.camera?.currentModeName
 
 // Animation values (live)
 geofs?.animation?.values
+
+// Speak chat test
+const utterance = new SpeechSynthesisUtterance("Hello this is a test.");
+utterance.lang = "en-US"; // or "nl-NL" for Dutch
+speechSynthesis.speak(utterance);
+
+// Standaard 500, the number of ms in between updates.
+geofs.MPSMinUpdateDelay = 1000
+
+// Send message in chat.
+window.multiplayer.setChatMessage("Test");
+
+// Updates with +1 every time a chat is received.
+window.multiplayer.chatMessageId
+
+// Go a bit down in cockpit view, so the fpv aligns with 0
+geofs.camera.modes[1].position[2] = 1
+
+// Check: is in cockpit view
+geofs.camera.currentDefinition.name == 'cockpit'
+geofs.camera.currentDefinition.insideView == true
+
+// F-18 Throttle + Joystick cam
+geofs.camera.modes[1].position = [-0.17, 5.4, 0.3];
+geofs.camera.modes[1].orientations['current'] = [0, -8, 0];
+geofs.camera.modes[1].FOV = 1.7;
+geofs.camera.modes[1].insideView = true;
+
+// Cockpit next to seat cam
+geofs.camera.modes[1].position = [0.38, 5, 0.8];
+geofs.camera.modes[1].orientations['current'] = [-20, -13, 0];
+geofs.camera.modes[1].FOV = 2;
+geofs.camera.modes[1].insideView = true;
+
+// Next to cocpit looking back
+geofs.camera.modes[1].position = [0.9, 4.86, 0.6];
+geofs.camera.modes[1].orientations['current'] = [-211, -2.3, 0];
+
+// Set opacity of instruments
+instruments.setOpacity(0.9)
+```
+
+You can add your custom cameras to GeoFS like this:
+
+```js
+geofs.camera.modes.push(
+{
+  "FOV": 10, // 1 = zoomed in, 10 = zoomed out
+  "insideView": true, // true = sounds of inside, false sound of outside
+  "mode": 6,
+  "name": "Look back",
+  "offsetBounds": [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
+  "offsets":
+  {
+    "current": [0, 0, 0],
+    "last": [0, 0, 0],
+    "neutral": [0, 0, 0],
+  },
+  "orientation": [180, -20, 0], // Repeat current
+  "orientations":
+  {
+    "current": [180, -20, 0], // 180 = turn around 180 degrees, look back. -20 = look a bit downward
+    "last": [180, 0, 0],
+    "neutral": [180, 0, 0],
+  },
+  "position" [0, 3.2, 1.25], // 0 = left/right: 0 = center, 3.2 = forward/rearward: 3.2 = to rear, 1.25 = up/down, 1 = neutral
+  "view": "Look back"
+});
+```
+
+Here is how we added F-18 camera angles:
+
+```js
+// Nose cam looking back
+geofs.camera.modes[6] =
+{
+  "distance": 0,
+  "FOV": 10,
+  "insideView": false,
+  "mode": 6,
+  "name": "Nose cam",
+  "offsetBounds": [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
+  "offsets":
+  {
+    "current": [0, 0.5, -1],
+    "last": [0, 0.5, 0],
+    "neutral": [0, 0.5, 0],
+  },
+  "orientation": [180, 20, -1.5],
+  "orientations":
+  {
+    "current": [180, 20, 0],
+    "last": [180, 20, 0],
+    "neutral": [180, 20, 0],
+  },
+  "position": [0, 11.55, -1.5],
+  "view": "Nose cam"
+};
+
+geofs.camera.modes[7] =
+{
+  "distance": 0,
+  "FOV": 10,
+  "insideView": false,
+  "mode": 7,
+  "name": "Cockpit Rear",
+  "offsetBounds": [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
+  "offsets":
+  {
+    "current": [0, 0.5, -1],
+    "last": [0, 0.5, 0],
+    "neutral": [0, 0.5, 0],
+  },
+  "orientation": [180, -15, -1.5],
+  "orientations":
+  {
+    "current": [180, -15, 0],
+    "last": [180, -15, 0],
+    "neutral": [180, -15, 0],
+  },
+  "position": [0, 5, 3.4],
+  "view": "Cockpit Rear"
+};
+
+geofs.camera.modes[8] =
+{
+  "distance": 0,
+  "FOV": 10,
+  "insideView": false,
+  "mode": 8,
+  "name": "Wingman",
+  "offsetBounds": [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
+  "offsets":
+  {
+    "current": [0, 0.5, -1],
+    "last": [0, 0.5, 0],
+    "neutral": [0, 0.5, 0],
+  },
+  "orientation": [115, -12, 0],
+  "orientations":
+  {
+    "current": [115, -15, 0],
+    "last": [115, -15, 0],
+    "neutral": [115, -15, 0],
+  },
+  "position": [1, 4, -0.3],
+  "view": "Wingman"
+};
+
+geofs.camera.modes[9] =
+{
+  "distance": 0,
+  "FOV": 2,
+  "insideView": false,
+  "mode": 9,
+  "name": "Down Rear",
+  "offsetBounds": [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
+  "offsets":
+  {
+    "current": [0, 0.5, -1],
+    "last": [0, 0.5, 0],
+    "neutral": [0, 0.5, 0],
+  },
+  "orientation": [180, 20, -1.5],
+  "orientations":
+  {
+    "current": [180, 20, 0],
+    "last": [180, 20, 0],
+    "neutral": [180, 20, 0],
+  },
+  "position": [0, 4, -1],
+  "view": "Down Rear"
+};
+
+geofs.camera.modes[10] =
+{
+  "distance": 0,
+  "FOV": 2,
+  "insideView": false,
+  "mode": 10,
+  "name": "Gun cam",
+  "offsetBounds": [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
+  "offsets":
+  {
+    "current": [0, -6, -1],
+    "last": [0, 0.5, 0],
+    "neutral": [0, 0.5, 0],
+  },
+  "orientation": [10, 0, 0],
+  "orientations":
+  {
+    "current": [10, 0, 0],
+    "last": [0, 20, 0],
+    "neutral": [0, 20, 0],
+  },
+  "position": [3, 4.5, 1.85],
+  "view": "Gun cam"
+};
+
+geofs.camera.modes[11] =
+{
+  "distance": 0,
+  "FOV": 10,
+  "insideView": false,
+  "mode": 11,
+  "name": "Wing cam",
+  "offsetBounds": [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
+  "offsets":
+  {
+    "current": [0, -5, -1],
+    "last": [0, 0.5, 0],
+    "neutral": [0, 0.5, 0],
+  },
+  "orientation": [30, 35, 0],
+  "orientations":
+  {
+    "current": [30, 35, 0],
+    "last": [0, 20, 0],
+    "neutral": [0, 20, 0],
+  },
+  "position": [-6, 0, 0.1],
+  "view": "Wing cam"
+};
+
+geofs.camera.modes[12] =
+{
+  "distance": 0,
+  "FOV": 1.7,
+  "insideView": true,
+  "mode": 12,
+  "name": "Throttle cam",
+  "offsetBounds": [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
+  "offsets":
+  {
+    "current": [0, 0, 0],
+    "last": [0, 0, 0],
+    "neutral": [0, 0, 0],
+  },
+  "orientation": [0, -8, 0],
+  "orientations":
+  {
+    "current": [0, -8, 0],
+    "last": [0, -8, 0],
+    "neutral": [0, -8, 0],
+  },
+  "position": [-0.17, 5.4, 0.3],
+  "view": "Throttle cam",
+};
+
+// Only mode[1] shows the detailed cockpit layout. So you can set one mode at a time.
+// Throttle + Joystick cam
+geofs.camera.modes[1].position = [-0.17, 5.4, 0.3];
+geofs.camera.modes[1].orientations['current'] = [0, -8, 0];
+geofs.camera.modes[1].FOV = 1.7;
+geofs.camera.modes[1].insideView = true;
+
+// Cockpit next to seat cam
+geofs.camera.modes[1].position = [0.38, 5, 0.8];
+geofs.camera.modes[1].orientations['current'] = [-20, -13, 0];
+geofs.camera.modes[1].FOV = 2;
+geofs.camera.modes[1].insideView = true;
+
+// Next to cocpit looking back
+geofs.camera.modes[1].position = [0.9, 4.86, 0.6];
+geofs.camera.modes[1].orientations['current'] = [-211, -2.3, 0];
 ```
 
 If you are new: start with one small feature (for example one button or one animated part), test it, then expand.# GeoFS Developer Docs
 GeoFS lacks some documentation on how to write good plugins for it. That's why I'm sharing what I've learned here.
 
 ## 10) Changing the HUD
-```
+```js
 // Access the F-18 HUD (which is the genericHUD):
 const hudOpts =
   geofs.aircraft.instance.definition
@@ -293,3 +558,86 @@ geofs.aircraft.instance.definition.parts[87].object3d._parent._children[83]._chi
 
 // Get the location of the HUD:
 geofs.aircraft.instance.definition.parts[87].object3d._parent._children[83]._children[0].htr
+
+## 11) Multiplayer
+# Multiplayer
+
+GeoFS sends a request to https://mps.geo-fs.com/update?l=4 every 500 ms. There you can see locations of nearby airplanes and newly arrived chat messages:
+
+```
+{
+    "myId": "4335605638136",
+    "userCount": 1054,
+    "users": [
+        {
+            "id": "4335605638136",
+            "acid": 1376210,
+            "ac": 27,
+            "cs": "Natrium[BlueAngels2]",
+            "st": {
+                "gr": 1,
+                "as": 0,
+                "lv": {
+                    "url": "https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/airline.json",
+                    "idx": 1
+                }
+            },
+            "co": [
+                51.4475079,
+                4.3341316,
+                25.77,
+                -3.83,
+                1.42,
+                0.07
+            ],
+            "ve": [
+                0,
+                0,
+                0.00000495,
+                0,
+                0,
+                0
+            ],
+            "ti": null
+        },
+        {
+            "id": "4337881690137",
+            "acid": 1230474,
+            "ac": 7,
+            "cs": "THY2010",
+            "st": {
+                "gr": 0,
+                "as": 651
+            },
+            "co": [
+                50.8228118,
+                4.5613882,
+                18474.65,
+                0.31,
+                -4.07,
+                11.36
+            ],
+            "ve": [
+                0.000003,
+                1.1e-7,
+                0.01175915,
+                0,
+                0,
+                0
+            ],
+            "ti": 1762433925272.2065
+        }
+    ],
+    "chatMessages": [
+        {
+            "uid": "4338763347782",
+            "acid": 458448,
+            "cs": "NameOfChatter",
+            "rs": "r1",
+            "msg": "The%20message."
+        }
+    ],
+    "lastMsgId": 2062,
+    "serverTime": 1762433925624
+}
+```
