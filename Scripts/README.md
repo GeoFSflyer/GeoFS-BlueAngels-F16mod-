@@ -4,6 +4,144 @@ Learn more on how to write GeoFS Addons in [this short manual](GeoFS.md).
 ## F-18 Addon
 The main F-18 Addon will be updated from time to time with new functionality. Unless you want to directly contribute to the plugin, it's best to customize it with your own Tampermonkey script. [This script](geo-fs-f18-mod-flightplan.js) is an example on how to add checklists, briefings and a custom IFF Codebook to the F-18.
 
+## F18Addon API (public)
+The addon now exposes a single global namespace:
+
+```js
+window.F18Addon
+```
+
+### Design rules
+- **One global only**: `window.F18Addon`
+- **MFD state is per display** (LEFT/RIGHT are independent)
+- **Options are shared** between displays through `F18Options` storage
+- Addon logic is still F-18-only (aircraft id check), but module API names are generic
+
+### Modules overview
+
+#### `window.F18Addon.lifecycle`
+- `start()`
+- `stop()`
+- `restart()`
+- `isRunning()`
+
+#### `window.F18Addon.options`
+- `buildKey(pageTitle, buttonKey)`
+- `read()`
+- `get(pageTitle, buttonKey, fallback?)`
+- `set(pageTitle, buttonKey, value)`
+- `getValue(pageTitle, buttonKey, fallback?)`
+
+#### `window.F18Addon.checklists`
+- `getModule()`
+- `addChecklist(definition)`
+- `getChecklists(type)`
+- `getCurrentChecklist(type)`
+- `getCurrentItemCompleted(type)`
+- `markNextCurrentItem(type)`
+- `setCurrentIndex(type, index)`
+- `nextChecklist(type)`
+- `nextChecklistNoWrap(type)`
+- `prevChecklist(type)`
+- `setCurrentCompleted(type, completed)`
+- `toggleCurrentCompleted(type)`
+- `resetCurrent(type)`
+- `resetType(type)`
+
+#### `window.F18Addon.weapons`
+- `getMode()`
+- `getLoadout()`
+- `getSelectedWeapon()`
+- `selectNext(minimumQuantity?)`
+- `fireSelected()`
+- `jettisonSelected()`
+- `startRearm(config)`
+- `getRearmState()`
+
+#### `window.F18Addon.controls`
+- `setProbeState(state)` // `OPEN` or `CLOSED`
+- `getProbeState()`
+
+#### `window.F18Addon.mfd`
+- `getSlots()`
+- `getDisplayState(slotName)`
+- `setPage(slotName, pageIndex)`
+- `nextPage(slotName)`
+- `toggleButton(slotName, side, index)`
+
+### Shared option keys (via `F18Options`)
+The MFD writes and reads shared options using normalized keys like `PAGE.BUTTON`.
+
+Known keys used by the addon:
+
+- `REC.STATE`
+- `REC.PLAYBACK`
+- `HUD.BRIGHT`
+- `HUD.LEVEL`
+- `HUD.MAX_G`
+- `HUD.COLOR`
+- `SYS.FLAPS`
+- `SYS.SPEEDBRAKE`
+- `SYS.REFUELING`
+- `CHK.PREV`
+- `CHK.N_A1`
+- `CHK.ALL`
+- `CHK.N_A2`
+- `CHK.TYPE`
+- `CHK.NEXT`
+- `CHK.N_A3`
+- `CHK.N_A31`
+- `CHK.CHECK_ITEM`
+- `CHK.RESET`
+- `CHK.COMPLETE`
+- `WPN.MASTER`
+- `WPN.SELECT`
+- `WPN.CONFIG`
+- `WPN.MODE`
+- `WPN.FIRE`
+- `WPN.JETTISON`
+- `WPN.REARM`
+
+### Weapon state storage
+Weapon runtime state is stored separately in `F18WpnState`.
+
+### Example: wait for addon + add checklist
+
+```js
+const poll = setInterval(() => {
+  const api = window.F18Addon?.checklists;
+  if (!api) return;
+  clearInterval(poll);
+
+  api.addChecklist({
+    type: 'OPS',
+    title: 'My Procedures',
+    items: ['Briefing complete', 'Weather checked'],
+    completed: false,
+  });
+}, 500);
+```
+
+### Example: shared options
+
+```js
+const addon = window.F18Addon;
+if (!addon) throw new Error('F18Addon not ready');
+
+addon.options.set('WPN', 'MASTER', 'ON');
+console.log(addon.options.get('WPN', 'MASTER', 'OFF')); // ON
+```
+
+### Example: per-display MFD state
+
+```js
+const addon = window.F18Addon;
+if (!addon) throw new Error('F18Addon not ready');
+
+addon.mfd.setPage('LEFT', 3);  // only LEFT display changes page
+addon.mfd.setPage('RIGHT', 1); // only RIGHT display changes page
+```
+
 ## Flight Recorder API
 The Flight Recorder now exposes a public API on `window.FlightRecorder.api` so other scripts/plugins can control recording and playback.
 

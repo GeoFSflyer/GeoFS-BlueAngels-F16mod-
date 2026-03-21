@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoFS F-18 Addon
 // @namespace    https://github.com/ArjanKw/GeoFS-BlueAngels/
-// @version      1.2.3
+// @version      1.3.0
 // @description  Improves the cockpit with a new HUD and custom MFDs, adjustable seat height and more.
 // @match        https://www.geo-fs.com/*
 // @match        https://geo-fs.com/*
@@ -28,6 +28,13 @@
   const F18_WPN_STATE_STORAGE_KEY = 'F18WpnState';
   const DEFAULT_COLOR = '#00ff00';
   let currentHudColor = DEFAULT_COLOR;
+  const addonRuntime = {
+    checklistModule: null,
+    mfdUiStates: Object.create(null),
+    mfdPagesCatalog: null,
+    mfdRuntimeRefs: Object.create(null),
+    mainPlugin: null
+  };
 
   let wpnLoadout = {
     'A/A': {
@@ -551,7 +558,7 @@
   }
 
   function getWpnModeFromOptions() {
-    const mode = getF18Option('WPN', 'MODE', 'NAV');
+    const mode = getOption('WPN', 'MODE', 'NAV');
     return mode === 'A/A' || mode === 'A/G' || mode === 'NAV' || mode === 'JETTISON' ? mode : 'NAV';
   }
 
@@ -571,7 +578,7 @@
   function saveWpnStateToStorage() {
     try {
       const payload = {
-        config: getF18Option('WPN', 'CONFIG', 'A/A'),
+        config: getOption('WPN', 'CONFIG', 'A/A'),
         loadout: wpnCurrentLoadout,
         selected: wpnSelectedWeaponByMode
       };
@@ -1091,11 +1098,11 @@
       .replace(/^_+|_+$/g, '');
   }
 
-  function buildF18OptionKey(pageTitle, buttonKey) {
+  function buildOptionKey(pageTitle, buttonKey) {
     return `${normalizeOptionToken(pageTitle)}.${normalizeOptionToken(buttonKey)}`;
   }
 
-  function readF18Options() {
+  function readOptions() {
     try {
       const raw = window.localStorage?.getItem?.(F18_OPTIONS_STORAGE_KEY);
       if (!raw) return {};
@@ -1107,29 +1114,37 @@
     }
   }
 
-  function getF18Option(pageTitle, buttonKey, fallback = null) {
-    const options = readF18Options();
-    const optionKey = buildF18OptionKey(pageTitle, buttonKey);
+  function getOption(pageTitle, buttonKey, fallback = null) {
+    const options = readOptions();
+    const optionKey = buildOptionKey(pageTitle, buttonKey);
     return options[optionKey] ?? fallback;
   }
 
-  function setF18Option(pageTitle, buttonKey, value) {
+  function writeOptions(options) {
     try {
-      const options = readF18Options();
-      const optionKey = buildF18OptionKey(pageTitle, buttonKey);
+      const payload = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+      window.localStorage?.setItem?.(F18_OPTIONS_STORAGE_KEY, JSON.stringify(payload));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function setOption(pageTitle, buttonKey, value) {
+    try {
+      const options = readOptions();
+      const optionKey = buildOptionKey(pageTitle, buttonKey);
       options[optionKey] = value;
-      window.localStorage?.setItem?.(F18_OPTIONS_STORAGE_KEY, JSON.stringify(options));
+      writeOptions(options);
     } catch (e) {
       // Ignore storage write issues.
     }
   }
 
-  function getF18OptionValue(pageTitle, buttonKey, fallback = null) {
-    const selectedState = getF18Option(pageTitle, buttonKey, null);
-    const pages =
-      window.__mfdUiPagesCatalog
-      ?? window.__mfdUiState?.pages
-      ?? window.__f18MfdUiState?.pages;
+  function getOptionValue(pageTitle, buttonKey, fallback = null) {
+    const selectedState = getOption(pageTitle, buttonKey, null);
+    const pages = addonRuntime.mfdPagesCatalog
+      ?? Object.values(addonRuntime.mfdUiStates)[0]?.pages;
     if (!Array.isArray(pages)) {
       return selectedState ?? fallback;
     }
@@ -1165,7 +1180,7 @@
   }
 
   function getMfdBrightnessFactor() {
-    const brightMode = String(getF18Option('HUD', 'BRIGHT', 'NORM') ?? 'NORM').toUpperCase();
+    const brightMode = String(getOption('HUD', 'BRIGHT', 'NORM') ?? 'NORM').toUpperCase();
     if (brightMode === 'DAY') return 1.0;
     if (brightMode === 'NIGHT') return 0.3;
     return 0.6; // NORM
@@ -1655,26 +1670,10 @@
   }
 
   function getChecklistModule() {
-    if (!window.__f18ChecklistModule) {
-      window.__f18ChecklistModule = createDefaultChecklistModule();
-      window.F18ChecklistModule = {
-        getModule: () => window.__f18ChecklistModule,
-        addChecklist: (definition) => window.__f18ChecklistModule.addChecklist(definition),
-        getChecklists: (type) => window.__f18ChecklistModule.getChecklists(type),
-        getCurrentChecklist: (type) => window.__f18ChecklistModule.getCurrentChecklist(type),
-        getCurrentItemCompleted: (type) => window.__f18ChecklistModule.getCurrentItemCompleted(type),
-        markNextCurrentItem: (type) => window.__f18ChecklistModule.markNextCurrentItem(type),
-        setCurrentIndex: (type, index) => window.__f18ChecklistModule.setCurrentIndex(type, index),
-        nextChecklist: (type) => window.__f18ChecklistModule.nextChecklist(type),
-        nextChecklistNoWrap: (type) => window.__f18ChecklistModule.nextChecklistNoWrap(type),
-        prevChecklist: (type) => window.__f18ChecklistModule.prevChecklist(type),
-        setCurrentCompleted: (type, completed) => window.__f18ChecklistModule.setCurrentCompleted(type, completed),
-        toggleCurrentCompleted: (type) => window.__f18ChecklistModule.toggleCurrentCompleted(type),
-        resetCurrent: (type) => window.__f18ChecklistModule.resetCurrent(type),
-        resetType: (type) => window.__f18ChecklistModule.resetType(type)
-      };
+    if (!addonRuntime.checklistModule) {
+      addonRuntime.checklistModule = createDefaultChecklistModule();
     }
-    return window.__f18ChecklistModule;
+    return addonRuntime.checklistModule;
   }
 
   class F18MfdUiState {
@@ -1822,7 +1821,7 @@
               stateIndex: 0,
               managedExternally: true,
               onClick: () => {
-                const type = getF18Option('CHK', 'TYPE', 'PROC');
+                const type = getOption('CHK', 'TYPE', 'PROC');
                 getChecklistModule().prevChecklist(type);
               }
             },
@@ -1835,7 +1834,7 @@
               states: ['PROC', 'EMER', 'OPS', 'FLP'],
               stateIndex: 0,
               onClick: ({ nextState }) => {
-                setF18Option('CHK', 'ALL', 'ALL'); // Show all checklists of this type when switching type.
+                setOption('CHK', 'ALL', 'ALL'); // Show all checklists of this type when switching type.
                 getChecklistModule().setCurrentIndex(nextState, 0);
               }
             },
@@ -1848,21 +1847,21 @@
               stateIndex: 0,
               managedExternally: true,
               onClick: () => {
-                const type = getF18Option('CHK', 'TYPE', 'PROC');
+                const type = getOption('CHK', 'TYPE', 'PROC');
                 getChecklistModule().nextChecklist(type);
               }
             },
             { key: 'N/A3', label: '', states: [''], stateIndex: 0 },
-            { key: 'N/A31', label: '', states: [''], show: () => { return getF18Option('CHK', 'ALL', 'ONE') !== 'ONE'; }, stateIndex: 0 },
+            { key: 'N/A31', label: '', states: [''], show: () => { return getOption('CHK', 'ALL', 'ONE') !== 'ONE'; }, stateIndex: 0 },
             {
               key: 'CHECK_ITEM',
               label: 'CHK',
               states: [''],
               stateIndex: 0,
               managedExternally: true,
-              show: () => { return getF18Option('CHK', 'ALL', 'ONE') === 'ONE'; },
+              show: () => { return getOption('CHK', 'ALL', 'ONE') === 'ONE'; },
               onClick: () => {
-                const type = getF18Option('CHK', 'TYPE', 'PROC');
+                const type = getOption('CHK', 'TYPE', 'PROC');
                 getChecklistModule().markNextCurrentItem(type);
               }
             },
@@ -1873,8 +1872,8 @@
               stateIndex: 0,
               managedExternally: true,
               onClick: () => {
-                const isAllMode = String(getF18Option('CHK', 'ALL', 'ONE') ?? 'ONE').toUpperCase() === 'ALL';
-                const type = getF18Option('CHK', 'TYPE', 'PROC');
+                const isAllMode = String(getOption('CHK', 'ALL', 'ONE') ?? 'ONE').toUpperCase() === 'ALL';
+                const type = getOption('CHK', 'TYPE', 'PROC');
                 const checklistModule = getChecklistModule();
 
                 if (isAllMode) {
@@ -1892,8 +1891,8 @@
               stateIndex: 0,
               managedExternally: true,
               onClick: () => {
-                const isAllMode = String(getF18Option('CHK', 'ALL', 'ONE') ?? 'ONE').toUpperCase() === 'ALL';
-                const type = getF18Option('CHK', 'TYPE', 'PROC');
+                const isAllMode = String(getOption('CHK', 'ALL', 'ONE') ?? 'ONE').toUpperCase() === 'ALL';
+                const type = getOption('CHK', 'TYPE', 'PROC');
                 const checklistModule = getChecklistModule();
 
                 if (isAllMode) {
@@ -1918,8 +1917,8 @@
             if (!ctx) return;
 
             const checklistModule = getChecklistModule();
-            const selectedType = String(getF18Option('CHK', 'TYPE', 'PROC') ?? 'PROC').toUpperCase();
-            const showAll = String(getF18Option('CHK', 'ALL', 'ONE') ?? 'ONE').toUpperCase() === 'ALL';
+            const selectedType = String(getOption('CHK', 'TYPE', 'PROC') ?? 'PROC').toUpperCase();
+            const showAll = String(getOption('CHK', 'ALL', 'ONE') ?? 'ONE').toUpperCase() === 'ALL';
             const checklists = checklistModule.getChecklists(selectedType);
 
             ctx.save();
@@ -2023,7 +2022,7 @@
                 const modeLoadout = getWpnModeLoadout(mode);
                 fireSelectedWpnWeapon(mode, modeLoadout);
               },
-              show: () => controls?.gear?.position === 1 && geofs?.animation?.values?.haglFeet > 50 && getF18Option('WPN', 'MASTER', 'OFF') !== 'OFF' && getF18Option('WPN', 'MODE', 'NAV') != 'JETTISON'
+              show: () => controls?.gear?.position === 1 && geofs?.animation?.values?.haglFeet > 50 && getOption('WPN', 'MASTER', 'OFF') !== 'OFF' && getOption('WPN', 'MODE', 'NAV') != 'JETTISON'
             },
             {
               key: 'JETTISON',
@@ -2035,7 +2034,7 @@
                 const modeLoadout = getWpnModeLoadout(mode);
                 jettisonSelectedWpnWeapon(mode, modeLoadout);
               },
-              show: () => controls?.gear?.position === 1 && geofs?.animation?.values?.haglFeet > 50 && getF18Option('WPN', 'MODE', 'NAV') == 'JETTISON'
+              show: () => controls?.gear?.position === 1 && geofs?.animation?.values?.haglFeet > 50 && getOption('WPN', 'MODE', 'NAV') == 'JETTISON'
             },
             {
               key: 'REARM',
@@ -2044,12 +2043,12 @@
               stateIndex: 0,
               onClick: ({ page }) => {
                 // The armament to load in the wpnLoadout.
-                const config = getF18Option('WPN', 'CONFIG', 'A/A');
+                const config = getOption('WPN', 'CONFIG', 'A/A');
 
                 // Start the rearming process, which will gradually fill the wpnLoadout based on the selected config.
                 startWpnRearm(config);
               },
-              show: () => controls?.gear?.position === 0 && !geofs?.animation?.values?.enginesOn && getF18Option('WPN', 'MASTER', 'OFF') === 'OFF'
+              show: () => controls?.gear?.position === 0 && !geofs?.animation?.values?.enginesOn && getOption('WPN', 'MASTER', 'OFF') === 'OFF'
             }
           ],
           lines: [],
@@ -2164,7 +2163,7 @@
             ctx.font = `bold ${Math.round(h * 0.055)}px monospace`;
             ctx.fillText('FUEL', cx, h * 0.35 + yOffset);
 
-            if (getF18Option('WPN', 'MASTER', 'OFF') !== 'OFF') {
+            if (getOption('WPN', 'MASTER', 'OFF') !== 'OFF') {
               ctx.fillText('ARM', cx, h * 0.47 + yOffset);
             }
 
@@ -2252,12 +2251,12 @@
 
     getButtonStorageKey(page, button, index, side) {
       const preferred = button?.key || button?.label || `${side}${index + 1}`;
-      return buildF18OptionKey(page?.title ?? 'PAGE', preferred);
+      return buildOptionKey(page?.title ?? 'PAGE', preferred);
     }
 
     ensureDefaultsInStorage() {
       try {
-        const stored = readF18Options();
+        const stored = readOptions();
         let changed = false;
 
         for (let pageIndex = 0; pageIndex < this.pages.length; pageIndex++) {
@@ -2286,7 +2285,7 @@
         }
 
         if (changed) {
-          window.localStorage?.setItem?.(F18_OPTIONS_STORAGE_KEY, JSON.stringify(stored));
+          writeOptions(stored);
         }
       } catch (e) {
         // Ignore malformed storage.
@@ -2297,7 +2296,7 @@
       if (!button?.states?.length) return -1;
 
       const optionKey = this.getButtonStorageKey(page, button, index, side);
-      const storedState = readF18Options()?.[optionKey];
+      const storedState = readOptions()?.[optionKey];
 
       if (storedState != null) {
         const exactIndex = button.states.findIndex((s) => s === storedState);
@@ -2346,7 +2345,7 @@
       }
 
       btn.stateIndex = nextIndex;
-      setF18Option(page?.title ?? 'PAGE', btn?.key || btn?.label || `${side}${index + 1}`, nextState);
+      setOption(page?.title ?? 'PAGE', btn?.key || btn?.label || `${side}${index + 1}`, nextState);
     }
 
     isButtonVisible(button, page) {
@@ -2526,7 +2525,7 @@
       const h = renderer.canvasAPI.canvas.height;
       const page = this.getCurrentPage();
       const layout = this.getLayout(w, h);
-      const baseColor = getF18OptionValue('HUD', 'COLOR', '#00ff66') ?? '#00ff66';
+      const baseColor = getOptionValue('HUD', 'COLOR', '#00ff66') ?? '#00ff66';
       const color = applyBrightnessToHexColor(baseColor, getMfdBrightnessFactor()) ?? baseColor;
       renderer.canvasAPI.clear();
 
@@ -2727,7 +2726,7 @@
   }
 
   function getHudColorFromStoredOptions() {
-    return getF18OptionValue('HUD', 'COLOR', DEFAULT_COLOR) ?? DEFAULT_COLOR;
+    return getOptionValue('HUD', 'COLOR', DEFAULT_COLOR) ?? DEFAULT_COLOR;
   }
 
   // Returns pixelsPerDeg (vertical), pixelsPerDegX (horizontal) and
@@ -3584,7 +3583,7 @@
     const currentG = Number.isFinite(anim.loadFactor) ? anim.loadFactor : 1;
     const navUnit = window.geofs?.nav?.currentNAVUnit ?? null;
     const autopilot = window.geofs?.autopilot ?? null;
-    const wpnMaster = getF18Option('WPN', 'MASTER', 'OFF');
+    const wpnMaster = getOption('WPN', 'MASTER', 'OFF');
     const wpnMode = getWpnModeFromOptions();
     const wpnModeLoadout = getWpnModeLoadout(wpnMode);
     const wpnHudStatus = wpnMaster !== 'OFF'
@@ -3595,7 +3594,7 @@
       : null;
     const hudBaseColor = getHudColorFromStoredOptions();
     const hudColor = applyBrightnessToHexColor(hudBaseColor, getMfdBrightnessFactor()) ?? hudBaseColor;
-    const hudLevel = getF18Option('HUD', 'LEVEL', 'FULL');
+    const hudLevel = getOption('HUD', 'LEVEL', 'FULL');
     currentHudColor = hudColor;
 
     updateWpnRearmState();
@@ -4054,11 +4053,11 @@
     }
 
     getFlapsMode() {
-      return String(getF18Option('SYS', 'FLAPS', 'MAN') ?? 'MAN').toUpperCase();
+      return String(getOption('SYS', 'FLAPS', 'MAN') ?? 'MAN').toUpperCase();
     }
 
     getSpeedbrakeCapNormalized() {
-      const raw = String(getF18Option('SYS', 'SPEEDBRAKE', 'MAX') ?? 'MAX').trim().toUpperCase();
+      const raw = String(getOption('SYS', 'SPEEDBRAKE', 'MAX') ?? 'MAX').trim().toUpperCase();
       if (raw === 'MAX') return 1;
 
       const percentMatch = raw.match(/^(\d+(?:\.\d+)?)%$/);
@@ -4329,7 +4328,6 @@
     ensureLoaded() {
       if (this.installed) return true;
       this.installed = true;
-      this.exposeDebugApi();
       this.installProbeControls();
       this.startLoop();
       return true;
@@ -4338,7 +4336,7 @@
     setProbeState(state) {
       const value = String(state || '').trim().toUpperCase();
       if (value !== 'OPEN' && value !== 'CLOSED') return false;
-      setF18Option('SYS', 'REFUELING', value);
+      setOption('SYS', 'REFUELING', value);
       return true;
     }
 
@@ -4405,21 +4403,6 @@
       this.helperModule?.removePadControl(this.probeControlsWrapperId);
     }
 
-    exposeDebugApi() {
-      const self = this;
-      window.F18ControlModule = {
-        list: () => [...self.controls.keys()],
-        get: (key) => self.getControlSnapshot(key),
-        setDuration: (key, durationMs) => self.setControlDuration(key, durationMs),
-        setChannel: (key, partName, valueKey, state, value) => self.setChannelValue(key, partName, valueKey, state, value),
-        setByValueKey: (key, valueKey, state, value) => { self.setChannelValueByValueKey(key, valueKey, state, value); self.reanimateAllControlsToOption(key); },
-        setPartTiming: (key, partName, state, delayMs, durationMs) => self.setPartTiming(key, partName, state, delayMs, durationMs),
-        reanimate: (key) => self.reanimateControlToOption(key),
-        reanimateAll: () => self.reanimateAllControlsToOption(),
-        values: () => ({ ...(window.geofs?.animation?.values || {}) })
-      };
-    }
-
     startLoop() {
       if (this.timer) return;
       this.timer = setInterval(() => this.tick(), 50);
@@ -4445,7 +4428,7 @@
       if (!tokens.page || !tokens.key) return control.defaultState;
 
       const runtime = control?.runtime || {};
-      const raw = getF18Option(tokens.page, tokens.key, null);
+      const raw = getOption(tokens.page, tokens.key, null);
       if (raw == null || raw === '') {
         return String(runtime.targetState || runtime.currentState || control.defaultState).toUpperCase();
       }
@@ -4841,9 +4824,6 @@
       for (const control of this.controls.values()) {
         control.runtime.initialized = false;
       }
-      if (window.F18ControlModule) {
-        delete window.F18ControlModule;
-      }
       this.installed = false;
       this.lastAircraftId = null;
     }
@@ -4897,8 +4877,6 @@
         MFD_RIGHT_BUTTON_PART_NAME_BASE: `mfdRightButtonPart${this.slotName}_`
       };
 
-      this.uiStateKey = `__mfdUiState_${this.slotName}`;
-      this.runtimeRefKey = `__mfdPartRef_${this.slotName}`;
       this.nodeClickHandlerInstalled = false;
       this.onNodeClickBound = this.onNodeClick.bind(this);
       this.defaultPageApplied = false;
@@ -4927,13 +4905,13 @@
     }
 
     ensureUiState() {
-      if (!window[this.uiStateKey]) {
-        window[this.uiStateKey] = new F18MfdUiState();
+      if (!addonRuntime.mfdUiStates[this.slotName]) {
+        addonRuntime.mfdUiStates[this.slotName] = new F18MfdUiState();
       }
 
       if (!this.defaultPageApplied) {
         const desiredTitle = String(this.cfg.defaultPageTitle || '').trim().toUpperCase();
-        const uiState = window[this.uiStateKey];
+        const uiState = addonRuntime.mfdUiStates[this.slotName];
         if (desiredTitle && Array.isArray(uiState?.pages)) {
           const idx = uiState.pages.findIndex((p) => String(p?.title || '').trim().toUpperCase() === desiredTitle);
           if (idx >= 0) {
@@ -4943,16 +4921,14 @@
         this.defaultPageApplied = true;
       }
 
-      window.__mfdUiStates = window.__mfdUiStates || {};
-      window.__mfdUiStates[this.slotName] = window[this.uiStateKey];
-      if (!window.__mfdUiPagesCatalog) {
-        window.__mfdUiPagesCatalog = window[this.uiStateKey]?.pages;
+      if (!addonRuntime.mfdPagesCatalog) {
+        addonRuntime.mfdPagesCatalog = addonRuntime.mfdUiStates[this.slotName]?.pages;
       }
       return true;
     }
 
     getUiState() {
-      return window[this.uiStateKey];
+      return addonRuntime.mfdUiStates[this.slotName];
     }
 
     renderMfdButton(renderer) {
@@ -5012,7 +4988,7 @@
         const w = renderer.canvasAPI.canvas.width;
         const h = renderer.canvasAPI.canvas.height;
         renderer.canvasAPI.clear('#000000');
-        const fallbackBaseColor = getF18OptionValue('HUD', 'COLOR', DEFAULT_COLOR) ?? DEFAULT_COLOR;
+        const fallbackBaseColor = getOptionValue('HUD', 'COLOR', DEFAULT_COLOR) ?? DEFAULT_COLOR;
         ctx.fillStyle = applyBrightnessToHexColor(fallbackBaseColor, getMfdBrightnessFactor()) ?? fallbackBaseColor;
         ctx.font = `bold ${Math.round(h * 0.18)}px monospace`;
         ctx.textAlign = 'center';
@@ -5163,10 +5139,10 @@
     }
 
     ensureMfdUsingGeoFsParts() {
-      const existingRef = window[this.runtimeRefKey];
+      const existingRef = addonRuntime.mfdRuntimeRefs[this.slotName];
       const existingPart = window.geofs?.aircraft?.instance?.parts?.[this.names.MFD_PART_NAME];
       if (existingRef && existingPart) return true;
-      if (existingRef && !existingPart) delete window[this.runtimeRefKey];
+      if (existingRef && !existingPart) delete addonRuntime.mfdRuntimeRefs[this.slotName];
       if (!isF18Active()) return false;
 
       const aircraft = window.geofs?.aircraft?.instance;
@@ -5216,7 +5192,7 @@
       if (!this.installButtonGroup('left')) return false;
       if (!this.installButtonGroup('right')) return false;
 
-      window[this.runtimeRefKey] = {
+      addonRuntime.mfdRuntimeRefs[this.slotName] = {
         remove: () => this.removeInstalledParts()
       };
 
@@ -5250,7 +5226,7 @@
         this.removePartByName(this.getRightButtonPartName(i));
       }
       this.removePartByName(this.names.MFD_PART_NAME);
-      delete window[this.runtimeRefKey];
+      delete addonRuntime.mfdRuntimeRefs[this.slotName];
     }
 
     hasRequiredNodeClickHandlers() {
@@ -5572,7 +5548,7 @@
 
     restore() {
       this.removeNodeClickHandler();
-      window[this.runtimeRefKey]?.remove?.();
+      addonRuntime.mfdRuntimeRefs[this.slotName]?.remove?.();
       this.defaultPageApplied = false;
     }
   }
@@ -5726,14 +5702,14 @@
         const mode = window.geofs?.camera?.currentModeName;
         const aircraft = window.geofs?.aircraft?.instance;
         for (const mfdModule of this.mfdModules) {
-          const hasMfdRef = Boolean(window[mfdModule.runtimeRefKey]);
+          const hasMfdRef = Boolean(addonRuntime.mfdRuntimeRefs[mfdModule.slotName]);
           const hasMfdPart = Boolean(aircraft?.parts?.[mfdModule.partName]);
 
           if (mode === 'cockpit' && !hasMfdPart && (this.cameraWatchTicks - this.lastMfdRecoveryTick) >= 4) {
             this.lastMfdRecoveryTick = this.cameraWatchTicks;
 
             if (hasMfdRef) {
-              delete window[mfdModule.runtimeRefKey];
+              delete addonRuntime.mfdRuntimeRefs[mfdModule.slotName];
             }
 
             mfdModule.ensureLoaded();
@@ -5792,10 +5768,123 @@
     }
   }
 
-  if (window.__f18MainPlugin?.stop) {
-    window.__f18MainPlugin.stop();
+  function getMfdSlotState(slotName) {
+    const slot = normalizeOptionToken(slotName || 'LEFT') || 'LEFT';
+    return addonRuntime.mfdUiStates?.[slot] ?? null;
   }
 
-  window.__f18MainPlugin = new F18MainPlugin();
-  window.__f18MainPlugin.start();
+  function createAddonApi() {
+    return {
+      version: '1.2.3',
+      helper: {
+        normalizeToken: normalizeOptionToken,
+        isAircraftActive: isF18Active
+      },
+      options: {
+        buildKey: buildOptionKey,
+        read: readOptions,
+        write: writeOptions,
+        get: getOption,
+        set: setOption,
+        getValue: getOptionValue
+      },
+      checklists: {
+        getModule: () => getChecklistModule(),
+        addChecklist: (definition) => getChecklistModule().addChecklist(definition),
+        getChecklists: (type) => getChecklistModule().getChecklists(type),
+        getCurrentChecklist: (type) => getChecklistModule().getCurrentChecklist(type),
+        getCurrentItemCompleted: (type) => getChecklistModule().getCurrentItemCompleted(type),
+        markNextCurrentItem: (type) => getChecklistModule().markNextCurrentItem(type),
+        setCurrentIndex: (type, index) => getChecklistModule().setCurrentIndex(type, index),
+        nextChecklist: (type) => getChecklistModule().nextChecklist(type),
+        nextChecklistNoWrap: (type) => getChecklistModule().nextChecklistNoWrap(type),
+        prevChecklist: (type) => getChecklistModule().prevChecklist(type),
+        setCurrentCompleted: (type, completed) => getChecklistModule().setCurrentCompleted(type, completed),
+        toggleCurrentCompleted: (type) => getChecklistModule().toggleCurrentCompleted(type),
+        resetCurrent: (type) => getChecklistModule().resetCurrent(type),
+        resetType: (type) => getChecklistModule().resetType(type)
+      },
+      weapons: {
+        getMode: getWpnModeFromOptions,
+        getLoadout: () => wpnCurrentLoadout,
+        getSelectedWeapon: () => {
+          const mode = getWpnModeFromOptions();
+          const modeLoadout = getWpnModeLoadout(mode);
+          return ensureWpnSelectedWeapon(mode, modeLoadout);
+        },
+        selectNext: (minimumQuantity = 0) => {
+          const mode = getWpnModeFromOptions();
+          const modeLoadout = getWpnModeLoadout(mode);
+          return selectNextWpnWeapon(mode, modeLoadout, minimumQuantity);
+        },
+        fireSelected: () => {
+          const mode = getWpnModeFromOptions();
+          const modeLoadout = getWpnModeLoadout(mode);
+          return fireSelectedWpnWeapon(mode, modeLoadout);
+        },
+        jettisonSelected: () => {
+          const mode = getWpnModeFromOptions();
+          const modeLoadout = getWpnModeLoadout(mode);
+          return jettisonSelectedWpnWeapon(mode, modeLoadout);
+        },
+        startRearm: (config) => startWpnRearm(config),
+        getRearmState: () => ({ ...wpnRearmState })
+      },
+      controls: {
+        setProbeState: (state) => addonRuntime.mainPlugin?.controlModule?.setProbeState?.(state) ?? false,
+        getProbeState: () => getOption('SYS', 'REFUELING', 'CLOSED')
+      },
+      mfd: {
+        getSlots: () => Object.keys(addonRuntime.mfdUiStates),
+        getDisplayState: (slotName) => getMfdSlotState(slotName),
+        setPage: (slotName, pageIndex) => {
+          const uiState = getMfdSlotState(slotName);
+          if (!uiState || !Number.isInteger(pageIndex)) return false;
+          uiState.setPage(pageIndex);
+          return true;
+        },
+        nextPage: (slotName) => {
+          const uiState = getMfdSlotState(slotName);
+          if (!uiState) return false;
+          uiState.nextPage();
+          return true;
+        },
+        toggleButton: (slotName, side, index) => {
+          const uiState = getMfdSlotState(slotName);
+          if (!uiState) return false;
+          uiState.toggleButtonBySlot(side, index);
+          return true;
+        }
+      },
+      lifecycle: {
+        start: () => {
+          if (!addonRuntime.mainPlugin) {
+            addonRuntime.mainPlugin = new F18MainPlugin();
+          }
+          addonRuntime.mainPlugin.start();
+          return true;
+        },
+        stop: () => {
+          addonRuntime.mainPlugin?.stop?.();
+          addonRuntime.mainPlugin = null;
+          addonRuntime.mfdRuntimeRefs = Object.create(null);
+          return true;
+        },
+        restart: () => {
+          addonRuntime.mainPlugin?.stop?.();
+          addonRuntime.mainPlugin = new F18MainPlugin();
+          addonRuntime.mainPlugin.start();
+          return true;
+        },
+        isRunning: () => Boolean(addonRuntime.mainPlugin)
+      }
+    };
+  }
+
+  if (window.F18Addon?.lifecycle?.stop) {
+    window.F18Addon.lifecycle.stop();
+  }
+
+  window.F18Addon = createAddonApi();
+  window.F18Addon.lifecycle.start();
 })();

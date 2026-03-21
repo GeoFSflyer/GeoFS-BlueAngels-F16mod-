@@ -42,12 +42,12 @@
   const timer = setInterval(() => {
     tries += 1;
 
-    // Check if the F18ChecklistModule is available already.
-    const api = window.F18ChecklistModule;
+    // Check if the F18Addon checklist API is available already.
+    const api = window.F18Addon?.checklists;
     if (!api) {
       if (tries >= MAX_TRIES) {
         clearInterval(timer);
-        console.warn('[F18 Checklist Demo] F18ChecklistModule not found.');
+        console.warn('[F18 Checklist Demo] F18Addon.checklists not found.');
       }
       return;
     }
