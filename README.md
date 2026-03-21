@@ -1,36 +1,23 @@
 ![GeoFS Blue Angels](Images/BA.png)
 
 # GeoFS Blue Angels
-Welcome to the main GeoFS Blue Angels hub. This space provides everything we need to operate.
-
-Our pilots:
-1) Big-E
-2) Natrium
-3) Vacant
-4) Sonic
-5) Vacant
-6) Vacant
-
-Our trainees:
-1) Rogue Viper
-2) LaCroix
-3) Solotürk
-4) Toaster
-5) MASSIV
+Welcome to the main GeoFS Blue Angels hub. This space provides everything we need to operate. Note that we're not affiliated in any way with the real Blue Angels.
 
 ## Joining us
 We welcome pilots who are able to fly in close formation. 
-Add `bigenchilada` on Discord to apply. You'll be first added as a trainee, so you can train with us.
-After successfully completing the pilot checkride, in which you demonstrate that your skills are up to our standars, you will transition to our display team.
+Add `net_zero2030` on Discord to apply. You'll be first added as a trainee, so you can train with us.
+After successfully completing the pilot checkride, in which you demonstrate that your skills are up to our standard, you will transition to our display team.
 
 # Manual
 Our manual contains our way of working and procedures. It also details how to set up Geo-FS, so you can use our liveries and scripts.
 
 [Read it here](https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Manual/Geo-FS%20Blue%20Angels%20Manual.pdf)
 
+[Tips on formation flying](https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Manual/FormationFlying.pdf)
+
 # Blue Angels livery
 This allows the GeoFS Blue Angels team to use their Blue Angels livery, and see it in multiplayer, using the Livery Selector.
-In the Livery Selector, add this Virtual Airline URL: https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/airline.json
+In the Livery Selector, add this Virtual Airline URL: `https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/airline.json`
 
 Now you can select the Blue Angels livery of your choice:
 
@@ -49,12 +36,14 @@ If you don't have rights for this, create an Issue or Pull Request with the requ
 # Scripts
 These scripts are used by the GeoFS Blue Angels to improve their flying. Install the browser extension Tampermonkey to manage these scripts easily.
 
+Developer documentation for the scripts [can be found here](Scripts/README.md).
+
 ## Flight recorder
-This addon allows you to record your flight and play it back while recording a new flight. This way you can record formation flights and practise formation flying. It is in beta, and tested only with the F-18 so far, so expect some bugs.
+This addon allows you to record your flight and play it back while recording a new flight. This way you can record formation flights and practise formation flying.
 
 Installation: [add this script](https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/geo-fs-flight-recorder.js) to Tampermonkey, or execute it in Developer Console.
 
-Use it by clicking the Flight Recorder button in the top right, opening this panel:
+Use it by clicking the REC button in the bottom left, opening this panel:
 
 ![Flight Recorder](Images/scripts/FlightRecorder.png)
 
@@ -68,7 +57,7 @@ Installation: [add this script](https://raw.githubusercontent.com/ArjanKw/GeoFS-
 
 ## Chat fix
 There is a bug in GeoFS that prevents the key 'T' to open the chat input. Fixing this helps to quickly communicate without having to rely on your mouse.
-This script [is created by Zeta](https://github.com/ZetaPossibly/GeoFS-Chat-Fix), all credits go to him. We host it as we couldn't find the place where it was stored originally.
+This script [is created by Zeta](https://github.com/ZetaPossibly/GeoFS-Chat-Fix), all credits go to him.
 
 Installation: [add this script](https://raw.githubusercontent.com/ZetaPossibly/GeoFS-Chat-Fix/refs/heads/main/fix_chat.js) to Tampermonkey, or execute it in Developer Console.
 

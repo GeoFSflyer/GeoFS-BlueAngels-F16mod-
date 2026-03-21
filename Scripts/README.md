@@ -1,3 +1,119 @@
+# Developer documentation
+Learn more on how to write GeoFS Addons in [this short manual](GeoFS.md).
+
+## F-18 Addon
+The main F-18 Addon will be updated from time to time with new functionality. Unless you want to directly contribute to the plugin, it's best to customize it with your own Tampermonkey script. [This script](geo-fs-f18-mod-flightplan.js) is an example on how to add checklists, briefings and a custom IFF Codebook to the F-18.
+
+## Flight Recorder API
+The Flight Recorder now exposes a public API on `window.FlightRecorder.api` so other scripts/plugins can control recording and playback.
+
+You can always check if it is available:
+
+```js
+if (window.FlightRecorder?.api) {
+	// API ready
+}
+```
+
+As a lot of GeoFS files get loaded when you start GeoFS, it might take a while before my addons are available. In [this script](geo-fs-f18-mod-flightplan.js) you can see how to wait until a specific API is available.
+
+### Version
+- `window.FlightRecorder.api.getVersion()`
+
+### State
+- `window.FlightRecorder.api.getState(trackIds?)`
+- `window.FlightRecorder.api.recording.getState()`
+- `window.FlightRecorder.api.playback.getState(trackIds?)`
+
+### Recording controls
+- `window.FlightRecorder.api.recording.start()`
+- `window.FlightRecorder.api.recording.stop()`
+
+### Playback controls
+- `window.FlightRecorder.api.playback.start(trackIds?)`
+- `window.FlightRecorder.api.playback.pause(trackIds?)`
+- `window.FlightRecorder.api.playback.stop(trackIds?)`
+
+`trackIds` is optional and can be:
+- omitted (all playable tracks)
+- a single track id string (example: `"T0001"`)
+- an array of track ids (example: `["T0001", "T0002"]`)
+
+### Return values
+Control methods return an object with fields like:
+- `ok` (boolean)
+- `state` (global playback or recording state)
+- `reason` (when not successful, e.g. `"NO_TRACKS"`)
+- `trackIds` (affected track ids, for playback methods)
+
+Example:
+
+```js
+const api = window.FlightRecorder?.api;
+if (!api) throw new Error('Flight Recorder API not available');
+
+console.log('FR version:', api.getVersion());
+console.log('Current state:', api.getState());
+
+api.recording.start();
+// ...
+api.recording.stop();
+
+api.playback.start();
+api.playback.pause();
+api.playback.stop();
+```
+
+
+# TODO
+## Controls (like fuel probe)
+V Have control buttons bottom right in GeoFS UI (like PROBE OPEN/CLOSED)
+- Add option to keybind controls
+
+## Seats
+- Add seat reset button
+- Move to SeatModule
+
+## Modules
+Alle functionaliteit in aparte modules, zodat je later dit ook naar andere vliegtuigen kan brengen.
+
+## Spoiler
+V Option to set max spoiler position (10% to FULL) with combined buttons
+
+## LIMITS
+- Add limits based on config in MFD (weapon config, or probe in/out, current speed, etc.)
+- If limit is exceeded send warning state, led HUD and MFD module display warning
+
+## DAMAGE
+- If limit is exceeded, simulate failure (fe. gear cannot change state anymore, or flaps go to 0)
+- Change SYS page to show damaged parts + change current indicators to F-18 with red faults.
+
+## FUEL
+- Manage fuel flow (calculate in PFC). If fuel is 0, engine off. 
+- Allow in flight refueling by extending probe and fly without autopilot in a certain box (fe. speed 250, alt 10,000, heading 255). When conditions are met, fuel is replenished.
+
+## Speech
+- Make a seperate speach plugin to read out chat + API to use it
+  - Integrate this in MFD with VOICE ON/OFF button
+
+## Pages
+### RADAR
+- Add Radar page + control to turn it on/off.
+- Add HSI page with option to change course/heading
+
+### Scratchpad
+- Add scratchpad and buttons to center
+  - The scratchpad can be in a mode (fe. HDGSELECT). The mode is displayed. When pressing enter the scratched heading is used.
+- Add push buttons below to select display. On the right of the scratchpad a few displays with a button show data. WHen pressing the button you can change the value in the scratchpad.
+  - FE. AP button. You push it and see on the displays on the right alt/speed/heading. You push a button heading, and you go into heading select mode for the scratchpad.
+  - FE. IFF button. You can type in your IFF number. IFF is displayed on the right.
+
+## IFF
+- Should be a seperate module, with custom API.
+- Integration with MfdModule: Add page. Let you set shared IFF code.
+- If on and target locked, change username to username[IFF-id-other-aircraft+code]. The other aircraft should calculate response based on their IFF number and the code. And change their username to [IFFR+response-code]. If the interrogating aircraft receives this response, it changes to [IFF-FRIEND-id-other-aircraft] (or FOO)
+
+```
 // Speak chat test
 const utterance = new SpeechSynthesisUtterance("Hello this is a test.");
 utterance.lang = "en-US"; // or "nl-NL" for Dutch
@@ -5,12 +121,12 @@ speechSynthesis.speak(utterance);
 
 
 // Standaard 500, voor minder lag.
-geofs.MPSMinUpdateDelay = 100
+geofs.MPSMinUpdateDelay = 1000
 
 // Send message in chat
 window.multiplayer.setChatMessage("Test");
 
-// Update met +1 elke keer als er een nieuwe chat is ontvangen
+// Updates with +1 every time a chat is received.
 window.multiplayer.chatMessageId
 
 // Go a bit down in cockpit view, so the fpv aligns with 0
@@ -20,8 +136,7 @@ geofs.camera.modes[1].position[2] = 1
 geofs.camera.currentDefinition.name == 'cockpit'
 geofs.camera.currentDefinition.insideView == true
 
-
-// Throttle + Joystick cam
+// F-18 Throttle + Joystick cam
 geofs.camera.modes[1].position = [-0.17, 5.4, 0.3];
 geofs.camera.modes[1].orientations['current'] = [0, -8, 0];
 geofs.camera.modes[1].FOV = 1.7;
@@ -39,23 +154,39 @@ geofs.camera.modes[1].orientations['current'] = [-211, -2.3, 0];
 
 // Set opacity of instruments
 instruments.setOpacity(0.9)
+```
 
-// FLAPS zelf precies besturen // BIJ MAN. terug zetten naar 0
-controls.flaps.positionTarget = 0.1;
-controls.setPartAnimationDelta(controls.flaps);
+You can add your custom cameras to GeoFS like this:
 
-/*
-Flaps and Slats
-There are three positions that the pilot can select for the flaps and slats.
+```
+geofs.camera.modes.push(
+{
+  "FOV": 10, // 1 = zoomed in, 10 = zoomed out
+  "insideView": true, // true = sounds of inside, false sound of outside
+  "mode": 6,
+  "name": "Look back",
+  "offsetBounds": [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
+  "offsets":
+  {
+    "current": [0, 0, 0],
+    "last": [0, 0, 0],
+    "neutral": [0, 0, 0],
+  },
+  "orientation": [180, -20, 0], // Repeat current
+  "orientations":
+  {
+    "current": [180, -20, 0], // 180 = turn around 180 degrees, look back. -20 = look a bit downward
+    "last": [180, 0, 0],
+    "neutral": [180, 0, 0],
+  },
+  "position" [0, 3.2, 1.25], // 0 = left/right: 0 = center, 3.2 = forward/rearward: 3.2 = to rear, 1.25 = up/down, 1 = neutral
+  "view": "Look back"
+});
+```
 
-AUTO: flaps and slats operate independently and asymmetrically based on many factors such as angle of attack, g-load and Mach-number. On high-g maneuvers the flaps and slats deflect down to increase lift. This decreases the turn radius. Slats deflect automatically at high angles of attack to increase the stall margin.
+Here is how we added F-18 camera angles:
 
-HALF: flaps and slats deflect down to the half way position, depending on airspeed. Above 250kts they stay up. Below 250kts they gradually extend as speed decreases to maximize lift. The half position is selected for takeoff or approach.
-
-FULL: flaps and slats can deflect to the full position, again depending on airspeed. This position is selected for landing.
-*/
-
-
+```
 // Nose cam looking back
 geofs.camera.modes[6] =
 {
@@ -232,7 +363,7 @@ geofs.camera.modes[12] =
   "view": "Throttle cam",
 };
 
-
+// Only mode[1] shows the detailed cockpit layout. So you can set one mode at a time.
 // Throttle + Joystick cam
 geofs.camera.modes[1].position = [-0.17, 5.4, 0.3];
 geofs.camera.modes[1].orientations['current'] = [0, -8, 0];
@@ -248,6 +379,7 @@ geofs.camera.modes[1].insideView = true;
 // Next to cocpit looking back
 geofs.camera.modes[1].position = [0.9, 4.86, 0.6];
 geofs.camera.modes[1].orientations['current'] = [-211, -2.3, 0];
+```
 
 
 
@@ -264,139 +396,6 @@ geofs.camera.modes[1].orientations['current'] = [-211, -2.3, 0];
 
 
 
-// Definitions
-// Nose cam looking back
-geofs.camera.definitions.nosecam =
-{
-  "distance": 0,
-  "FOV": 10,
-  "insideView": false,
-  "mode": 6,
-  "name": "Nose cam",
-  "offsetBounds": [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
-  "offsets":
-  {
-    "current": [0, 0.5, -1],
-    "last": [0, 0.5, 0],
-    "neutral": [0, 0.5, 0],
-  },
-  "orientation": [180, 20, -1.5],
-  "orientations":
-  {
-    "current": [180, 20, 0],
-    "last": [180, 20, 0],
-    "neutral": [180, 20, 0],
-  },
-  "position": [0, 11.55, -1.5],
-  "view": "Nose cam"
-};
-
-geofs.camera.definitions.cockpitrear =
-{
-  "distance": 0,
-  "FOV": 10,
-  "insideView": false,
-  "mode": 7,
-  "name": "Cockpit Rear",
-  "offsetBounds": [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
-  "offsets":
-  {
-    "current": [0, 0.5, -1],
-    "last": [0, 0.5, 0],
-    "neutral": [0, 0.5, 0],
-  },
-  "orientation": [180, -15, -1.5],
-  "orientations":
-  {
-    "current": [180, -15, 0],
-    "last": [180, -15, 0],
-    "neutral": [180, -15, 0],
-  },
-  "position": [0, 5, 3.4],
-  "view": "Cockpit Rear"
-};
-
-geofs.camera.definitions.wingman =
-{
-  "distance": 0,
-  "FOV": 10,
-  "insideView": false,
-  "mode": 8,
-  "name": "Wingman",
-  "offsetBounds": [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
-  "offsets":
-  {
-    "current": [0, 0.5, -1],
-    "last": [0, 0.5, 0],
-    "neutral": [0, 0.5, 0],
-  },
-  "orientation": [115, -12, 0],
-  "orientations":
-  {
-    "current": [115, -15, 0],
-    "last": [115, -15, 0],
-    "neutral": [115, -15, 0],
-  },
-  "position": [1, 4, -0.3],
-  "view": "Wingman"
-};
-
-geofs.camera.definitions.rear =
-{
-  "distance": 0,
-  "FOV": 2,
-  "insideView": false,
-  "mode": 9,
-  "name": "Down Rear",
-  "offsetBounds": [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
-  "offsets":
-  {
-    "current": [0, 0.5, -1],
-    "last": [0, 0.5, 0],
-    "neutral": [0, 0.5, 0],
-  },
-  "orientation": [180, 20, -1.5],
-  "orientations":
-  {
-    "current": [180, 20, 0],
-    "last": [180, 20, 0],
-    "neutral": [180, 20, 0],
-  },
-  "position": [0, 4, -1],
-  "view": "Down Rear"
-};
-
-
-
-
-
-
-
-// Explanation
-
-geofs.camera.modes.push(
-{
-  "FOV": 10, // 1 = zoomed in, 10 = zoomed out
-  "insideView": true, // true = sounds of inside, false sound of outside
-  "mode": 6,
-  "name": "Look back",
-  "offsetBounds": [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
-  "offsets":
-  {
-    "current": [0, 0, 0],
-    "last": [0, 0, 0],
-    "neutral": [0, 0, 0],
-  },
-  "orientation": [180, -20, 0], // Repeat current
-  "orientations":
-  {
-    "current": [180, -20, 0], // 180 = turn around 180 degrees, look back. -20 = look a bit downward
-    "last": [180, 0, 0],
-    "neutral": [180, 0, 0],
-  },
-  "position" [0, 3.2, 1.25], // 0 = left/right: 0 = center, 3.2 = forward/rearward: 3.2 = to rear, 1.25 = up/down, 1 = neutral
-  "view": "Look back"
-});
 
 
 
@@ -405,9 +404,11 @@ geofs.camera.modes.push(
 
 
 
+# Multiplayer
 
+GeoFS sends a request to https://mps.geo-fs.com/update?l=4 every 500 ms. There you can see locations of nearby airplanes and newly arrived chat messages:
 
-geo-fs doet elke x ms een request naar https://mps.geo-fs.com/update?l=4. Daarin zitten chatMessages
+```
 
 {
     "myId": "4335605638136",
@@ -470,380 +471,18 @@ geo-fs doet elke x ms een request naar https://mps.geo-fs.com/update?l=4. Daarin
                 0
             ],
             "ti": 1762433925272.2065
-        },
-        {
-            "id": "4338563070605",
-            "acid": 913603,
-            "ac": 24,
-            "cs": "OO-LAU",
-            "st": {
-                "gr": 1,
-                "as": 0,
-                "lv": "2"
-            },
-            "co": [
-                51.166148,
-                5.4655171,
-                54.87,
-                50.68,
-                0.01,
-                0.15
-            ],
-            "ve": [
-                0,
-                0,
-                -0.00002592,
-                0,
-                0,
-                0
-            ],
-            "ti": 1762433925338.8145
-        },
-        {
-            "id": "4339147230124",
-            "acid": 1498757,
-            "ac": 5193,
-            "cs": "DLH364",
-            "st": {
-                "gr": 0,
-                "as": 527,
-                "lv": 10001
-            },
-            "co": [
-                51.0257086,
-                4.2860397,
-                10363.06,
-                -65.7,
-                -2.5,
-                0.07
-            ],
-            "ve": [
-                0.00000103,
-                -0.00000352,
-                0.00001959,
-                0,
-                0,
-                0
-            ],
-            "ti": 1762433917867.3506
-        },
-        {
-            "id": "4331581242194",
-            "acid": null,
-            "ac": 25,
-            "cs": "Foo",
-            "st": {
-                "gr": 0,
-                "as": 373,
-                "lv": "0"
-            },
-            "co": [
-                51.7766412,
-                4.9090215,
-                6261.9,
-                169.22,
-                -2.56,
-                0
-            ],
-            "ve": [
-                -0.00000169,
-                5.2e-7,
-                0.00389392,
-                0,
-                0,
-                0
-            ],
-            "ti": 1762433925057.9087
         }
     ],
     "chatMessages": [
         {
             "uid": "4338763347782",
             "acid": 458448,
-            "cs": "DR-IA[furry][trans]",
+            "cs": "NameOfChatter",
             "rs": "r1",
-            "msg": "how%20the%20hell%20do%20you%20get%20banned%20from%20discord"
+            "msg": "The%20message."
         }
     ],
     "lastMsgId": 2062,
     "serverTime": 1762433925624
 }
-
-
-// HUD F-18 benaderen
-const hudOpts =
-  geofs.aircraft.instance.definition
-    .parts[87]
-    .object3d
-    ._parent
-    ._children[83]
-    ._children[0]
-    ._options;
-
-Render hud:
-geofs.aircraft.instance.definition.parts[87].object3d._parent._children[83]._children[0].render()
-
-// Verander positie:
-geofs.aircraft.instance.definition.parts[87].object3d._parent._children[83]._children[0]._initialPosition = [100, 100, 100]
-
-Gevolgd door render().
-
-// Locatie van HUD
-geofs.aircraft.instance.definition.parts[87].object3d._parent._children[83]._children[0].htr
-
-// PFD
-
-instruments.renderers = {
-    PFDBoeing(e) {
-        let t = exponentialSmoothing("smoothKias", geofs.animation.getValue("kias"), .1)
-          , a = [893, 980]
-          , o = .25;
-        a = V2.parseInt(V2.scale(a, o));
-        let n = e.canvasAPI.context;
-        e.canvasAPI.clear("#000000"),
-        e.canvasAPI.drawRotatedSprite({
-            image: e.images.attitude,
-            origin: [0, 0],
-            size: [350, 1400],
-            center: [175, 700],
-            destination: a,
-            rotation: geofs.animation.getValue("aroll") * DEGREES_TO_RAD,
-            translation: [0, 5 * geofs.animation.getValue("atilt")]
-        }),
-        e.canvasAPI.drawRotatedSprite({
-            image: e.images.overlays,
-            origin: [245, 56],
-            size: [23, 21],
-            center: [11, 120],
-            destination: a,
-            rotation: geofs.animation.getValue("aroll") * DEGREES_TO_RAD,
-            translation: [0, 0]
-        }),
-        n.drawImage(e.images.background, 0, 0),
-        n.fillStyle = "#00ff08",
-        n.textAlign = "center",
-        n.font = "18px sans-serif";
-        let r = ""
-          , s = ""
-          , c = "";
-        geofs.autopilot.on && (r = "SPD",
-        "NAV" == geofs.autopilot.mode ? (s = "LNAV",
-        c = geofs.autopilot.VNAV ? "V/S" : "ALT") : (s = "HDG SEL",
-        c = "ALT")),
-        n.fillText(r, 133, 20),
-        n.fillText(s, 230, 20),
-        n.fillText(c, 325, 20),
-        n.fillStyle = "#ffffff",
-        n.textAlign = "center",
-        n.font = "14px sans-serif";
-        let d = ""
-          , u = "";
-        "GPS" == geofs.animation.getValue("NAVMODE") && (d = "GPS"),
-        "NAV" == geofs.animation.getValue("NAVMODE") && (d = "VOR/LOC"),
-        geofs.autopilot.VNAV && (u = "G/S"),
-        n.fillText(d, 230, 33),
-        n.fillText(u, 325, 33),
-        2500 >= geofs.animation.getValue("haglFeet") && (n.fillStyle = "#ffffff",
-        n.textAlign = "right",
-        n.font = "bold 20px sans-serif",
-        n.fillText(Math.floor(geofs.animation.getValue("haglFeet")), 350, 95)),
-        e.canvasAPI.drawSprite({
-            image: e.images.overlays,
-            origin: [101, 0],
-            size: [13, 20],
-            center: [6, 10],
-            destination: [355, a[1]],
-            translation: [0, clamp(-107 * geofs.animation.getValue("NAVGlideAngleDeviation"), -75, 75)]
-        }),
-        e.canvasAPI.drawSprite({
-            image: e.images.overlays,
-            origin: [114, 0],
-            size: [20, 13],
-            center: [10, 6],
-            destination: [a[0], 390],
-            translation: [clamp(6.5 * geofs.animation.getValue("NAVCourseDeviation"), -75, 75), 0]
-        }),
-        e.canvasAPI.drawRotatedSprite({
-            image: e.images.overlays,
-            origin: [101, 101],
-            size: [310, 310],
-            center: [155, 155],
-            destination: [a[0], 602],
-            rotation: -geofs.animation.getValue("heading") * DEGREES_TO_RAD
-        }),
-        e.canvasAPI.drawRotatedSprite({
-            image: e.images.overlays,
-            origin: [243, 88],
-            size: [26, 13],
-            center: [12, 165],
-            destination: [a[0], 602],
-            rotation: (-geofs.animation.getValue("heading") + geofs.autopilot.values.course) * DEGREES_TO_RAD
-        }),
-        n.lineWidth = 2,
-        n.fillStyle = "#FFFFFF",
-        n.strokeStyle = "#FFFFFF",
-        n.textAlign = "right",
-        n.font = "22px sans-serif",
-        n.save(),
-        n.beginPath(),
-        n.rect(11, 60, 90, 381),
-        n.rect(5, 210, 50, 70),
-        n.clip("evenodd"),
-        e.drawGrads(e.canvasAPI, {
-            position: [64, 60],
-            zero: [0, 190],
-            size: [90, 380],
-            orientation: "y",
-            direction: -1,
-            value: t,
-            interval: 10,
-            pixelRatio: 3.16,
-            pattern: [[{
-                length: 10,
-                legend: !0,
-                legendOffset: {
-                    x: -8,
-                    y: 7
-                }
-            }], [{
-                length: 10
-            }]],
-            sprites: [{
-                image: e.images.overlays,
-                origin: [134, 0],
-                size: [31, 19],
-                center: [5, 10],
-                value: geofs.autopilot.values.speed,
-                clamp: !0
-            }]
-        }),
-        n.restore(),
-        n.save(),
-        n.beginPath(),
-        n.rect(365, 60, 84, 381),
-        n.rect(400, 210, 65, 70),
-        n.clip("evenodd"),
-        n.font = "16px sans-serif",
-        e.drawGrads(e.canvasAPI, {
-            position: [385, 60],
-            zero: [0, 190],
-            size: [84, 380],
-            orientation: "y",
-            direction: -1,
-            value: geofs.animation.getValue("altitude"),
-            interval: 100,
-            pixelRatio: .475,
-            pattern: [[{
-                length: 10,
-                legend: !0,
-                legendOffset: {
-                    x: 60,
-                    y: 7
-                }
-            }], [{
-                length: 10
-            }]],
-            sprites: [{
-                image: e.images.overlays,
-                origin: [223, 0],
-                size: [33, 56],
-                center: [5, 28],
-                value: geofs.autopilot.values.altitude,
-                clamp: !0
-            }, {
-                image: e.images.overlays,
-                origin: [256, 0],
-                size: [64, 25],
-                center: [2, 0],
-                value: geofs.animation.getValue("groundElevationFeet")
-            }]
-        }),
-        n.restore(),
-        n.save(),
-        n.beginPath(),
-        n.rect(7, 220, 48, 50),
-        n.rect(404, 220, 65, 50),
-        n.rect(475, 116, 28, 262),
-        n.clip(),
-        n.beginPath(),
-        n.lineWidth = 3,
-        n.strokeStyle = "#FFFFFF";
-        let p = clamp(35 * Math.log(Math.abs(geofs.animation.getValue("verticalSpeed") / 1e3)) + 60, 0, 125) * Math.sign(geofs.animation.getValue("verticalSpeed"));
-        n.moveTo(530, a[1]),
-        n.lineTo(482, a[1] - p),
-        n.stroke(),
-        e.canvasAPI.drawSprite({
-            image: e.images.overlays,
-            origin: [166, 0],
-            size: [13, 5],
-            center: [0, 2],
-            destination: [480, a[1]],
-            translation: [0, -clamp(35 * Math.log(Math.abs(geofs.autopilot.values.verticalSpeed / 1e3)) + 60, 0, 125) * Math.sign(geofs.autopilot.values.verticalSpeed)]
-        }),
-        e.canvasAPI.drawSprite({
-            image: e.images.overlays,
-            origin: [0, 0],
-            size: [16, 512],
-            center: [0, 512],
-            destination: [8, 256],
-            translation: [0, 48 * geofs.utils.stickyRounding(t % 1e3 * .01, .01)]
-        }),
-        e.canvasAPI.drawSprite({
-            image: e.images.overlays,
-            origin: [0, 0],
-            size: [16, 512],
-            center: [0, 512],
-            destination: [24, 256],
-            translation: [0, 48 * geofs.utils.stickyRounding(t % 100 * .1, .1)]
-        }),
-        e.canvasAPI.drawSprite({
-            image: e.images.overlays,
-            origin: [16, 0],
-            size: [16, 512],
-            center: [0, 487],
-            destination: [40, 256],
-            translation: [0, t % 10 * 25]
-        }),
-        geofs.animation.getValue("altTenThousands") > 9999 ? e.canvasAPI.drawSprite({
-            image: e.images.overlays,
-            origin: [0, 0],
-            sprite: [16, 512],
-            size: [14, 512],
-            center: [0, 512],
-            destination: [406, 256],
-            translation: [0, 48 * geofs.utils.stickyRounding(1e-4 * geofs.animation.getValue("altTenThousands"), .01)]
-        }) : e.canvasAPI.drawSprite({
-            image: e.images.overlays,
-            origin: [70, 490],
-            size: [16, 21],
-            center: [0, 21],
-            destination: [406, 256],
-            translation: [0, 0]
-        }),
-        e.canvasAPI.drawSprite({
-            image: e.images.overlays,
-            origin: [0, 0],
-            sprite: [16, 512],
-            size: [14, 512],
-            center: [0, 512],
-            destination: [420, 256],
-            translation: [0, 48 * geofs.utils.stickyRounding(.001 * geofs.animation.getValue("altThousands"), .01)]
-        }),
-        e.canvasAPI.drawSprite({
-            image: e.images.overlays,
-            origin: [32, 0],
-            size: [12, 512],
-            center: [0, 512],
-            destination: [434, 253],
-            translation: [0, 40 * geofs.utils.stickyRounding(.01 * geofs.animation.getValue("altHundreds"), .1)]
-        }),
-        e.canvasAPI.drawSprite({
-            image: e.images.overlays,
-            origin: [44, 0],
-            size: [24, 512],
-            center: [0, 496],
-            destination: [445, 256],
-            translation: [0, .8 * geofs.animation.getValue("altTens")]
-        }),
-        n.restore()
-    },
+```

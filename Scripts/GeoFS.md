@@ -127,3 +127,25 @@ geofs.animation.setValue('ProbeRotXDeg', -40);
 geofs.animation.setValue('ProbeRotYDeg', 10);
 geofs.animation.setValue('ProbeRotZDeg', 20);
 ```
+
+## Changing the HUD
+```
+// Access the F-18 HUD (which is the genericHUD):
+const hudOpts =
+  geofs.aircraft.instance.definition
+    .parts[87]
+    .object3d
+    ._parent
+    ._children[83]
+    ._children[0]
+    ._options;
+
+// Call this to rerender the HUD:
+geofs.aircraft.instance.definition.parts[87].object3d._parent._children[83]._children[0].render()
+
+// Example: change the position of the HUD:
+geofs.aircraft.instance.definition.parts[87].object3d._parent._children[83]._children[0]._initialPosition = [100, 100, 100]
+// Call render to render the change.
+
+// Get the location of the HUD:
+geofs.aircraft.instance.definition.parts[87].object3d._parent._children[83]._children[0].htr
