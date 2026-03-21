@@ -1,7 +1,79 @@
 # GeoFS Developer Docs
-GeoFS lacks some documentation on how to write good plugins for it. That's why I'm sharing what I've learned here.
+GeoFS does not have much plugin documentation, so this is a practical beginner guide for writing your own Tampermonkey scripts.
 
-# Animating parts on your airplane.
+The examples below are based on what I've learned while building the F-18 addon in this repository.
+
+---
+
+## 1) Your first Tampermonkey script
+
+Use this as a safe starter template:
+
+```js
+// ==UserScript==
+// @name         GeoFS My First Addon
+// @namespace    https://www.geo-fs.com/
+// @version      0.1.0
+// @description  My first GeoFS script
+// @match        https://www.geo-fs.com/*
+// @match        https://geo-fs.com/*
+// @match        https://*.geo-fs.com/*
+// @grant        none
+// @run-at       document-idle
+// ==/UserScript==
+
+(function () {
+  'use strict';
+  console.log('[MyAddon] Loaded');
+})();
+```
+
+---
+
+## 2) Wait for GeoFS objects to be ready
+
+GeoFS loads a lot after page load. Do not assume objects are immediately available.
+
+```js
+const POLL_MS = 400;
+const MAX_TRIES = 150;
+
+let tries = 0;
+const timer = setInterval(() => {
+  tries += 1;
+
+  const ready = Boolean(window.geofs?.aircraft?.instance && window.controls);
+  if (ready) {
+    clearInterval(timer);
+    console.log('[MyAddon] GeoFS ready');
+    return;
+  }
+
+  if (tries >= MAX_TRIES) {
+    clearInterval(timer);
+    console.warn('[MyAddon] GeoFS not ready in time');
+  }
+}, POLL_MS);
+```
+
+Tip: use optional chaining (`?.`) in addon code if the object might not be available yet.
+
+## 3) Running logic every frame (safely)
+
+For continuous updates, use frame callbacks or small intervals.
+
+```js
+const callbackId = geofs.api.addFrameCallback(() => {
+  // Keep logic lightweight here.
+});
+
+// Later: remove callback if your script supports unload.
+// geofs.api.removeFrameCallback(callbackId);
+```
+
+Best practice: keep per-frame logic minimal and cache lookups when possible.
+
+## 4) Animating parts on your airplane.
 Some basic controls can be easily adjusted via the `controls` object in GeoFS:
 
 ```
@@ -128,7 +200,79 @@ geofs.animation.setValue('ProbeRotYDeg', 10);
 geofs.animation.setValue('ProbeRotZDeg', 20);
 ```
 
-## Changing the HUD
+## 5) HUD basics
+
+HUD rendering can be overridden by replacing renderer functions (advanced).
+
+From our addon, a safer strategy is:
+- keep reference to original renderer
+- install custom renderer only when target aircraft is active
+- restore original renderer when disabling your module
+
+This prevents breaking HUD rendering when switching aircraft.
+
+---
+
+## 6) Local settings (plugin options)
+
+Use `localStorage` for persistent options and normalize keys.
+
+```js
+const STORAGE_KEY = 'MyAddonOptions';
+
+function normalizeToken(v) {
+  return String(v ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function buildKey(page, key) {
+  return `${normalizeToken(page)}.${normalizeToken(key)}`;
+}
+```
+
+This keeps keys consistent and predictable.
+
+---
+
+## 7) Extending the F18 addon from your own script
+
+If `window.F18Addon` is present, you can extend features without editing core code.
+
+## 8) Checklist
+
+Before shipping your script:
+
+1. Guard GeoFS access with `?.` and readiness checks when the plugin is still initializing.
+2. Keep intervals/frame callbacks lightweight.
+3. Use clear storage keys.
+4. Avoid hard crashes (`try/catch` around optional integrations).
+5. Clean up anything you install (handlers, callbacks, render overrides).
+
+---
+
+## 9) Useful console snippets
+
+```js
+// Current aircraft id
+geofs?.aircraft?.instance?.id
+
+// All known parts
+Object.keys(geofs?.aircraft?.instance?.parts || {})
+
+// Current camera mode
+geofs?.camera?.currentModeName
+
+// Animation values (live)
+geofs?.animation?.values
+```
+
+If you are new: start with one small feature (for example one button or one animated part), test it, then expand.# GeoFS Developer Docs
+GeoFS lacks some documentation on how to write good plugins for it. That's why I'm sharing what I've learned here.
+
+## 10) Changing the HUD
 ```
 // Access the F-18 HUD (which is the genericHUD):
 const hudOpts =
