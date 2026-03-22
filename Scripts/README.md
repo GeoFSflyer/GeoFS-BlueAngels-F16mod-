@@ -56,6 +56,20 @@ window.F18Addon
 - `setProbeState(state)` // `OPEN` or `CLOSED`
 - `getProbeState()`
 
+#### `window.F18Addon.nav`
+- `getModule()`
+- `getCurrentNavUnit()`
+- `getReadouts()`
+- `getNavaidLabel()`
+- `getAutopilotHeading()`
+
+#### `window.F18Addon.map`
+- `getModule()`
+- `getRangeNm()`
+- `setRangeNm(rangeNm)`
+- `stepRange(step)`
+- `getSceneData()`
+
 #### `window.F18Addon.communication`
 - `getModule()`
 - `getProfile()`
@@ -70,6 +84,35 @@ window.F18Addon
 - `setVoiceLanguage(language)`
 - `getMessages(mode?, limit?)` // mode: `ALL`, `GROUP`, `FLIGHT`, `WINGMAN`, `NONE`
 - `getHudMessage()`
+
+`window.F18Addon.nav.getReadouts()` returns a shared snapshot used by both HUD and MFD NAV rendering:
+
+```js
+{
+  navUnit,
+  dme,            // number | null
+  bearing,        // number | null
+  course,         // number | null
+  timeToSignal,   // number | null
+  navaidLabel,    // string, e.g. "ILS KJFK", "VOR ABC"
+  autopilotHeading // number | null
+}
+```
+
+`window.F18Addon.map.getSceneData()` returns shared geometric data used by NAV `HSI` and `MAP` rendering:
+
+```js
+{
+  ownship: { lat, lon, alt, heading } | null,
+  rangeNm,        // selected NAV range
+  traffic: [      // multiplayer aircraft in heading-relative NM offsets
+    { uid, callsign, lat, lon, alt, forwardNm, rightNm }
+  ],
+  waypoints: [    // flightplan waypoints in heading-relative NM offsets
+    { index, ident, selected, type, lat, lon, forwardNm, rightNm }
+  ]
+}
+```
 
 #### `window.F18Addon.mfd`
 - `getSlots()`
@@ -106,6 +149,7 @@ Each button object can use:
 - `managedExternally: true`: do not auto-cycle/persist after click (you handle it in `onClick`)
 - `combinedAction: true`: mark as part of a grouped action block
 - `combinedGroupLabel`: label shown for grouped block
+- `minimal: true`: for combined groups, hide bracket/group label and show only a centered state/value between the grouped buttons
 
 `onClick` and `show` receive a context object with:
 - `page`

@@ -28,8 +28,6 @@ Use this as a safe starter template:
 })();
 ```
 
----
-
 ## 2) Wait for GeoFS objects to be ready
 
 GeoFS loads a lot after page load. Do not assume objects are immediately available.
@@ -76,13 +74,13 @@ Best practice: keep per-frame logic minimal and cache lookups when possible.
 ## 4) Animating parts on your airplane.
 Some basic controls can be easily adjusted via the `controls` object in GeoFS:
 
-```
+```js
 controls.airbrakes.position = 0.5 // Airbrakes out halfway.
 ```
 
 But other controls (like the flaps), you can't control directly, because GeoFS constantly sets the value it needs to animate to, thus overwriting your `controls.flaps.position = 1`. Luckily you can set the target it needs to animate to, and execute the animation:
 
-```
+```js
 controls.flaps.positionTarget = 0.5; // Position 0.5 out of 2 (controls.flaps.maxPosition).
 controls.setPartAnimationDelta(controls.flaps);
 ```
@@ -96,7 +94,7 @@ But as GeoFS sets the values for these animations, you can't overwrite them (as 
 
 Here is a little demo script to show how to add your own animation to an aircraft part, and set it with every frame.
 
-```
+```js
   let partName = 'tailHook'; // <-- Modify with the name of your part.
   let part = geofs?.aircraft?.instance?.parts?.[partName];
 
@@ -120,7 +118,7 @@ Additionally, the 3D model can contain parts that the developer didnt' include i
 
 With below script you can search for any part (even those who are not in geofs.aircraft.instance.parts), and add your custom animations to it, so you can animate anypart in any direction:
 
-```
+```js
 (() => {
   const partName = 'Probe'; // aanpassen indien nodig
 
@@ -194,7 +192,7 @@ With below script you can search for any part (even those who are not in geofs.a
 
 Now if your part is called 'Probe', you can animate it on the X, Y and Z axis like this:
 
-```
+```js
 geofs.animation.setValue('ProbeRotXDeg', -40);
 geofs.animation.setValue('ProbeRotYDeg', 10);
 geofs.animation.setValue('ProbeRotZDeg', 20);
@@ -210,8 +208,6 @@ From our addon, a safer strategy is:
 - restore original renderer when disabling your module
 
 This prevents breaking HUD rendering when switching aircraft.
-
----
 
 ## 6) Local settings (plugin options)
 
@@ -250,8 +246,6 @@ Before shipping your script:
 3. Use clear storage keys.
 4. Avoid hard crashes (`try/catch` around optional integrations).
 5. Clean up anything you install (handlers, callbacks, render overrides).
-
----
 
 ## 9) Useful console snippets
 

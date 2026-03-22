@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoFS F-18 Addon
 // @namespace    https://github.com/ArjanKw/GeoFS-BlueAngels/
-// @version      1.3.0
+// @version      1.4.0
 // @description  Improves the cockpit with a new HUD and custom MFDs, adjustable seat height and more.
 // @match        https://www.geo-fs.com/*
 // @match        https://geo-fs.com/*
@@ -12,7 +12,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.3.0';
+  const VERSION = '1.4.0';
   const F18_AIRCRAFT_ID = '27';
 
   const FLIGHT_RECORDER_MIN_VERSION = '1.2.0';
@@ -27,6 +27,8 @@
   let currentHudColor = DEFAULT_COLOR;
   const addonRuntime = {
     checklistModule: null,
+    mapModule: null,
+    navModule: null,
     communicationModule: null,
     mfdUiStates: Object.create(null),
     mfdPagesCatalog: null,
@@ -42,6 +44,10 @@
       this.cameraModule = new CameraModule(this.helperModule);
       this.fmcModule = new FMCModule();
       this.controlModule = new ControlModule(this.helperModule);
+      this.mapModule = new MapModule();
+      addonRuntime.mapModule = this.mapModule;
+      this.navModule = new NavModule();
+      addonRuntime.navModule = this.navModule;
       this.communicationModule = new CommunicationModule();
       addonRuntime.communicationModule = this.communicationModule;
       this.mfdModules = [];
@@ -68,6 +74,14 @@
         rotation: [8, 0, 0],
         scale: [0.29, 0.29, 0.285],
         defaultPageTitle: 'CHK'
+      });
+
+      this.addMfd({
+        name: 'CENTER',
+        position: [0.0, 6.050, 0.380],
+        rotation: [25, 0, 0],
+        scale: [0.29, 0.29, 0.29],
+        defaultPageTitle: 'RDR'
       });
     }
 
@@ -1423,7 +1437,7 @@
     valid: false
   };
 
-  // Maximum positieve G sinds script start.
+  // Maximum positieve G since script start.
   let maxG = 1;
 
   // ---------------------------------------------------------------------------
@@ -1909,6 +1923,356 @@
       addonRuntime.checklistModule = createDefaultChecklistModule();
     }
     return addonRuntime.checklistModule;
+  }
+
+  class NavModule {
+    // Returns the currently selected GeoFS NAV unit.
+    getCurrentNavUnit() {
+      return window.geofs?.nav?.currentNAVUnit ?? null;
+    }
+
+    // Returns rounded DME distance in NM when available.
+    getDmeValue(navUnit = this.getCurrentNavUnit()) {
+      const raw = Number(navUnit?.DME);
+      if (!Number.isFinite(raw)) return null;
+      return Math.round(raw * 10) / 10;
+    }
+
+    // Returns rounded bearing in degrees when available.
+    getBearingDeg(navUnit = this.getCurrentNavUnit()) {
+      const raw = Number(navUnit?.bearing);
+      return Number.isFinite(raw) ? Math.round(raw) : null;
+    }
+
+    // Returns rounded NAV course in degrees when available.
+    getCourseDeg(navUnit = this.getCurrentNavUnit()) {
+      const raw = Number(navUnit?.course);
+      return Number.isFinite(raw) ? Math.round(raw) : null;
+    }
+
+    // Returns time-to-signal in minutes when available.
+    getTimeToSignal(navUnit = this.getCurrentNavUnit()) {
+      const raw = Number(navUnit?.timeToSignal);
+      return Number.isFinite(raw) ? Math.round(raw) : null;
+    }
+
+    // Returns autopilot heading/course selector in degrees when available.
+    getAutopilotHeadingDeg() {
+      const raw = Number(window.geofs?.autopilot?.values?.course);
+      return Number.isFinite(raw) ? Math.round(raw) : null;
+    }
+
+    // Formats navaid type + identifier for HUD/MFD display.
+    getNavaidTypeLabel(navUnit = this.getCurrentNavUnit()) {
+      if (navUnit?.navaid?.type === 'ILS') {
+        const icao = navUnit?.navaid?.icao ?? '';
+        return `ILS ${icao}`.trim();
+      }
+      if (navUnit?.navaid?.type === 'VORTAC') {
+        const ident = navUnit?.navaid?.ident ?? navUnit?.navaid?.icao ?? '';
+        return `VOR ${ident}`.trim();
+      }
+
+      const type = String(navUnit?.navaid?.type ?? '').trim();
+      let ident = navUnit?.navaid?.ident;
+      if (!ident) {
+        ident = navUnit?.navaid?.icao ?? '';
+      }
+      const identText = String(ident ?? '').trim();
+      return `${type} ${identText}`.trim();
+    }
+
+    // Returns all commonly rendered NAV readouts as a single object.
+    getReadouts(navUnit = this.getCurrentNavUnit()) {
+      return {
+        navUnit,
+        dme: this.getDmeValue(navUnit),
+        bearing: this.getBearingDeg(navUnit),
+        course: this.getCourseDeg(navUnit),
+        timeToSignal: this.getTimeToSignal(navUnit),
+        navaidLabel: this.getNavaidTypeLabel(navUnit),
+        autopilotHeading: this.getAutopilotHeadingDeg()
+      };
+    }
+  }
+
+  function getNavModule() {
+    if (addonRuntime.mainPlugin?.navModule) {
+      addonRuntime.navModule = addonRuntime.mainPlugin.navModule;
+    }
+    if (!addonRuntime.navModule) {
+      addonRuntime.navModule = new NavModule();
+    }
+    return addonRuntime.navModule;
+  }
+
+  class MapModule {
+    static RANGE_OPTIONS_NM = [5, 10, 20, 40, 80, 160];
+
+    constructor() {
+      this.selectedTrafficUid = null;
+      this.trafficSelectionCleared = false;
+    }
+
+    // Returns the configured NAV range in NM.
+    getRangeNm() {
+      const raw = Number(getOptionValue('NAV', 'RANGE', 40));
+      return this.normalizeRangeNm(raw);
+    }
+
+    // Clamps a raw range to the nearest configured NAV range value.
+    normalizeRangeNm(rawRange) {
+      const numeric = Number(rawRange);
+      if (!Number.isFinite(numeric)) return 40;
+
+      let best = MapModule.RANGE_OPTIONS_NM[0];
+      let bestDiff = Math.abs(best - numeric);
+      for (const candidate of MapModule.RANGE_OPTIONS_NM) {
+        const diff = Math.abs(candidate - numeric);
+        if (diff < bestDiff) {
+          best = candidate;
+          bestDiff = diff;
+        }
+      }
+      return best;
+    }
+
+    // Stores a normalized NAV range value.
+    setRangeNm(rawRange) {
+      const range = this.normalizeRangeNm(rawRange);
+      setOption('NAV', 'RANGE', String(range));
+      return range;
+    }
+
+    // Steps NAV range up (+1) or down (-1) through configured range options.
+    stepRange(step = 0) {
+      const direction = Number(step) >= 0 ? 1 : -1;
+      const current = this.getRangeNm();
+      const options = MapModule.RANGE_OPTIONS_NM;
+      const idx = Math.max(0, options.indexOf(current));
+      const nextIndex = clampValue(idx + direction, 0, options.length - 1);
+      return this.setRangeNm(options[nextIndex]);
+    }
+
+    // Returns ownship geodetic position and heading.
+    getOwnshipState() {
+      const lla = window.geofs?.aircraft?.instance?.llaLocation;
+      if (!Array.isArray(lla) || !Number.isFinite(lla[0]) || !Number.isFinite(lla[1])) {
+        return null;
+      }
+
+      const heading = Number(window.geofs?.animation?.values?.heading);
+      return {
+        lat: Number(lla[0]) || 0,
+        lon: Number(lla[1]) || 0,
+        alt: Number(lla[2]) || 0,
+        heading: Number.isFinite(heading) ? heading : 0
+      };
+    }
+
+    // Normalizes heading to [0..359].
+    normalizeHeadingDeg(value) {
+      const deg = Number(value);
+      if (!Number.isFinite(deg)) return null;
+      return ((Math.round(deg) % 360) + 360) % 360;
+    }
+
+    // Converts target lat/lon to north/east offsets (NM) from ownship.
+    toRelativeNm(ownship, targetLat, targetLon) {
+      if (!ownship || !Number.isFinite(targetLat) || !Number.isFinite(targetLon)) {
+        return null;
+      }
+
+      const latAvgRad = ((ownship.lat + targetLat) * 0.5) * (Math.PI / 180);
+      const northMeters = (targetLat - ownship.lat) * 110540;
+      const eastMeters = (targetLon - ownship.lon) * 111320 * Math.cos(latAvgRad);
+
+      return {
+        northNm: northMeters / 1852,
+        eastNm: eastMeters / 1852
+      };
+    }
+
+    // Converts north/east offsets to heading-relative forward/right offsets (NM).
+    toHeadingFrame(relativeNm, headingDeg) {
+      if (!relativeNm) return null;
+      const hdgRad = (Number(headingDeg) || 0) * (Math.PI / 180);
+      const sinH = Math.sin(hdgRad);
+      const cosH = Math.cos(hdgRad);
+
+      return {
+        forwardNm: relativeNm.northNm * cosH + relativeNm.eastNm * sinH,
+        rightNm: -relativeNm.northNm * sinH + relativeNm.eastNm * cosH
+      };
+    }
+
+    // Returns visible multiplayer aircraft in heading-relative coordinates.
+    getTrafficContacts(ownship) {
+      if (!ownship) return [];
+      const users = Object.values(window.multiplayer?.visibleUsers ?? {});
+      const result = [];
+
+      for (const user of users) {
+        const co = user?.lastUpdate?.co;
+        if (!Array.isArray(co) || !Number.isFinite(co[0]) || !Number.isFinite(co[1])) continue;
+
+        const relNm = this.toRelativeNm(ownship, Number(co[0]), Number(co[1]));
+        const frameNm = this.toHeadingFrame(relNm, ownship.heading);
+        if (!frameNm) continue;
+
+        result.push({
+          uid: String(user?.id ?? user?.uid ?? ''),
+          aircraftName: String(user?.aircraftName ?? '').trim(),
+          callsign: String(user?.callsign ?? user?.cs ?? '').trim(),
+          lat: Number(co[0]) || 0,
+          lon: Number(co[1]) || 0,
+          alt: Number(co[2]) || 0,
+          altFeet: Number.isFinite(Number(co[2])) ? Math.round(Number(co[2]) * 3.28084) : null,
+          speedKts: Number.isFinite(Number(user?.lastUpdate?.st?.as)) ? Math.round(Number(user.lastUpdate.st.as)) : null,
+          headingDeg: this.normalizeHeadingDeg(co[3]),
+          trackDeg: this.normalizeHeadingDeg(co[3]),
+          ...frameNm
+        });
+      }
+
+      result.sort((a, b) => {
+        const ta = this.getTrafficSortToken(a);
+        const tb = this.getTrafficSortToken(b);
+        return ta.localeCompare(tb);
+      });
+
+      return result;
+    }
+
+    // Builds a deterministic traffic key.
+    getTrafficKey(contact) {
+      return String(contact?.uid || contact?.callsign || `${contact?.lat ?? ''}:${contact?.lon ?? ''}`).trim().toUpperCase();
+    }
+
+    // Returns a deterministic contact number for one aircraft.
+    getContactNumber(contact) {
+      const key = this.getTrafficKey(contact);
+      if (!key) return 0;
+
+      let hash = 0;
+      for (let i = 0; i < key.length; i++) {
+        hash = ((hash * 33) + key.charCodeAt(i)) >>> 0;
+      }
+      return (hash % 99) + 1;
+    }
+
+    // Token used to keep traffic ordering stable.
+    getTrafficSortToken(contact) {
+      const number = this.getContactNumber(contact);
+      return `${String(number).padStart(3, '0')}:${this.getTrafficKey(contact)}`;
+    }
+
+    // Returns selected traffic uid (falls back to first visible contact).
+    getSelectedTrafficUid(contacts = []) {
+      const list = Array.isArray(contacts) ? contacts : [];
+      if (!list.length) {
+        this.selectedTrafficUid = null;
+        return null;
+      }
+
+      const hasCurrent = this.selectedTrafficUid && list.some((c) => String(c?.uid) === String(this.selectedTrafficUid));
+      if (hasCurrent) return this.selectedTrafficUid;
+
+      if (this.trafficSelectionCleared) {
+        return null;
+      }
+
+      this.selectedTrafficUid = list[0]?.uid ? String(list[0].uid) : null;
+      return this.selectedTrafficUid;
+    }
+
+    // Steps selected traffic target by direction (+1 next, -1 previous).
+    stepSelectedTraffic(step = 1) {
+      const direction = Number(step) >= 0 ? 1 : -1;
+      const contacts = this.getSceneData()?.traffic ?? [];
+      if (!contacts.length) {
+        this.selectedTrafficUid = null;
+        this.trafficSelectionCleared = false;
+        return null;
+      }
+
+      this.trafficSelectionCleared = false;
+
+      const currentUid = this.getSelectedTrafficUid(contacts);
+      const currentIndex = Math.max(0, contacts.findIndex((c) => String(c?.uid) === String(currentUid)));
+      const nextIndex = (currentIndex + direction + contacts.length) % contacts.length;
+      this.selectedTrafficUid = String(contacts[nextIndex]?.uid ?? '');
+      return this.selectedTrafficUid || null;
+    }
+
+    // Clears selected traffic target.
+    clearSelectedTraffic() {
+      this.selectedTrafficUid = null;
+      this.trafficSelectionCleared = true;
+      return null;
+    }
+
+    // Returns flightplan waypoints in heading-relative coordinates.
+    getFlightPlanWaypoints(ownship) {
+      if (!ownship) return [];
+      const waypoints = window.geofs?.flightPlan?.waypointArray;
+      if (!Array.isArray(waypoints)) return [];
+
+      const result = [];
+      for (let i = 0; i < waypoints.length; i++) {
+        const wp = waypoints[i];
+        const lat = Number(wp?.lat ?? wp?.navaid?.lat);
+        const lon = Number(wp?.lon ?? wp?.navaid?.lon);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+
+        const relNm = this.toRelativeNm(ownship, lat, lon);
+        const frameNm = this.toHeadingFrame(relNm, ownship.heading);
+        if (!frameNm) continue;
+
+        const ident = String(wp?.navaid?.ident ?? wp?.navaid?.icao ?? wp?.ident ?? wp?.navaid?.name ?? `WP${i + 1}`).trim();
+        result.push({
+          index: i,
+          ident,
+          selected: Boolean(wp?.selected),
+          type: String(wp?.navaid?.type ?? wp?.type ?? '').trim(),
+          lat,
+          lon,
+          ...frameNm
+        });
+      }
+
+      return result;
+    }
+
+    // Returns aggregated MAP/HSI scene data for rendering.
+    getSceneData() {
+      const ownship = this.getOwnshipState();
+      if (!ownship) {
+        return {
+          ownship: null,
+          rangeNm: this.getRangeNm(),
+          traffic: [],
+          waypoints: []
+        };
+      }
+
+      return {
+        ownship,
+        rangeNm: this.getRangeNm(),
+        traffic: this.getTrafficContacts(ownship),
+        waypoints: this.getFlightPlanWaypoints(ownship)
+      };
+    }
+  }
+
+  function getMapModule() {
+    if (addonRuntime.mainPlugin?.mapModule) {
+      addonRuntime.mapModule = addonRuntime.mainPlugin.mapModule;
+    }
+    if (!addonRuntime.mapModule) {
+      addonRuntime.mapModule = new MapModule();
+    }
+    return addonRuntime.mapModule;
   }
 
   class CommunicationModule {
@@ -2846,8 +3210,72 @@
           title: 'NAV',
           leftButtons: [
             { key: 'DISPLAY', label: 'DISP', states: ['HSI', 'MAP'], stateIndex: 0 },
+            { key: 'DECLUTTER', label: 'DCL', states: ['OFF', 'L1', 'L2'], stateIndex: 0 }
           ],
-          rightButtons: [],
+          rightButtons: [
+            {
+              key: 'RANGE',
+              label: '↑',
+              states: ['5', '10', '20', '40', '80', '160'],
+              values: [5, 10, 20, 40, 80, 160],
+              stateIndex: 3,
+              managedExternally: true,
+              minimal: true,
+              combinedGroupLabel: 'RNG',
+              onClick: () => {
+                getMapModule().stepRange(1);
+              }
+            },
+            {
+              key: 'RANGE',
+              label: '↓',
+              states: ['5', '10', '20', '40', '80', '160'],
+              values: [5, 10, 20, 40, 80, 160],
+              stateIndex: 3,
+              managedExternally: true,
+              minimal: true,
+              combinedGroupLabel: 'RNG',
+              onClick: () => {
+                getMapModule().stepRange(-1);
+              }
+            },
+            {
+              key: 'ACSEL',
+              label: '→',
+              states: ['A/C'],
+              values: ['A/C'],
+              stateIndex: 0,
+              managedExternally: true,
+              minimal: true,
+              combinedGroupLabel: 'AC',
+              onClick: () => {
+                getMapModule().stepSelectedTraffic(1);
+              }
+            },
+            {
+              key: 'ACSEL',
+              label: '←',
+              states: ['A/C'],
+              values: ['A/C'],
+              stateIndex: 0,
+              managedExternally: true,
+              minimal: true,
+              combinedGroupLabel: 'AC',
+              onClick: () => {
+                getMapModule().stepSelectedTraffic(-1);
+              }
+            },
+            {
+              key: 'CLEAR',
+              label: 'CLR',
+              states: [''],
+              stateIndex: 0,
+              managedExternally: true,
+              onClick: () => {
+                getMapModule().clearSelectedTraffic();
+              }
+            }
+          ],
           lines: [],
           render: (renderer, renderContext) => {
             const ctx = renderContext?.ctx ?? renderer?.canvasAPI?.context;
@@ -2856,20 +3284,560 @@
             const color = renderContext?.color ?? '#00ff66';
             if (!ctx) return;
 
+            addonRuntime.navRdrRuntime = addonRuntime.navRdrRuntime || { bootStartMs: 0 };
+
+            const engOn = Boolean(window.geofs?.animation?.values?.enginesOn);
+            if (!engOn) {
+              addonRuntime.navRdrRuntime.bootStartMs = 0;
+            } else if (!addonRuntime.navRdrRuntime.bootStartMs) {
+              addonRuntime.navRdrRuntime.bootStartMs = Date.now();
+            }
+
+            const elapsedMs = engOn ? (Date.now() - addonRuntime.navRdrRuntime.bootStartMs) : 0;
+            const bootReady = engOn && elapsedMs >= 4000;
+
+            const contentX = w * 0.19;
+            const contentY = h * 0.13;
+            const contentW = w * 0.62;
+            const contentH = h * 0.74;
+
+            const mode = String(getOptionValue('NAV', 'DISPLAY', 'HSI') ?? 'HSI').toUpperCase();
+            const declutterLevel = getOptionValue('NAV', 'DECLUTTER', 'OFF');
+
             ctx.save();
             ctx.setTransform(1, 0, 0, 1, 0, 0);
-            ctx.fillStyle = color;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.font = `bold ${Math.round(h * 0.06)}px monospace`;
-            ctx.fillText('NAV Page', w * 0.5, h * 0.5);
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(contentX, contentY, contentW, contentH);
+
+            if (!engOn) {
+              ctx.fillStyle = color;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.font = `bold ${Math.round(h * 0.046)}px monospace`;
+              ctx.fillText('NAV OFF', contentX + contentW * 0.5, contentY + contentH * 0.5);
+              ctx.restore();
+              return;
+            }
+
+            if (!bootReady) {
+              ctx.fillStyle = color;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.font = `bold ${Math.round(h * 0.046)}px monospace`;
+              ctx.fillText('ALIGNING NAV...', contentX + contentW * 0.5, contentY + contentH * 0.5);
+              ctx.restore();
+              return;
+            }
+
+            const mapModule = getMapModule();
+            const scene = mapModule.getSceneData();
+            const rangeNm = Math.max(1, Number(scene?.rangeNm) || 40);
+            const shouldShowTraffic = declutterLevel !== 'L2';
+            if (!shouldShowTraffic) {
+              mapModule.clearSelectedTraffic();
+            }
+            const selectedTrafficUid = shouldShowTraffic ? mapModule.getSelectedTrafficUid(scene?.traffic ?? []) : null;
+            const selectedTraffic = (scene?.traffic ?? []).find((c) => String(c?.uid ?? '') === String(selectedTrafficUid ?? '')) ?? null;
+            const waypointColor = '#3da2ff';
+            const navObjectTextPx = Math.round(h * 0.032);
+
+            const drawOwnshipSymbol = (x, y, size = 1) => {
+              ctx.strokeStyle = '#ffffff';
+              ctx.lineWidth = 2;
+              const fuselageHalf = h * 0.032 * size;
+              const wingY = y - h * 0.010 * size;
+              const wingHalf = h * 0.028 * size;
+              const tailY = y + h * 0.024 * size;
+              const tailHalf = h * 0.014 * size;
+
+              ctx.beginPath();
+              ctx.moveTo(x, y - fuselageHalf);
+              ctx.lineTo(x, y + fuselageHalf);
+              ctx.moveTo(x - wingHalf, wingY);
+              ctx.lineTo(x + wingHalf, wingY);
+              ctx.moveTo(x - tailHalf, tailY);
+              ctx.lineTo(x + tailHalf, tailY);
+              ctx.stroke();
+            };
+
+            const drawWaypointDiamond = (x, y, selected = false) => {
+              const size = selected ? Math.max(5, h * 0.012) : Math.max(4, h * 0.010);
+              ctx.strokeStyle = waypointColor;
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.moveTo(x, y - size);
+              ctx.lineTo(x + size, y);
+              ctx.lineTo(x, y + size);
+              ctx.lineTo(x - size, y);
+              ctx.closePath();
+              ctx.stroke();
+            };
+
+            const drawTrafficContact = (x, y, contact) => {
+              const isSelected = String(contact?.uid ?? '') === String(selectedTrafficUid ?? '');
+              const trafficColor = isSelected ? '#ff3333' : '#ffffff';
+
+              if (declutterLevel === 'L1') {
+                ctx.fillStyle = trafficColor;
+                const boxSize = Math.max(8, Math.round(h * 0.018));
+                ctx.fillRect(x - boxSize * 0.5, y - boxSize * 0.5, boxSize, boxSize);
+                return;
+              }
+
+              const number = mapModule.getContactNumber(contact);
+              const glyph = String(number);
+
+              ctx.fillStyle = trafficColor;
+              ctx.font = `bold ${navObjectTextPx}px monospace`;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(glyph, x, y);
+
+              const numberHalfH = Math.max(h * 0.016, 8);
+              const roofHalfW = Math.max(w * 0.022, 10);
+              const roofY = y - numberHalfH - h * 0.007;
+              const legLen = Math.max(h * 0.022, 10);
+
+              ctx.strokeStyle = trafficColor;
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.moveTo(x - roofHalfW, roofY);
+              ctx.lineTo(x + roofHalfW, roofY);
+              ctx.moveTo(x - roofHalfW, roofY);
+              ctx.lineTo(x - roofHalfW, roofY + legLen);
+              ctx.moveTo(x + roofHalfW, roofY);
+              ctx.lineTo(x + roofHalfW, roofY + legLen);
+              ctx.stroke();
+
+              const ownHeading = Number(scene?.ownship?.heading) || 0;
+              const track = Number(contact?.trackDeg);
+              const relTrackRad = Number.isFinite(track)
+                ? ((track - ownHeading) * Math.PI / 180)
+                : 0;
+              const dirX = Math.sin(relTrackRad);
+              const dirY = -Math.cos(relTrackRad);
+              const numberRadius = Math.max(h * 0.021, 11);
+              const lineStart = numberRadius + 2;
+              const lineLen = Math.max(h * 0.034, 16);
+
+              ctx.beginPath();
+              ctx.moveTo(x + dirX * lineStart, y + dirY * lineStart);
+              ctx.lineTo(x + dirX * (lineStart + lineLen), y + dirY * (lineStart + lineLen));
+              ctx.stroke();
+            };
+
+            const drawSelectedTrafficInfo = (anchorX, anchorY) => {
+              if (!selectedTraffic) return;
+              const infoColor = '#ff3333';
+              const lineStep = h * 0.040;
+              let y = anchorY;
+
+              const name = String(selectedTraffic?.aircraftName ?? '').trim() || 'UNKNOWN';
+              const callsign = String(selectedTraffic?.callsign ?? '').trim() || 'N/A';
+              const speed = Number.isFinite(selectedTraffic?.speedKts) ? selectedTraffic.speedKts : '--';
+              const altitude = Number.isFinite(selectedTraffic?.altFeet) ? selectedTraffic.altFeet : '--';
+              const headingSel = Number.isFinite(selectedTraffic?.headingDeg) ? selectedTraffic.headingDeg : '--';
+              const selectedNumber = mapModule.getContactNumber(selectedTraffic);
+
+              ctx.fillStyle = infoColor;
+              ctx.font = `bold ${Math.round(h * 0.034)}px monospace`;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(`TGT ${selectedNumber}`, anchorX, y);
+              y += lineStep;
+              ctx.fillText(`${name} / ${callsign}`.slice(0, 34), anchorX, y);
+              y += lineStep;
+              ctx.fillText(`SPD ${speed}`, anchorX, y);
+              y += lineStep;
+              ctx.fillText(`ALT ${altitude}`, anchorX, y);
+              y += lineStep;
+              ctx.fillText(`HDG ${headingSel}`, anchorX, y);
+            };
+
+            if (mode === 'HSI') {
+              const heading = Number(scene?.ownship?.heading) || Number(window.geofs?.animation?.values?.heading) || 0;
+              const cx = contentX + contentW * 0.5;
+              const compassShiftPx = h * 0.016;
+              const cy = contentY + contentH * 0.525 + compassShiftPx;
+              const radius = Math.min(contentW * 0.44, h * 0.305) + compassShiftPx;
+              const navTextPx = Math.round(h * 0.040);
+              const headingTextPx = Math.round(h * 0.046);
+              const headingBoxW = w * 0.13;
+              const headingBoxH = h * 0.060;
+              const headingBoxY = Math.max(contentY + h * 0.002, cy - radius - h * 0.129);
+              const navReadouts = getNavModule().getReadouts();
+              const hasNavCourse = Number.isFinite(navReadouts.course);
+              const courseDisplay = hasNavCourse ? ((navReadouts.course % 360) + 360) % 360 : null;
+              const hasAutopilotHeading = Number.isFinite(navReadouts.autopilotHeading);
+              const autopilotHeadingDisplay = hasAutopilotHeading ? ((navReadouts.autopilotHeading % 360) + 360) % 360 : null;
+
+              const projectHsi = (point) => {
+                const right = Number(point?.rightNm);
+                const forward = Number(point?.forwardNm);
+                if (!Number.isFinite(right) || !Number.isFinite(forward)) return null;
+                return {
+                  x: cx + (right / rangeNm) * radius,
+                  y: cy - (forward / rangeNm) * radius
+                };
+              };
+
+              // Fictitious compass ring: dots + labels only (no outer circle), labels always upright.
+              for (let deg = 0; deg < 360; deg += 10) {
+                const relRad = (deg - heading) * Math.PI / 180;
+                const dotX = cx + Math.sin(relRad) * radius;
+                const dotY = cy - Math.cos(relRad) * radius;
+                const dotR = deg % 30 === 0 ? Math.max(1.8, h * 0.0038) : Math.max(1.2, h * 0.0026);
+
+                const isCardinal = deg % 90 === 0;
+                const hasLabel = deg % 30 === 0 && !(declutterLevel === 'L2' && !isCardinal);
+
+                if (!hasLabel) {
+                  ctx.fillStyle = color;
+                  ctx.beginPath();
+                  ctx.arc(dotX, dotY, dotR, 0, Math.PI * 2);
+                  ctx.fill();
+                }
+
+                if (hasLabel) {
+                  const label = deg === 0 ? 'N' : deg === 90 ? 'E' : deg === 180 ? 'S' : deg === 270 ? 'W' : String(Math.round(deg / 10));
+                  ctx.fillStyle = color;
+                  ctx.font = `bold ${navTextPx}px monospace`;
+                  ctx.textAlign = 'center';
+                  ctx.textBaseline = 'middle';
+                  ctx.fillText(label, dotX, dotY);
+                }
+              }
+
+              if (declutterLevel === 'OFF') {
+                ctx.fillStyle = color;
+                ctx.font = `bold ${navTextPx}px monospace`;
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'top';
+                const kias = Number(window.geofs?.animation?.values?.kias) || 0;
+                const topReadoutY = headingBoxY;
+                const rowStepY = h * 0.052;
+                const leftReadoutX = contentX + contentW * 0.025;
+                const rightReadoutX = contentX + contentW * 0.725;
+
+                ctx.fillText(`GND ${Math.round(kias * 1.05)}`, leftReadoutX, topReadoutY);
+                ctx.fillText(`TAS ${Math.round(kias * 1.15)}`, leftReadoutX, topReadoutY + rowStepY);
+
+                const dmeText = Number.isFinite(navReadouts.dme) ? String(navReadouts.dme) : '--';
+                const navaidText = navReadouts.navaidLabel || '';
+                ctx.fillText(`DME ${dmeText}`, rightReadoutX, topReadoutY);
+                if (navaidText) {
+                  ctx.fillText(navaidText, rightReadoutX, topReadoutY + rowStepY);
+                }
+                ctx.textBaseline = 'middle';
+              }
+
+              const normalizeDeg = (value) => {
+                const deg = Number(value);
+                if (!Number.isFinite(deg)) return 0;
+                return ((Math.round(deg) % 360) + 360) % 360;
+              };
+              const headingDisplay = normalizeDeg(window.geofs?.animation?.values?.heading360 ?? 0);
+
+              if (hasNavCourse) {
+                const getValue = window.geofs?.animation?.getValue?.bind(window.geofs?.animation);
+                const navCourseDeviation = getValue
+                  ? (getValue('NAVCourseDeviation') ?? 0)
+                  : (window.geofs?.animation?.values?.NAVCourseDeviation ?? 0);
+                const courseOffsetPx = clampValue(5 * navCourseDeviation, -100, 100) * (w / 512);
+
+                const courseRelRad = (courseDisplay - heading) * Math.PI / 180;
+                const dirX = Math.sin(courseRelRad);
+                const dirY = -Math.cos(courseRelRad);
+                const leftX = dirY;
+                const leftY = -dirX;
+                const signedOffset = -courseOffsetPx;
+                const lineCenterX = cx + leftX * signedOffset;
+                const lineCenterY = cy + leftY * signedOffset;
+                const offsetAbs = Math.abs(signedOffset);
+                const lineInset = Math.max(h * 0.016, 6);
+                const lineRadius = Math.max(8, radius - lineInset);
+                const clampedOffsetAbs = Math.min(offsetAbs, Math.max(0, lineRadius - 2));
+                const halfLen = Math.sqrt(Math.max(0, (lineRadius * lineRadius) - (clampedOffsetAbs * clampedOffsetAbs)));
+
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(lineCenterX - dirX * halfLen, lineCenterY - dirY * halfLen);
+                ctx.lineTo(lineCenterX + dirX * halfLen, lineCenterY + dirY * halfLen);
+                ctx.stroke();
+
+                const arrowTipX = lineCenterX + dirX * halfLen;
+                const arrowTipY = lineCenterY + dirY * halfLen;
+                const arrowLen = Math.max(h * 0.028, 10);
+                const arrowHalfW = Math.max(h * 0.013, 5);
+                const arrowBaseX = arrowTipX - dirX * arrowLen;
+                const arrowBaseY = arrowTipY - dirY * arrowLen;
+                ctx.beginPath();
+                ctx.moveTo(arrowTipX, arrowTipY);
+                ctx.lineTo(arrowBaseX + leftX * arrowHalfW, arrowBaseY + leftY * arrowHalfW);
+                ctx.lineTo(arrowBaseX - leftX * arrowHalfW, arrowBaseY - leftY * arrowHalfW);
+                ctx.closePath();
+                ctx.fillStyle = color;
+                ctx.fill();
+              }
+
+              // Clip all NAV objects to HSI circle.
+              ctx.save();
+              ctx.beginPath();
+              ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+              ctx.clip();
+
+              const waypointPoints = [];
+              for (const wp of (scene?.waypoints ?? [])) {
+                const p = projectHsi(wp);
+                if (!p) continue;
+                waypointPoints.push({ ...p, wp });
+              }
+
+              if (waypointPoints.length >= 2) {
+                ctx.strokeStyle = waypointColor;
+                ctx.lineWidth = 1.4;
+                ctx.beginPath();
+                for (let i = 0; i < waypointPoints.length; i++) {
+                  const p = waypointPoints[i];
+                  if (i === 0) ctx.moveTo(p.x, p.y);
+                  else ctx.lineTo(p.x, p.y);
+                }
+                ctx.stroke();
+              }
+
+              for (const p of waypointPoints) {
+                drawWaypointDiamond(p.x, p.y, p.wp?.selected);
+                if (declutterLevel !== 'L2') {
+                  ctx.fillStyle = waypointColor;
+                  ctx.font = `bold ${navObjectTextPx}px monospace`;
+                  ctx.textAlign = 'left';
+                  ctx.textBaseline = 'middle';
+                  const wpName = String(p.wp?.ident ?? '').slice(0, 10);
+                  const wpIndex = Number(p.wp?.index) + 1;
+                  ctx.fillText(`WP${wpIndex}`, p.x + w * 0.010, p.y - h * 0.018);
+                  if (wpName) {
+                    ctx.fillText(wpName, p.x + w * 0.010, p.y + h * 0.016);
+                  }
+                }
+              }
+
+              if (shouldShowTraffic) {
+                for (const ac of (scene?.traffic ?? [])) {
+                  const p = projectHsi(ac);
+                  if (!p) continue;
+                  drawTrafficContact(p.x, p.y, ac);
+                }
+              }
+
+              ctx.restore();
+
+              const bottomReadoutY = cy + radius + h * 0.045;
+
+              if (hasAutopilotHeading) {
+                const hdgBugRelRad = (autopilotHeadingDisplay - heading) * Math.PI / 180;
+                const radialOutX = Math.sin(hdgBugRelRad);
+                const radialOutY = -Math.cos(hdgBugRelRad);
+                const radialInX = -radialOutX;
+                const radialInY = -radialOutY;
+                const tangentX = Math.cos(hdgBugRelRad);
+                const tangentY = Math.sin(hdgBugRelRad);
+
+                const bugHalfW = Math.max(w * 0.024, 9);
+                const bugHalfH = Math.max(h * 0.010, 4);
+                const bugMargin = Math.max(h * 0.020, 7);
+                const bugCenterRadius = radius + bugHalfH + bugMargin;
+                const bugCx = cx + radialOutX * bugCenterRadius;
+                const bugCy = cy + radialOutY * bugCenterRadius;
+                const vHalf = Math.max(w * 0.0135, bugHalfW * 0.48);
+                const vDepth = Math.max(h * 0.013, 4);
+
+                const outerCx = bugCx + radialOutX * bugHalfH;
+                const outerCy = bugCy + radialOutY * bugHalfH;
+                const innerCx = bugCx + radialInX * bugHalfH;
+                const innerCy = bugCy + radialInY * bugHalfH;
+
+                const outerLeftX = outerCx - tangentX * bugHalfW;
+                const outerLeftY = outerCy - tangentY * bugHalfW;
+                const outerRightX = outerCx + tangentX * bugHalfW;
+                const outerRightY = outerCy + tangentY * bugHalfW;
+                const innerLeftX = innerCx - tangentX * bugHalfW;
+                const innerLeftY = innerCy - tangentY * bugHalfW;
+                const innerRightX = innerCx + tangentX * bugHalfW;
+                const innerRightY = innerCy + tangentY * bugHalfW;
+
+                const notchLeftX = outerCx - tangentX * vHalf;
+                const notchLeftY = outerCy - tangentY * vHalf;
+                const notchRightX = outerCx + tangentX * vHalf;
+                const notchRightY = outerCy + tangentY * vHalf;
+                const notchTipX = outerCx + radialInX * vDepth;
+                const notchTipY = outerCy + radialInY * vDepth;
+
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(outerLeftX, outerLeftY);
+                ctx.lineTo(notchLeftX, notchLeftY);
+                ctx.moveTo(notchRightX, notchRightY);
+                ctx.lineTo(outerRightX, outerRightY);
+                ctx.moveTo(outerLeftX, outerLeftY);
+                ctx.lineTo(innerLeftX, innerLeftY);
+                ctx.moveTo(outerRightX, outerRightY);
+                ctx.lineTo(innerRightX, innerRightY);
+                ctx.moveTo(innerLeftX, innerLeftY);
+                ctx.lineTo(innerRightX, innerRightY);
+                ctx.moveTo(notchLeftX, notchLeftY);
+                ctx.lineTo(notchTipX, notchTipY);
+                ctx.lineTo(notchRightX, notchRightY);
+                ctx.stroke();
+              }
+
+              ctx.strokeStyle = color;
+              ctx.lineWidth = 2;
+
+              const markerHalf = headingBoxW * 0.11;
+              const markerTipY = headingBoxY + headingBoxH + h * 0.020;
+              const boxLeft = cx - headingBoxW * 0.5;
+              const boxRight = cx + headingBoxW * 0.5;
+              const boxTop = headingBoxY;
+              const boxBottom = headingBoxY + headingBoxH;
+              ctx.beginPath();
+              ctx.moveTo(boxLeft, boxTop);
+              ctx.lineTo(boxRight, boxTop);
+              ctx.moveTo(boxLeft, boxTop);
+              ctx.lineTo(boxLeft, boxBottom);
+              ctx.moveTo(boxRight, boxTop);
+              ctx.lineTo(boxRight, boxBottom);
+              ctx.moveTo(boxLeft, boxBottom);
+              ctx.lineTo(cx - markerHalf, boxBottom);
+              ctx.moveTo(cx + markerHalf, boxBottom);
+              ctx.lineTo(boxRight, boxBottom);
+              ctx.stroke();
+
+              ctx.beginPath();
+              ctx.moveTo(cx - markerHalf, boxBottom);
+              ctx.lineTo(cx, markerTipY);
+              ctx.lineTo(cx + markerHalf, boxBottom);
+              ctx.stroke();
+
+              ctx.fillStyle = color;
+              ctx.font = `bold ${headingTextPx}px monospace`;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(String(headingDisplay).padStart(3, '0'), cx, headingBoxY + headingBoxH * 0.5);
+
+              ctx.fillStyle = color;
+              ctx.font = `bold ${navTextPx}px monospace`;
+              ctx.textBaseline = 'middle';
+              ctx.textAlign = 'left';
+              if (declutterLevel === 'OFF' && hasAutopilotHeading) {
+                ctx.fillText(`HDG ${String(autopilotHeadingDisplay).padStart(3, '0')}`, contentX + contentW * 0.025, bottomReadoutY);
+              }
+              ctx.textAlign = 'right';
+              if (declutterLevel === 'OFF' && hasNavCourse) {
+                ctx.fillText(`CRS ${courseDisplay}`, contentX + contentW * 0.975, bottomReadoutY);
+              }
+
+              drawOwnshipSymbol(cx, cy, 1);
+              if (shouldShowTraffic) {
+                drawSelectedTrafficInfo(cx, cy + h * 0.080);
+              }
+            } else {
+              const layout = renderContext?.layout;
+              const topTabs = Array.isArray(layout?.topTabs) ? layout.topTabs : [];
+              const bottomTabs = Array.isArray(layout?.bottomTabs) ? layout.bottomTabs : [];
+              const topStripBottom = topTabs.length
+                ? Math.max(...topTabs.map((tab) => (tab?.y ?? 0) + (tab?.h ?? 0)))
+                : (h * 0.11);
+              const bottomStripTop = bottomTabs.length
+                ? Math.min(...bottomTabs.map((tab) => tab?.y ?? h))
+                : (h * 0.89);
+
+              const mapLeft = 0;
+              const mapRight = w;
+              const mapTop = topStripBottom + h * 0.004;
+              const mapBottom = bottomStripTop - h * 0.004;
+              const mapW = mapRight - mapLeft;
+              const mapH = mapBottom - mapTop;
+              const ownX = mapLeft + mapW * 0.5;
+              const ownY = mapTop + mapH * (2 / 3);
+              const pxPerNm = Math.max(0.0001, (ownY - mapTop) / rangeNm);
+
+              const projectMap = (point) => {
+                const right = Number(point?.rightNm);
+                const forward = Number(point?.forwardNm);
+                if (!Number.isFinite(right) || !Number.isFinite(forward)) return null;
+                return {
+                  x: ownX + right * pxPerNm,
+                  y: ownY - forward * pxPerNm
+                };
+              };
+
+              ctx.save();
+              ctx.beginPath();
+              ctx.rect(mapLeft, mapTop, mapW, mapH);
+              ctx.clip();
+
+              const waypointPoints = [];
+              for (const wp of (scene?.waypoints ?? [])) {
+                const p = projectMap(wp);
+                if (!p) continue;
+                waypointPoints.push({ ...p, wp });
+              }
+
+              if (waypointPoints.length >= 2) {
+                ctx.strokeStyle = waypointColor;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                for (let i = 0; i < waypointPoints.length; i++) {
+                  const p = waypointPoints[i];
+                  if (i === 0) ctx.moveTo(p.x, p.y);
+                  else ctx.lineTo(p.x, p.y);
+                }
+                ctx.stroke();
+              }
+
+              for (const p of waypointPoints) {
+                drawWaypointDiamond(p.x, p.y, p.wp?.selected);
+                if (declutterLevel !== 'L2') {
+                  ctx.fillStyle = waypointColor;
+                  ctx.font = `bold ${navObjectTextPx}px monospace`;
+                  ctx.textAlign = 'left';
+                  ctx.textBaseline = 'middle';
+                  const wpName = String(p.wp?.ident ?? '').slice(0, 10);
+                  const wpIndex = Number(p.wp?.index) + 1;
+                  ctx.fillText(`WP${wpIndex}`, p.x + w * 0.010, p.y - h * 0.018);
+                  if (wpName) {
+                    ctx.fillText(wpName, p.x + w * 0.010, p.y + h * 0.016);
+                  }
+                }
+              }
+
+              if (shouldShowTraffic) {
+                for (const ac of (scene?.traffic ?? [])) {
+                  const p = projectMap(ac);
+                  if (!p) continue;
+                  drawTrafficContact(p.x, p.y, ac);
+                }
+              }
+
+              drawOwnshipSymbol(ownX, ownY, 1);
+              if (shouldShowTraffic) {
+                drawSelectedTrafficInfo(ownX, ownY + h * 0.080);
+              }
+              ctx.restore();
+            }
+
             ctx.restore();
           }
         },
         {
           title: 'RDR',
-          leftButtons: [],
-          rightButtons: [],
+          leftButtons: [
+          ],
+          rightButtons: [
+            { key: 'RNG', label: 'RNG', states: ['20', '40', '80'], values: [20, 40, 80], stateIndex: 1 }
+          ],
           lines: [],
           render: (renderer, renderContext) => {
             const ctx = renderContext?.ctx ?? renderer?.canvasAPI?.context;
@@ -2878,13 +3846,140 @@
             const color = renderContext?.color ?? '#00ff66';
             if (!ctx) return;
 
+            addonRuntime.navRdrRuntime = addonRuntime.navRdrRuntime || { bootStartMs: 0 };
+
+            const engOn = Boolean(window.geofs?.animation?.values?.enginesOn);
+            if (!engOn) {
+              addonRuntime.navRdrRuntime.bootStartMs = 0;
+            } else if (!addonRuntime.navRdrRuntime.bootStartMs) {
+              addonRuntime.navRdrRuntime.bootStartMs = Date.now();
+            }
+
+            const elapsedMs = engOn ? (Date.now() - addonRuntime.navRdrRuntime.bootStartMs) : 0;
+            const bootReady = engOn && elapsedMs >= 4000;
+
+            const contentX = w * 0.19;
+            const contentY = h * 0.13;
+            const contentW = w * 0.62;
+            const contentH = h * 0.74;
+
+            const rangeNmRaw = Number(getOptionValue('RDR', 'RNG', 40));
+            const rangeNm = Number.isFinite(rangeNmRaw) && rangeNmRaw > 0 ? rangeNmRaw : 40;
+
+            const myPos = window.geofs?.aircraft?.instance?.llaLocation;
+            const myHeading = Number(window.geofs?.animation?.values?.heading) || 0;
+            const visibleUsers = Object.values(window.multiplayer?.visibleUsers ?? {});
+
+            const distanceMeters = (a, b) => {
+              const distanceFn = window.geofs?.utils?.distanceInMeters;
+              if (typeof distanceFn === 'function') {
+                return Number(distanceFn(a, b)) || 0;
+              }
+              if (!Array.isArray(a) || !Array.isArray(b)) return 0;
+              const latAvgRad = (((Number(a[0]) || 0) + ((Number(b[0]) || 0))) * 0.5) * (Math.PI / 180);
+              const dx = (((Number(b[1]) || 0) - ((Number(a[1]) || 0))) * 111320) * Math.cos(latAvgRad);
+              const dy = (((Number(b[0]) || 0) - ((Number(a[0]) || 0))) * 110540);
+              const dz = ((Number(b[2]) || 0) - (Number(a[2]) || 0));
+              return Math.sqrt(dx * dx + dy * dy + dz * dz);
+            };
+
+            const bearingDeg = (a, b) => {
+              const bearingFn = window.geofs?.utils?.bearingInDegrees;
+              if (typeof bearingFn === 'function') {
+                return Number(bearingFn(a, b)) || 0;
+              }
+              if (!Array.isArray(a) || !Array.isArray(b)) return 0;
+              const lat1 = (Number(a[0]) || 0) * Math.PI / 180;
+              const lat2 = (Number(b[0]) || 0) * Math.PI / 180;
+              const dLon = (((Number(b[1]) || 0) - ((Number(a[1]) || 0))) * Math.PI / 180);
+              const y = Math.sin(dLon) * Math.cos(lat2);
+              const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+              return ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
+            };
+
             ctx.save();
             ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(contentX, contentY, contentW, contentH);
+
+            if (!engOn) {
+              ctx.fillStyle = color;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.font = `bold ${Math.round(h * 0.046)}px monospace`;
+              ctx.fillText('RDR OFF', contentX + contentW * 0.5, contentY + contentH * 0.5);
+              ctx.restore();
+              return;
+            }
+
+            if (!bootReady) {
+              ctx.fillStyle = color;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.font = `bold ${Math.round(h * 0.046)}px monospace`;
+              ctx.fillText('RADAR BIT TEST...', contentX + contentW * 0.5, contentY + contentH * 0.5);
+              ctx.restore();
+              return;
+            }
+
+            const radarTop = contentY;
+            const radarBottom = contentY + contentH;
+            const radarHeight = Math.max(0, radarBottom - radarTop);
+            const cx = contentX + contentW * 0.5;
+            const cy = radarTop + radarHeight * 0.5;
+            const radius = Math.max(200, Math.min(contentW * 0.5, radarHeight * 0.5));
+
+            // Radar grid.
+            ctx.strokeStyle = '#004422';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(cx, cy, radius * 0.5, 0, Math.PI * 2);
+            ctx.stroke();
+
+            // Sweep line.
+            const sweepAngle = ((Date.now() % 3000) / 3000) * Math.PI * 2;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx + Math.cos(sweepAngle) * radius, cy + Math.sin(sweepAngle) * radius);
+            ctx.stroke();
+
+            // Targets.
+            if (Array.isArray(myPos)) {
+              for (const user of visibleUsers) {
+                const co = user?.lastUpdate?.co;
+                if (!Array.isArray(co) || co.length < 3) continue;
+
+                const targetPos = [Number(co[0]) || 0, Number(co[1]) || 0, Number(co[2]) || 0];
+                const distanceNm = distanceMeters(myPos, targetPos) / 1609.34;
+                if (!Number.isFinite(distanceNm) || distanceNm <= 0 || distanceNm >= rangeNm) continue;
+
+                const bearing = bearingDeg(myPos, targetPos);
+                const relative = (bearing - myHeading - 90) * Math.PI / 180;
+                const ratio = distanceNm / rangeNm;
+                const px = cx + (ratio * radius) * Math.cos(relative);
+                const py = cy + (ratio * radius) * Math.sin(relative);
+
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(px - 4, py - 4, 8, 8);
+                ctx.font = `${Math.round(h * 0.020)}px monospace`;
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'middle';
+                const altKft = Math.round(((Number(co[2]) || 0) * 3.28084) / 1000);
+                ctx.fillText(String(altKft), px + 10, py);
+              }
+            }
+
+            // Own ship.
             ctx.fillStyle = color;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.font = `bold ${Math.round(h * 0.06)}px monospace`;
-            ctx.fillText('RADAR PAGE', w * 0.5, h * 0.5);
+            ctx.beginPath();
+            ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+            ctx.fill();
+
             ctx.restore();
           }
         },
@@ -3474,6 +4569,18 @@
         const combinedGroup = this.getCombinedGroupForSlot('left', i, page);
         if (combinedGroup) {
           const btn = visibleLeftButtons[i].button;
+          const isMinimalGroup = Boolean(combinedGroup.entries?.[0]?.button?.minimal);
+          if (isMinimalGroup) {
+            const rowCenterY = slot.y + slot.h * 0.55;
+            const labelX = slot.x + w * 0.016;
+            ctx.save();
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(String(btn?.label ?? ''), labelX, rowCenterY);
+            ctx.restore();
+            continue;
+          }
+
           const actionText = btn?.states?.[0] ?? btn?.label ?? '';
           const rowCenterY = slot.y + slot.h * 0.55;
           const actionX = slot.x + w * 0.016;
@@ -3508,6 +4615,18 @@
         const combinedGroup = this.getCombinedGroupForSlot('right', i, page);
         if (combinedGroup) {
           const btn = visibleRightButtons[i].button;
+          const isMinimalGroup = Boolean(combinedGroup.entries?.[0]?.button?.minimal);
+          if (isMinimalGroup) {
+            const rowCenterY = slot.y + slot.h * 0.55;
+            const labelX = slot.x + slot.w - w * 0.016;
+            ctx.save();
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(String(btn?.label ?? ''), labelX, rowCenterY);
+            ctx.restore();
+            continue;
+          }
+
           const actionText = btn?.states?.[0] ?? btn?.label ?? '';
           const bracketX = slot.x + slot.w * 0.56;
           const actionX = bracketX + w * 0.026;
@@ -3554,6 +4673,29 @@
           const startSlot = slots[group.startSlot];
           const endSlot = slots[group.endSlot];
           if (!startSlot || !endSlot) continue;
+
+          const isMinimalGroup = Boolean(group.entries?.[0]?.button?.minimal);
+          if (isMinimalGroup) {
+            const entry = group.entries?.[0];
+            const button = entry?.button;
+            const displayValue = (Array.isArray(button?.values) && button.values.length)
+              ? getOptionValue(page?.title ?? 'PAGE', button?.key || button?.label || '', '')
+              : this.getStateLabel(button, page, entry?.actualIndex ?? 0, side);
+
+            const yTop = startSlot.y + startSlot.h * 0.22;
+            const yBottom = endSlot.y + endSlot.h * 0.78;
+            const yMid = (yTop + yBottom) * 0.5;
+            const valueX = side === 'left'
+              ? (startSlot.x + w * 0.016)
+              : (startSlot.x + startSlot.w - w * 0.016);
+
+            ctx.save();
+            ctx.textAlign = side === 'left' ? 'left' : 'right';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(String(displayValue ?? ''), valueX, yMid);
+            ctx.restore();
+            continue;
+          }
 
           const groupLabel = group.entries?.[0]?.button?.combinedGroupLabel
             ?? group.entries?.[0]?.button?.key
@@ -4073,6 +5215,7 @@
     }
 
     if (navUnit != null) {
+      const navReadouts = getNavModule().getReadouts(navUnit);
       const sepY = h * 0.596;
       ctx.beginPath();
       ctx.moveTo(x, sepY);
@@ -4085,10 +5228,10 @@
       let rowY = sepY + h * 0.038;
       ctx.font = `${Math.round(h * 0.032)}px monospace`;
 
-      const dme = navUnit?.DME ?? '';
-      const bearing = Number.isFinite(navUnit?.bearing) ? Math.round(navUnit.bearing) : '';
-      const course = Number.isFinite(navUnit?.course) ? Math.round(navUnit.course) : '';
-      const timeToSignal = navUnit?.timeToSignal ?? '';
+      const dme = Number.isFinite(navReadouts.dme) ? navReadouts.dme : '';
+      const bearing = Number.isFinite(navReadouts.bearing) ? navReadouts.bearing : '';
+      const course = Number.isFinite(navReadouts.course) ? navReadouts.course : '';
+      const timeToSignal = Number.isFinite(navReadouts.timeToSignal) ? navReadouts.timeToSignal : '';
 
       ctx.fillText(`DME ${dme}`, x, rowY);
       rowY += rowStep;
@@ -4099,17 +5242,7 @@
       ctx.fillText(`T ${timeToSignal} MIN`, x, rowY);
       rowY += rowStep;
 
-      if (navUnit?.navaid?.type === 'ILS') {
-        const icao = navUnit?.navaid?.icao ?? '';
-        ctx.fillText(`ILS ${icao}`, x, rowY);
-      } else if (navUnit?.navaid?.type === 'VORTAC') {
-        const ident = navUnit?.navaid?.ident ?? navUnit?.navaid?.icao ?? '';
-        ctx.fillText(`VOR ${ident}`, x, rowY);
-      } else {
-        let ident = navUnit?.navaid?.ident;
-        if (!ident) { ident = navUnit?.navaid?.icao ?? ''; }
-        ctx.fillText(`${navUnit?.navaid?.type} ${ident}`, x, rowY);
-      }
+      ctx.fillText(navReadouts.navaidLabel || '', x, rowY);
     }
 
     ctx.restore();
@@ -6642,6 +7775,20 @@
         setProbeState: (state) => addonRuntime.mainPlugin?.controlModule?.setProbeState?.(state) ?? false,
         getProbeState: () => getOption('SYS', 'REFUELING', 'CLOSED')
       },
+      nav: {
+        getModule: () => getNavModule(),
+        getCurrentNavUnit: () => getNavModule().getCurrentNavUnit(),
+        getReadouts: () => getNavModule().getReadouts(),
+        getNavaidLabel: () => getNavModule().getNavaidTypeLabel(),
+        getAutopilotHeading: () => getNavModule().getAutopilotHeadingDeg()
+      },
+      map: {
+        getModule: () => getMapModule(),
+        getRangeNm: () => getMapModule().getRangeNm(),
+        setRangeNm: (rangeNm) => getMapModule().setRangeNm(rangeNm),
+        stepRange: (step) => getMapModule().stepRange(step),
+        getSceneData: () => getMapModule().getSceneData()
+      },
       communication: {
         getModule: () => getCommunicationModule(),
         getProfile: () => getCommunicationModule()?.getProfile?.() ?? { group: '', flight: '', wingman: '' },
@@ -6746,6 +7893,8 @@
         stop: () => {
           addonRuntime.mainPlugin?.stop?.();
           addonRuntime.mainPlugin = null;
+          addonRuntime.mapModule = null;
+          addonRuntime.navModule = null;
           addonRuntime.communicationModule = null;
           addonRuntime.mfdRuntimeRefs = Object.create(null);
           return true;
