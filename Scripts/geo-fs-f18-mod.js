@@ -61,6 +61,14 @@
       this.lastMfdRecoveryTick = -999;
 
       this.addMfd({
+        name: 'LEFT',
+        position: [-0.2160, 6.158, 0.584],
+        rotation: [8, 0, 0],
+        scale: [0.29, 0.29, 0.285],
+        defaultPageTitle: 'NAV'
+      });
+
+      this.addMfd({
         name: 'RIGHT',
         position: [0.2167, 6.158, 0.584],
         rotation: [8, 0, 0],
@@ -69,19 +77,11 @@
       });
 
       this.addMfd({
-        name: 'LEFT',
-        position: [-0.2160, 6.158, 0.584],
-        rotation: [8, 0, 0],
-        scale: [0.29, 0.29, 0.285],
-        defaultPageTitle: 'CHK'
-      });
-
-      this.addMfd({
         name: 'CENTER',
-        position: [0.0, 6.050, 0.380],
-        rotation: [25, 0, 0],
-        scale: [0.29, 0.29, 0.29],
-        defaultPageTitle: 'RDR'
+        position: [-0.003, 6.085, 0.335],
+        rotation: [23.5, 0, 0],
+        scale: [0.335, 0.335, 0.335],
+        defaultPageTitle: 'CHK'
       });
     }
 
@@ -1804,7 +1804,7 @@
     module.addChecklist({
       type: 'PROC',
       title: 'Engine Start',
-      items: ['Parking Brake ON', 'Flight Plan LOADED', 'Briefing CHECKED', 'Master Arm OFF', 'Weapon Config SELECTED', 'Rearming FINISHED', 'Area CLEAR', 'Engine ON', 'Instruments CHECK'],
+      items: ['Parking Brake ON', 'Flight Plan LOADED', 'Briefing CHECKED', 'Master Arm OFF', 'Radar OFF', 'Weapon Config SELECTED', 'Rearming FINISHED', 'Area CLEAR', 'Engine ON', 'Instruments CHECK'],
       completed: false
     });
     module.addChecklist({
@@ -1828,7 +1828,7 @@
     module.addChecklist({
       type: 'PROC',
       title: 'Climb',
-      items: ['Flaps AUTO', 'Attitude SET', 'Trim SET'],
+      items: ['Flaps AUTO', 'Attitude SET', 'Trim SET', 'Radar AS DESIRED'],
       completed: false
     });
     module.addChecklist({
@@ -1962,6 +1962,34 @@
       return Number.isFinite(raw) ? Math.round(raw) : null;
     }
 
+    // Returns FOO visibility setting from the RDR page.
+    getFooVisibilityMode() {
+      const mode = String(getOptionValue('RDR', 'FOO', 'SHOW') ?? 'SHOW').trim().toUpperCase();
+      return mode === 'HIDE' ? 'HIDE' : 'SHOW';
+    }
+
+    // Returns true when contacts with callsign FOO should be hidden.
+    shouldHideFooContacts() {
+      return this.getFooVisibilityMode() === 'HIDE';
+    }
+
+    // Returns true when a callsign equals FOO (case-insensitive).
+    isFooCallsign(callsign) {
+      return String(callsign ?? '').trim().toUpperCase() === 'FOO';
+    }
+
+    // Returns true when one traffic contact is allowed by current FOO filter.
+    isTrafficContactVisible(callsign) {
+      if (!this.shouldHideFooContacts()) return true;
+      return !this.isFooCallsign(callsign);
+    }
+
+    // Filters a multiplayer user list using the FOO visibility setting.
+    filterMultiplayerContacts(users) {
+      const list = Array.isArray(users) ? users : [];
+      return list.filter((user) => this.isTrafficContactVisible(user?.callsign ?? user?.cs));
+    }
+
     // Formats navaid type + identifier for HUD/MFD display.
     getNavaidTypeLabel(navUnit = this.getCurrentNavUnit()) {
       if (navUnit?.navaid?.type === 'ILS') {
@@ -2007,11 +2035,18 @@
   }
 
   class MapModule {
-    static RANGE_OPTIONS_NM = [5, 10, 20, 40, 80, 160];
+    static RANGE_OPTIONS_NM = [1, 2.5, 5, 10, 20, 40, 80, 160];
+    static MARK_STATES = ['', 'FRIEND', 'CIVILIAN', 'UNKNOWN', 'FOO'];
+    static SHOW_STATES = ['ALL', 'UNM', 'FRIEND', 'CIVILIAN', 'UNKNOWN', 'FOO'];
+    static VIEW_MODES = ['A/C F/W', 'A/C CNT', 'A/C N', 'TGT', 'TGT N'];
+    static TRAFFIC_STALE_TIMEOUT_MS = 10000;
 
     constructor() {
       this.selectedTrafficUid = null;
       this.trafficSelectionCleared = false;
+      this.trafficMarksByUid = Object.create(null);
+      this.showFilter = 'ALL';
+      this.trafficContactsByUid = Object.create(null);
     }
 
     // Returns the configured NAV range in NM.
@@ -2052,6 +2087,100 @@
       const idx = Math.max(0, options.indexOf(current));
       const nextIndex = clampValue(idx + direction, 0, options.length - 1);
       return this.setRangeNm(options[nextIndex]);
+    }
+
+    // Returns true when radar-driven traffic should be active.
+    isRadarEnabled() {
+      return String(getOptionValue('RDR', 'RADAR', 'OFF') ?? 'OFF').toUpperCase() === 'ON';
+    }
+
+    // Normalizes one NAV MAP view mode.
+    normalizeViewMode(value) {
+      const token = String(value ?? '').trim().toUpperCase();
+      if (MapModule.VIEW_MODES.includes(token)) return token;
+      return 'A/C F/W';
+    }
+
+    // Gets currently active NAV MAP view mode.
+    getViewMode() {
+      const value = getOptionValue('NAV', 'VIEW', 'A/C F/W');
+      return this.normalizeViewMode(value);
+    }
+
+    // Sets NAV MAP view mode.
+    setViewMode(value) {
+      const mode = this.normalizeViewMode(value);
+      setOption('NAV', 'VIEW', mode);
+      return mode;
+    }
+
+    // Cycles NAV MAP view mode.
+    cycleViewMode() {
+      const modes = MapModule.VIEW_MODES;
+      const current = this.getViewMode();
+      const idx = Math.max(0, modes.indexOf(current));
+      const next = modes[(idx + 1) % modes.length] ?? 'A/C F/W';
+      return this.setViewMode(next);
+    }
+
+    // Returns frame configuration for NAV MAP projection.
+    getMapViewFrame(scene, selectedTraffic = null) {
+      const mode = this.getViewMode();
+      const ownship = scene?.ownship;
+      const ownHeading = Number(ownship?.heading) || 0;
+
+      const selectedLat = Number(selectedTraffic?.lat);
+      const selectedLon = Number(selectedTraffic?.lon);
+      const hasSelectedPosition = Number.isFinite(selectedLat) && Number.isFinite(selectedLon);
+
+      let centerLat = Number(ownship?.lat);
+      let centerLon = Number(ownship?.lon);
+      let anchor = 'forward';
+      let upHeadingDeg = ownHeading;
+
+      if (mode === 'A/C CNT') {
+        anchor = 'center';
+      } else if (mode === 'A/C N') {
+        anchor = 'center';
+        upHeadingDeg = 0;
+      } else if (mode === 'TGT') {
+        anchor = 'center';
+        if (hasSelectedPosition) {
+          centerLat = selectedLat;
+          centerLon = selectedLon;
+        }
+      } else if (mode === 'TGT N') {
+        anchor = 'center';
+        upHeadingDeg = 0;
+        if (hasSelectedPosition) {
+          centerLat = selectedLat;
+          centerLon = selectedLon;
+        }
+      }
+
+      if (!Number.isFinite(centerLat) || !Number.isFinite(centerLon)) {
+        return null;
+      }
+
+      return {
+        mode,
+        anchor,
+        centerLat,
+        centerLon,
+        upHeadingDeg
+      };
+    }
+
+    // Projects one lat/lon point to the active NAV MAP frame.
+    projectToMapViewFrame(frame, lat, lon) {
+      if (!frame) return null;
+      const targetLat = Number(lat);
+      const targetLon = Number(lon);
+      if (!Number.isFinite(targetLat) || !Number.isFinite(targetLon)) return null;
+
+      const relativeNm = this.toRelativeNm({ lat: frame.centerLat, lon: frame.centerLon }, targetLat, targetLon);
+      if (!relativeNm) return null;
+      return this.toHeadingFrame(relativeNm, frame.upHeadingDeg);
     }
 
     // Returns ownship geodetic position and heading.
@@ -2110,27 +2239,63 @@
     getTrafficContacts(ownship) {
       if (!ownship) return [];
       const users = Object.values(window.multiplayer?.visibleUsers ?? {});
-      const result = [];
+      const navModule = getNavModule();
+      const nowMs = Date.now();
 
       for (const user of users) {
+        if (!navModule.isTrafficContactVisible(user?.callsign ?? user?.cs)) continue;
+
         const co = user?.lastUpdate?.co;
         if (!Array.isArray(co) || !Number.isFinite(co[0]) || !Number.isFinite(co[1])) continue;
 
-        const relNm = this.toRelativeNm(ownship, Number(co[0]), Number(co[1]));
-        const frameNm = this.toHeadingFrame(relNm, ownship.heading);
-        if (!frameNm) continue;
+        const uid = String(user?.id ?? user?.uid ?? '').trim();
+        if (!uid) continue;
 
-        result.push({
-          uid: String(user?.id ?? user?.uid ?? ''),
+        this.trafficContactsByUid[uid] = {
+          uid,
           aircraftName: String(user?.aircraftName ?? '').trim(),
           callsign: String(user?.callsign ?? user?.cs ?? '').trim(),
           lat: Number(co[0]) || 0,
           lon: Number(co[1]) || 0,
           alt: Number(co[2]) || 0,
-          altFeet: Number.isFinite(Number(co[2])) ? Math.round(Number(co[2]) * 3.28084) : null,
           speedKts: Number.isFinite(Number(user?.lastUpdate?.st?.as)) ? Math.round(Number(user.lastUpdate.st.as)) : null,
           headingDeg: this.normalizeHeadingDeg(co[3]),
           trackDeg: this.normalizeHeadingDeg(co[3]),
+          lastSeenMs: nowMs
+        };
+      }
+
+      const result = [];
+
+      for (const uid of Object.keys(this.trafficContactsByUid)) {
+        const cached = this.trafficContactsByUid[uid];
+        if (!cached) continue;
+
+        const ageMs = nowMs - Number(cached.lastSeenMs || 0);
+        if (!Number.isFinite(ageMs) || ageMs > MapModule.TRAFFIC_STALE_TIMEOUT_MS) {
+          delete this.trafficContactsByUid[uid];
+          if (String(this.selectedTrafficUid ?? '') === String(uid)) {
+            this.selectedTrafficUid = null;
+            this.trafficSelectionCleared = true;
+          }
+          continue;
+        }
+
+        const relNm = this.toRelativeNm(ownship, Number(cached.lat), Number(cached.lon));
+        const frameNm = this.toHeadingFrame(relNm, ownship.heading);
+        if (!frameNm) continue;
+
+        result.push({
+          uid: cached.uid,
+          aircraftName: cached.aircraftName,
+          callsign: cached.callsign,
+          lat: cached.lat,
+          lon: cached.lon,
+          alt: cached.alt,
+          altFeet: Number.isFinite(Number(cached.alt)) ? Math.round(Number(cached.alt) * 3.28084) : null,
+          speedKts: cached.speedKts,
+          headingDeg: cached.headingDeg,
+          trackDeg: cached.trackDeg,
           ...frameNm
         });
       }
@@ -2147,6 +2312,15 @@
     // Builds a deterministic traffic key.
     getTrafficKey(contact) {
       return String(contact?.uid || contact?.callsign || `${contact?.lat ?? ''}:${contact?.lon ?? ''}`).trim().toUpperCase();
+    }
+
+    // Normalizes one mark/show token.
+    normalizeMarkToken(value, fallback = '') {
+      const token = String(value ?? '').trim().toUpperCase();
+      if (!token) return fallback;
+      if (MapModule.MARK_STATES.includes(token)) return token;
+      if (MapModule.SHOW_STATES.includes(token)) return token;
+      return fallback;
     }
 
     // Returns a deterministic contact number for one aircraft.
@@ -2186,10 +2360,117 @@
       return this.selectedTrafficUid;
     }
 
+    // Returns mark state for a contact uid.
+    getTrafficMark(uid) {
+      const key = String(uid ?? '').trim();
+      if (!key) return '';
+      return this.normalizeMarkToken(this.trafficMarksByUid[key], '');
+    }
+
+    // Sets mark state for one contact uid.
+    setTrafficMark(uid, markState) {
+      const key = String(uid ?? '').trim();
+      if (!key) return '';
+      const normalized = this.normalizeMarkToken(markState, '');
+      if (!normalized) {
+        delete this.trafficMarksByUid[key];
+        return '';
+      }
+      this.trafficMarksByUid[key] = normalized;
+      return normalized;
+    }
+
+    // Cycles mark state for currently selected traffic target.
+    cycleSelectedTrafficMark() {
+      const scene = this.getSceneData();
+      const contacts = this.getTrafficInRange(this.getFilteredTraffic(scene?.traffic ?? []), scene?.rangeNm);
+      const uid = this.getSelectedTrafficUid(contacts);
+      if (!uid) return '';
+
+      const current = this.getTrafficMark(uid);
+      const states = MapModule.MARK_STATES;
+      const idx = Math.max(0, states.indexOf(current));
+      const next = states[(idx + 1) % states.length] ?? '';
+      return this.setTrafficMark(uid, next);
+    }
+
+    // Returns selected traffic mark state.
+    getSelectedTrafficMark() {
+      const scene = this.getSceneData();
+      const contacts = this.getTrafficInRange(this.getFilteredTraffic(scene?.traffic ?? []), scene?.rangeNm);
+      const uid = this.getSelectedTrafficUid(contacts);
+      if (!uid) return '';
+      return this.getTrafficMark(uid);
+    }
+
+    // Gets color for one traffic contact based on mark state.
+    getTrafficColor(contact) {
+      const mark = this.getTrafficMark(contact?.uid);
+      if (mark === 'FRIEND') return '#3da2ff';
+      if (mark === 'CIVILIAN') return '#33ff66';
+      if (mark === 'UNKNOWN') return '#ffff33';
+      if (mark === 'FOO') return '#ff3333';
+      return '#ffffff';
+    }
+
+    // Gets currently active traffic show filter.
+    getShowFilter() {
+      return this.normalizeMarkToken(this.showFilter, 'ALL') || 'ALL';
+    }
+
+    // Sets traffic show filter.
+    setShowFilter(value) {
+      this.showFilter = this.normalizeMarkToken(value, 'ALL') || 'ALL';
+      return this.showFilter;
+    }
+
+    // Cycles traffic show filter.
+    cycleShowFilter() {
+      const states = MapModule.SHOW_STATES;
+      const current = this.getShowFilter();
+      const idx = Math.max(0, states.indexOf(current));
+      const next = states[(idx + 1) % states.length] ?? 'ALL';
+      return this.setShowFilter(next);
+    }
+
+    // Returns true when one traffic contact matches current show filter.
+    // Optionally keeps currently selected traffic visible independent of filter.
+    matchesShowFilter(contact, includeSelected = true) {
+      const uid = String(contact?.uid ?? '').trim();
+      if (includeSelected && uid && uid === String(this.selectedTrafficUid ?? '').trim()) {
+        return true;
+      }
+
+      const filter = this.getShowFilter();
+      if (filter === 'ALL') return true;
+      if (filter === 'UNM') return this.getTrafficMark(uid) === '';
+      return this.getTrafficMark(uid) === filter;
+    }
+
+    // Returns traffic contacts filtered by show mode.
+    // By default the current selection remains visible while selected.
+    getFilteredTraffic(contacts = [], includeSelected = true) {
+      const list = Array.isArray(contacts) ? contacts : [];
+      return list.filter((contact) => this.matchesShowFilter(contact, includeSelected));
+    }
+
+    // Returns only traffic contacts inside the active NAV range.
+    getTrafficInRange(contacts = [], rangeNm = this.getRangeNm()) {
+      const list = Array.isArray(contacts) ? contacts : [];
+      const maxRange = Math.max(0.1, Number(rangeNm) || 0);
+      return list.filter((contact) => {
+        const forward = Number(contact?.forwardNm);
+        const right = Number(contact?.rightNm);
+        if (!Number.isFinite(forward) || !Number.isFinite(right)) return false;
+        return Math.hypot(forward, right) <= maxRange;
+      });
+    }
+
     // Steps selected traffic target by direction (+1 next, -1 previous).
     stepSelectedTraffic(step = 1) {
       const direction = Number(step) >= 0 ? 1 : -1;
-      const contacts = this.getSceneData()?.traffic ?? [];
+      const scene = this.getSceneData();
+      const contacts = this.getTrafficInRange(this.getFilteredTraffic(scene?.traffic ?? []), scene?.rangeNm);
       if (!contacts.length) {
         this.selectedTrafficUid = null;
         this.trafficSelectionCleared = false;
@@ -2245,7 +2526,11 @@
     }
 
     // Returns aggregated MAP/HSI scene data for rendering.
-    getSceneData() {
+    // Traffic collection can be disabled to avoid multiplayer checks.
+    getSceneData(options = {}) {
+      const includeTraffic = options?.includeTraffic != null
+        ? Boolean(options.includeTraffic)
+        : this.isRadarEnabled();
       const ownship = this.getOwnshipState();
       if (!ownship) {
         return {
@@ -2259,7 +2544,7 @@
       return {
         ownship,
         rangeNm: this.getRangeNm(),
-        traffic: this.getTrafficContacts(ownship),
+        traffic: includeTraffic ? this.getTrafficContacts(ownship) : [],
         waypoints: this.getFlightPlanWaypoints(ownship)
       };
     }
@@ -3210,15 +3495,48 @@
           title: 'NAV',
           leftButtons: [
             { key: 'DISPLAY', label: 'DISP', states: ['HSI', 'MAP'], stateIndex: 0 },
-            { key: 'DECLUTTER', label: 'DCL', states: ['OFF', 'L1', 'L2'], stateIndex: 0 }
+            { key: 'DECLUTTER', label: 'DCL', states: ['OFF', 'L1', 'L2'], stateIndex: 0 },
+            {
+              key: 'MARK',
+              label: 'MRK',
+              states: ['', 'FRND', 'CIV', 'UNKN', 'FOO'],
+              values: ['', 'FRIEND', 'CIVILIAN', 'UNKNOWN', 'FOO'],
+              stateIndex: 0,
+              managedExternally: true,
+              onClick: () => {
+                getMapModule().cycleSelectedTrafficMark();
+              }
+            },
+            {
+              key: 'SHOW',
+              label: 'SHOW',
+              states: ['', 'FRND', 'CIV', 'UNKN', 'FOO'],
+              values: ['', 'FRIEND', 'CIVILIAN', 'UNKNOWN', 'FOO'],
+              stateIndex: 0,
+              managedExternally: true,
+              onClick: () => {
+                getMapModule().cycleShowFilter();
+              }
+            },
+            {
+              key: 'VIEW',
+              label: 'VW',
+              states: ['A/C F/W', 'A/C CNT', 'A/C N', 'TGT', 'TGT N'],
+              stateIndex: 0,
+              managedExternally: true,
+              show: () => String(getOption('NAV', 'DISPLAY', 'HSI') ?? 'HSI').toUpperCase() === 'MAP',
+              onClick: () => {
+                getMapModule().cycleViewMode();
+              }
+            }
           ],
           rightButtons: [
             {
               key: 'RANGE',
               label: '↑',
-              states: ['5', '10', '20', '40', '80', '160'],
-              values: [5, 10, 20, 40, 80, 160],
-              stateIndex: 3,
+              states: ['1', '2.5', '5', '10', '20', '40', '80', '160'],
+              values: [1, 2.5, 5, 10, 20, 40, 80, 160],
+              stateIndex: 5,
               managedExternally: true,
               minimal: true,
               combinedGroupLabel: 'RNG',
@@ -3229,9 +3547,9 @@
             {
               key: 'RANGE',
               label: '↓',
-              states: ['5', '10', '20', '40', '80', '160'],
-              values: [5, 10, 20, 40, 80, 160],
-              stateIndex: 3,
+              states: ['1', '2.5', '5', '10', '20', '40', '80', '160'],
+              values: [1, 2.5, 5, 10, 20, 40, 80, 160],
+              stateIndex: 5,
               managedExternally: true,
               minimal: true,
               combinedGroupLabel: 'RNG',
@@ -3303,11 +3621,14 @@
 
             const mode = String(getOptionValue('NAV', 'DISPLAY', 'HSI') ?? 'HSI').toUpperCase();
             const declutterLevel = getOptionValue('NAV', 'DECLUTTER', 'OFF');
+            const radarEnabled = String(getOptionValue('RDR', 'RADAR', 'OFF') ?? 'OFF').toUpperCase() === 'ON';
 
             ctx.save();
             ctx.setTransform(1, 0, 0, 1, 0, 0);
-            ctx.fillStyle = '#000000';
-            ctx.fillRect(contentX, contentY, contentW, contentH);
+            if (mode !== 'MAP') {
+              ctx.fillStyle = '#000000';
+              ctx.fillRect(contentX, contentY, contentW, contentH);
+            }
 
             if (!engOn) {
               ctx.fillStyle = color;
@@ -3332,32 +3653,38 @@
             const mapModule = getMapModule();
             const scene = mapModule.getSceneData();
             const rangeNm = Math.max(1, Number(scene?.rangeNm) || 40);
-            const shouldShowTraffic = declutterLevel !== 'L2';
+            const shouldShowTraffic = radarEnabled && declutterLevel !== 'L2';
             if (!shouldShowTraffic) {
               mapModule.clearSelectedTraffic();
             }
-            const selectedTrafficUid = shouldShowTraffic ? mapModule.getSelectedTrafficUid(scene?.traffic ?? []) : null;
-            const selectedTraffic = (scene?.traffic ?? []).find((c) => String(c?.uid ?? '') === String(selectedTrafficUid ?? '')) ?? null;
+            const visibleTraffic = shouldShowTraffic ? mapModule.getFilteredTraffic(scene?.traffic ?? []) : [];
+            const selectedTrafficUid = shouldShowTraffic ? mapModule.getSelectedTrafficUid(visibleTraffic) : null;
+            const selectedTraffic = visibleTraffic.find((c) => String(c?.uid ?? '') === String(selectedTrafficUid ?? '')) ?? null;
             const waypointColor = '#3da2ff';
             const navObjectTextPx = Math.round(h * 0.032);
 
-            const drawOwnshipSymbol = (x, y, size = 1) => {
+            const drawOwnshipSymbol = (x, y, size = 1, headingRelDeg = 0) => {
               ctx.strokeStyle = '#ffffff';
               ctx.lineWidth = 2;
               const fuselageHalf = h * 0.032 * size;
-              const wingY = y - h * 0.010 * size;
+              const wingY = -h * 0.010 * size;
               const wingHalf = h * 0.028 * size;
-              const tailY = y + h * 0.024 * size;
+              const tailY = h * 0.024 * size;
               const tailHalf = h * 0.014 * size;
+              const angleRad = (Number(headingRelDeg) || 0) * Math.PI / 180;
 
+              ctx.save();
+              ctx.translate(x, y);
+              ctx.rotate(angleRad);
               ctx.beginPath();
-              ctx.moveTo(x, y - fuselageHalf);
-              ctx.lineTo(x, y + fuselageHalf);
-              ctx.moveTo(x - wingHalf, wingY);
-              ctx.lineTo(x + wingHalf, wingY);
-              ctx.moveTo(x - tailHalf, tailY);
-              ctx.lineTo(x + tailHalf, tailY);
+              ctx.moveTo(0, -fuselageHalf);
+              ctx.lineTo(0, fuselageHalf);
+              ctx.moveTo(-wingHalf, wingY);
+              ctx.lineTo(wingHalf, wingY);
+              ctx.moveTo(-tailHalf, tailY);
+              ctx.lineTo(tailHalf, tailY);
               ctx.stroke();
+              ctx.restore();
             };
 
             const drawWaypointDiamond = (x, y, selected = false) => {
@@ -3373,14 +3700,31 @@
               ctx.stroke();
             };
 
-            const drawTrafficContact = (x, y, contact) => {
+            const drawTrafficContact = (x, y, contact, upHeadingDeg = Number(scene?.ownship?.heading) || 0) => {
               const isSelected = String(contact?.uid ?? '') === String(selectedTrafficUid ?? '');
-              const trafficColor = isSelected ? '#ff3333' : '#ffffff';
+              const trafficColor = mapModule.getTrafficColor(contact);
 
               if (declutterLevel === 'L1') {
                 ctx.fillStyle = trafficColor;
                 const boxSize = Math.max(8, Math.round(h * 0.018));
                 ctx.fillRect(x - boxSize * 0.5, y - boxSize * 0.5, boxSize, boxSize);
+
+                if (isSelected) {
+                  const pad = 2;
+                  const left = x - boxSize * 0.5 - pad;
+                  const right = x + boxSize * 0.5 + pad;
+                  const top = y - boxSize * 0.5 - pad;
+                  const bottom = y + boxSize * 0.5 + pad;
+                  const arm = Math.max(5, h * 0.012);
+                  ctx.strokeStyle = '#ff3333';
+                  ctx.lineWidth = 2;
+                  ctx.beginPath();
+                  ctx.moveTo(left, top + arm); ctx.lineTo(left, top); ctx.lineTo(left + arm, top);
+                  ctx.moveTo(right - arm, top); ctx.lineTo(right, top); ctx.lineTo(right, top + arm);
+                  ctx.moveTo(left, bottom - arm); ctx.lineTo(left, bottom); ctx.lineTo(left + arm, bottom);
+                  ctx.moveTo(right - arm, bottom); ctx.lineTo(right, bottom); ctx.lineTo(right, bottom - arm);
+                  ctx.stroke();
+                }
                 return;
               }
 
@@ -3409,10 +3753,9 @@
               ctx.lineTo(x + roofHalfW, roofY + legLen);
               ctx.stroke();
 
-              const ownHeading = Number(scene?.ownship?.heading) || 0;
               const track = Number(contact?.trackDeg);
               const relTrackRad = Number.isFinite(track)
-                ? ((track - ownHeading) * Math.PI / 180)
+                ? ((track - upHeadingDeg) * Math.PI / 180)
                 : 0;
               const dirX = Math.sin(relTrackRad);
               const dirY = -Math.cos(relTrackRad);
@@ -3424,6 +3767,23 @@
               ctx.moveTo(x + dirX * lineStart, y + dirY * lineStart);
               ctx.lineTo(x + dirX * (lineStart + lineLen), y + dirY * (lineStart + lineLen));
               ctx.stroke();
+
+              if (isSelected) {
+                const pad = 2;
+                const left = x - roofHalfW - pad;
+                const right = x + roofHalfW + pad;
+                const top = roofY - pad;
+                const bottom = y + numberHalfH + pad;
+                const arm = Math.max(5, h * 0.012);
+                ctx.strokeStyle = '#ff3333';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(left, top + arm); ctx.lineTo(left, top); ctx.lineTo(left + arm, top);
+                ctx.moveTo(right - arm, top); ctx.lineTo(right, top); ctx.lineTo(right, top + arm);
+                ctx.moveTo(left, bottom - arm); ctx.lineTo(left, bottom); ctx.lineTo(left + arm, bottom);
+                ctx.moveTo(right - arm, bottom); ctx.lineTo(right, bottom); ctx.lineTo(right, bottom - arm);
+                ctx.stroke();
+              }
             };
 
             const drawSelectedTrafficInfo = (anchorX, anchorY) => {
@@ -3440,7 +3800,7 @@
               const selectedNumber = mapModule.getContactNumber(selectedTraffic);
 
               ctx.fillStyle = infoColor;
-              ctx.font = `bold ${Math.round(h * 0.034)}px monospace`;
+              ctx.font = `bold ${Math.round(h * 0.040)}px monospace`;
               ctx.textAlign = 'center';
               ctx.textBaseline = 'middle';
               ctx.fillText(`TGT ${selectedNumber}`, anchorX, y);
@@ -3452,6 +3812,15 @@
               ctx.fillText(`ALT ${altitude}`, anchorX, y);
               y += lineStep;
               ctx.fillText(`HDG ${headingSel}`, anchorX, y);
+            };
+
+            const drawRadarOffInfo = (anchorX, anchorY) => {
+              if (radarEnabled || String(declutterLevel).toUpperCase() !== 'OFF') return;
+              ctx.fillStyle = '#ffff33';
+              ctx.font = `bold ${Math.round(h * 0.040)}px monospace`;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText('Radar OFF', anchorX, anchorY);
             };
 
             if (mode === 'HSI') {
@@ -3623,7 +3992,7 @@
               }
 
               if (shouldShowTraffic) {
-                for (const ac of (scene?.traffic ?? [])) {
+                for (const ac of visibleTraffic) {
                   const p = projectHsi(ac);
                   if (!p) continue;
                   drawTrafficContact(p.x, p.y, ac);
@@ -3739,7 +4108,9 @@
               }
 
               drawOwnshipSymbol(cx, cy, 1);
-              if (shouldShowTraffic) {
+              if (!radarEnabled) {
+                drawRadarOffInfo(cx, cy + h * 0.080);
+              } else if (shouldShowTraffic) {
                 drawSelectedTrafficInfo(cx, cy + h * 0.080);
               }
             } else {
@@ -3759,17 +4130,85 @@
               const mapBottom = bottomStripTop - h * 0.004;
               const mapW = mapRight - mapLeft;
               const mapH = mapBottom - mapTop;
-              const ownX = mapLeft + mapW * 0.5;
-              const ownY = mapTop + mapH * (2 / 3);
-              const pxPerNm = Math.max(0.0001, (ownY - mapTop) / rangeNm);
+              const mapViewFrame = mapModule.getMapViewFrame(scene, selectedTraffic);
+              const anchorRatio = mapViewFrame?.anchor === 'center' ? 0.5 : (2 / 3);
+              const anchorX = mapLeft + mapW * 0.5;
+              const anchorY = mapTop + mapH * anchorRatio;
+              const pxPerNm = Math.max(0.0001, (anchorY - mapTop) / rangeNm);
+              const mapUpHeadingDeg = Number(mapViewFrame?.upHeadingDeg) || 0;
 
-              const projectMap = (point) => {
-                const right = Number(point?.rightNm);
-                const forward = Number(point?.forwardNm);
+              const drawNorthArrow = () => {
+                const arrowMargin = w * 0.185;
+                const pivotX = mapRight - arrowMargin;
+                const pivotY = arrowMargin;
+                const shaftHalfLen = Math.max(h * 0.080, 32);
+                const headLen = Math.max(h * 0.028, 12);
+                const headHalfW = Math.max(w * 0.020, 8);
+                const northRelRad = (0 - mapUpHeadingDeg) * Math.PI / 180;
+                const dirX = Math.sin(northRelRad);
+                const dirY = -Math.cos(northRelRad);
+                const leftX = -dirY;
+                const leftY = dirX;
+                const textBgR = Math.max(h * 0.018, 9);
+                const shaftGap = textBgR + 2;
+
+                const tipX = pivotX + dirX * shaftHalfLen;
+                const tipY = pivotY + dirY * shaftHalfLen;
+                const tailX = pivotX - dirX * shaftHalfLen;
+                const tailY = pivotY - dirY * shaftHalfLen;
+                const baseX = tipX - dirX * headLen;
+                const baseY = tipY - dirY * headLen;
+                const nearTipGapX = pivotX + dirX * shaftGap;
+                const nearTipGapY = pivotY + dirY * shaftGap;
+                const nearTailGapX = pivotX - dirX * shaftGap;
+                const nearTailGapY = pivotY - dirY * shaftGap;
+
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(nearTipGapX, nearTipGapY);
+                ctx.lineTo(tipX, tipY);
+                ctx.moveTo(tailX, tailY);
+                ctx.lineTo(nearTailGapX, nearTailGapY);
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.moveTo(tipX, tipY);
+                ctx.lineTo(baseX + leftX * headHalfW, baseY + leftY * headHalfW);
+                ctx.lineTo(baseX - leftX * headHalfW, baseY - leftY * headHalfW);
+                ctx.closePath();
+                ctx.fillStyle = color;
+                ctx.fill();
+
+                const textX = pivotX;
+                const textY = pivotY;
+
+                ctx.fillStyle = '#000000';
+                ctx.beginPath();
+                ctx.arc(textX, textY, textBgR, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.arc(textX, textY, textBgR, 0, Math.PI * 2);
+                ctx.stroke();
+
+                ctx.fillStyle = color;
+                ctx.font = `bold ${Math.round(h * 0.032)}px monospace`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('N', textX, textY);
+              };
+
+              const projectMap = (point, latKey = 'lat', lonKey = 'lon') => {
+                const projected = mapModule.projectToMapViewFrame(mapViewFrame, point?.[latKey], point?.[lonKey]);
+                const right = Number(projected?.rightNm);
+                const forward = Number(projected?.forwardNm);
                 if (!Number.isFinite(right) || !Number.isFinite(forward)) return null;
                 return {
-                  x: ownX + right * pxPerNm,
-                  y: ownY - forward * pxPerNm
+                  x: anchorX + right * pxPerNm,
+                  y: anchorY - forward * pxPerNm
                 };
               };
 
@@ -3780,7 +4219,7 @@
 
               const waypointPoints = [];
               for (const wp of (scene?.waypoints ?? [])) {
-                const p = projectMap(wp);
+                const p = projectMap(wp, 'lat', 'lon');
                 if (!p) continue;
                 waypointPoints.push({ ...p, wp });
               }
@@ -3814,17 +4253,26 @@
               }
 
               if (shouldShowTraffic) {
-                for (const ac of (scene?.traffic ?? [])) {
-                  const p = projectMap(ac);
+                for (const ac of visibleTraffic) {
+                  const p = projectMap(ac, 'lat', 'lon');
                   if (!p) continue;
-                  drawTrafficContact(p.x, p.y, ac);
+                  drawTrafficContact(p.x, p.y, ac, mapUpHeadingDeg);
                 }
               }
 
-              drawOwnshipSymbol(ownX, ownY, 1);
-              if (shouldShowTraffic) {
-                drawSelectedTrafficInfo(ownX, ownY + h * 0.080);
+              const ownshipPoint = projectMap(scene?.ownship, 'lat', 'lon');
+              if (ownshipPoint) {
+                const ownshipHeading = Number(scene?.ownship?.heading) || 0;
+                const ownshipRelHeading = ownshipHeading - mapUpHeadingDeg;
+                drawOwnshipSymbol(ownshipPoint.x, ownshipPoint.y, 1, ownshipRelHeading);
               }
+              if (!radarEnabled) {
+                drawRadarOffInfo(anchorX, anchorY + h * 0.080);
+              } else if (shouldShowTraffic) {
+                drawSelectedTrafficInfo(anchorX, anchorY + h * 0.080);
+              }
+
+              drawNorthArrow();
               ctx.restore();
             }
 
@@ -3834,6 +4282,23 @@
         {
           title: 'RDR',
           leftButtons: [
+            {
+              key: 'RADAR',
+              label: 'RDR',
+              states: ['OFF', 'ON'],
+              stateIndex: 0,
+              onClick: ({ nextState }) => {
+                if (String(nextState ?? '').toUpperCase() !== 'ON') return;
+                addonRuntime.navRdrRuntime = addonRuntime.navRdrRuntime || { bootStartMs: 0 };
+                addonRuntime.navRdrRuntime.bootStartMs = Date.now();
+              }
+            },
+            {
+              key: 'FOO',
+              label: 'FOO',
+              states: ['SHOW', 'HIDE'],
+              stateIndex: 0
+            }
           ],
           rightButtons: [
             { key: 'RNG', label: 'RNG', states: ['20', '40', '80'], values: [20, 40, 80], stateIndex: 1 }
@@ -3856,7 +4321,7 @@
             }
 
             const elapsedMs = engOn ? (Date.now() - addonRuntime.navRdrRuntime.bootStartMs) : 0;
-            const bootReady = engOn && elapsedMs >= 4000;
+            const bootReady = engOn && elapsedMs >= 5000;
 
             const contentX = w * 0.19;
             const contentY = h * 0.13;
@@ -3865,10 +4330,7 @@
 
             const rangeNmRaw = Number(getOptionValue('RDR', 'RNG', 40));
             const rangeNm = Number.isFinite(rangeNmRaw) && rangeNmRaw > 0 ? rangeNmRaw : 40;
-
-            const myPos = window.geofs?.aircraft?.instance?.llaLocation;
-            const myHeading = Number(window.geofs?.animation?.values?.heading) || 0;
-            const visibleUsers = Object.values(window.multiplayer?.visibleUsers ?? {});
+            const radarEnabled = String(getOptionValue('RDR', 'RADAR', 'OFF') ?? 'OFF').toUpperCase() === 'ON';
 
             const distanceMeters = (a, b) => {
               const distanceFn = window.geofs?.utils?.distanceInMeters;
@@ -3921,6 +4383,21 @@
               ctx.restore();
               return;
             }
+
+            if (!radarEnabled) {
+              ctx.fillStyle = '#ffff33';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.font = `bold ${Math.round(h * 0.075)}px monospace`;
+              ctx.fillText('Radar OFF', contentX + contentW * 0.5, contentY + contentH * 0.5);
+              ctx.restore();
+              return;
+            }
+
+            const myPos = window.geofs?.aircraft?.instance?.llaLocation;
+            const myHeading = Number(window.geofs?.animation?.values?.heading) || 0;
+            const navModule = getNavModule();
+            const visibleUsers = navModule.filterMultiplayerContacts(Object.values(window.multiplayer?.visibleUsers ?? {}));
 
             const radarTop = contentY;
             const radarBottom = contentY + contentH;
@@ -4407,6 +4884,26 @@
         const mode = getWpnModeFromOptions();
         const modeLoadout = getWpnModeLoadout(mode);
         return getSelectedWpnLoadDisplay(mode, modeLoadout);
+      }
+
+      if (page?.title === 'NAV') {
+        const abbreviateNavTrafficState = (value) => {
+          const token = String(value ?? '').trim().toUpperCase();
+          if (token === 'FRIEND') return 'FRND';
+          if (token === 'CIVILIAN') return 'CIV';
+          if (token === 'UNKNOWN') return 'UNKN';
+          return token;
+        };
+
+        if (button?.key === 'MARK') {
+          return abbreviateNavTrafficState(getMapModule().getSelectedTrafficMark() || '');
+        }
+        if (button?.key === 'SHOW') {
+          return abbreviateNavTrafficState(getMapModule().getShowFilter());
+        }
+        if (button?.key === 'VIEW') {
+          return getMapModule().getViewMode();
+        }
       }
 
       const sideToken = side === 'right' ? 'R' : 'L';
@@ -5785,10 +6282,44 @@
   }
 
   class CameraModule {
-    static DEFAULT_HUD_CAMERA_Z = 0.925;
+    static DEFAULT_HUD_CAMERA_Z = 0.95;
     static CAMERA_STEP_Z = 0.005;
     static CAMERA_UP_BUTTON_ID = 'f18-hud-camera-up';
     static CAMERA_DOWN_BUTTON_ID = 'f18-hud-camera-down';
+    static CAMERA_VIEW_BUTTON_ID = 'f18-cockpit-view-cycle';
+
+    static COCKPIT_VIEW_PRESETS = [
+      {
+        name: 'DEFAULT',
+        position: [0, 5.5, 0.95],
+        orientation: [0, -15, 0],
+        FOV: 1.7
+      },
+      {
+        name: 'MFD',
+        position: [0, 5.7, 0.78],
+        orientation: [0.7, -34.48, 0],
+        FOV: 1.7
+      },
+      {
+        name: 'THR/JOY',
+        position: [-0.17, 5.4, 0.3],
+        orientation: [0, -8, 0],
+        FOV: 1.7
+      },
+      {
+        name: 'SEAT-SIDE',
+        position: [0.38, 5, 0.8],
+        orientation: [-20, -13, 0],
+        FOV: 2
+      },
+      {
+        name: 'LOOK-BACK',
+        position: [0.9, 4.86, 0.6],
+        orientation: [-211, -2.3, 0],
+        FOV: 2
+      }
+    ];
 
     static CAMERA_MODE_DEFINITIONS = {
       6: {
@@ -5916,27 +6447,6 @@
         },
         position: [-6, 0, 0.1],
         view: 'Wing cam'
-      },
-      12: {
-        distance: 0,
-        FOV: 1.7,
-        insideView: true,
-        mode: 12,
-        name: 'Throttle cam',
-        offsetBounds: [-0.4, 0.4, 0, 0.1, -0.3, 0.3],
-        offsets: {
-          current: [0, 0, 0],
-          last: [0, 0, 0],
-          neutral: [0, 0, 0]
-        },
-        orientation: [0, -8, 0],
-        orientations: {
-          current: [0, -8, 0],
-          last: [0, -8, 0],
-          neutral: [0, -8, 0]
-        },
-        position: [-0.17, 5.4, 0.3],
-        view: 'Throttle cam'
       }
     };
 
@@ -5945,6 +6455,9 @@
       this.installed = false;
       this.originalModesByIndex = new Map();
       this.boundModesRef = null;
+      this.cockpitViewIndex = 0;
+      this.cockpitViewControlsWrapperId = 'f18-cockpit-view-controls';
+      this.cockpitViewApplied = false;
     }
 
     createCameraPadButton(label, id, onClick) {
@@ -6011,8 +6524,76 @@
       });
     }
 
+    installCockpitViewControls() {
+      if (document.getElementById(this.cockpitViewControlsWrapperId)) return true;
+      if (!this.helperModule) return false;
+
+      const wrapper = document.createElement('div');
+      wrapper.id = this.cockpitViewControlsWrapperId;
+      wrapper.style.display = 'flex';
+      wrapper.style.flexDirection = 'column';
+      wrapper.style.gap = '0px';
+      wrapper.style.alignItems = 'flex-start';
+
+      const viewButton = this.helperModule?.createPadButton({
+        label: 'VIEW',
+        id: CameraModule.CAMERA_VIEW_BUTTON_ID,
+        onClick: () => {
+          this.nextCockpitView();
+        },
+        outerStyle: {
+          borderRadius: '15px'
+        },
+        innerStyle: {
+          fontWeight: '700'
+        }
+      });
+
+      if (!viewButton) return false;
+      wrapper.appendChild(viewButton);
+
+      return this.helperModule.installPadControl({
+        id: wrapper.id,
+        element: wrapper,
+        prepend: true
+      });
+    }
+
     removeCameraControls() {
       this.helperModule?.removePadControl('f18-hud-camera-controls');
+    }
+
+    removeCockpitViewControls() {
+      this.helperModule?.removePadControl(this.cockpitViewControlsWrapperId);
+    }
+
+    applyCockpitViewByIndex(index = 0) {
+      const mode = window.geofs?.camera?.modes?.[1];
+      if (!mode) return false;
+
+      const views = CameraModule.COCKPIT_VIEW_PRESETS;
+      const safeIndex = clampValue(Math.floor(Number(index) || 0), 0, views.length - 1);
+      const preset = views[safeIndex];
+      if (!preset) return false;
+
+      mode.position = Array.isArray(preset.position) ? [...preset.position] : [0, 5.5, CameraModule.DEFAULT_HUD_CAMERA_Z];
+      mode.offsets = mode.offsets && typeof mode.offsets === 'object' ? mode.offsets : {};
+      mode.offsets.current = [0, 0, 0];
+      mode.orientations = mode.orientations && typeof mode.orientations === 'object' ? mode.orientations : {};
+      mode.orientations.current = Array.isArray(preset.orientation) ? [...preset.orientation] : [0, -15, 0];
+      mode.orientation = Array.isArray(preset.orientation) ? [...preset.orientation] : [0, -15, 0];
+      mode.FOV = Number.isFinite(Number(preset.FOV)) ? Number(preset.FOV) : 1.7;
+
+      this.cockpitViewIndex = safeIndex;
+      return true;
+    }
+
+    nextCockpitView() {
+      const views = CameraModule.COCKPIT_VIEW_PRESETS;
+      const next = (this.cockpitViewIndex + 1) % views.length;
+      const ok = this.applyCockpitViewByIndex(next);
+      if (ok) this.cockpitViewApplied = true;
+      return ok;
     }
 
     isAircraftCameraReady() {
@@ -6034,6 +6615,7 @@
     ensureLoaded() {
       if (!isF18Active()) {
         this.removeCameraControls();
+        this.removeCockpitViewControls();
         return false;
       }
 
@@ -6041,7 +6623,15 @@
       if (!modes) return false;
       if (!this.isAircraftCameraReady()) return false;
 
-      if (!this.installCameraControls()) return false;
+      const isCockpitView = window.geofs?.camera?.currentModeName === 'cockpit';
+      if (isCockpitView) {
+        if (!this.installCameraControls()) return false;
+        if (!this.installCockpitViewControls()) return false;
+      } else {
+        this.removeCameraControls();
+        this.removeCockpitViewControls();
+        this.cockpitViewApplied = false;
+      }
 
       const modesRefChanged = this.boundModesRef && this.boundModesRef !== modes;
       const customModesPresent = this.hasCustomModes(modes);
@@ -6071,11 +6661,17 @@
 
       this.installed = true;
       this.boundModesRef = modes;
+
+      if (isCockpitView && (!this.cockpitViewApplied || modesRefChanged || !customModesPresent)) {
+        this.applyCockpitViewByIndex(this.cockpitViewIndex);
+        this.cockpitViewApplied = true;
+      }
       return true;
     }
 
     restore() {
       this.removeCameraControls();
+      this.removeCockpitViewControls();
 
       if (!this.installed && this.originalModesByIndex.size === 0) return;
 
@@ -6093,6 +6689,7 @@
       this.originalModesByIndex.clear();
       this.installed = false;
       this.boundModesRef = null;
+      this.cockpitViewApplied = false;
     }
   }
 
@@ -6903,26 +7500,18 @@
 
   class MfdModule {
     static DEFAULTS = {
-      MFD_TOP_BUTTON_COUNT: 5,
-      MFD_BOTTOM_BUTTON_COUNT: 5,
-      MFD_LEFT_BUTTON_COUNT: 5,
-      MFD_RIGHT_BUTTON_COUNT: 5,
-      MFD_TOP_BUTTON_START_X: -0.048,
-      MFD_TOP_BUTTON_STEP_X: 0.023,
-      MFD_TOP_BUTTON_Y: -0.01,
-      MFD_TOP_BUTTON_Z: 0.092,
-      MFD_BOTTOM_BUTTON_START_X: -0.048,
-      MFD_BOTTOM_BUTTON_STEP_X: 0.023,
-      MFD_BOTTOM_BUTTON_Y: -0.01,
-      MFD_BOTTOM_BUTTON_Z: -0.08,
+      MFD_BASE_SCALE: [0.29, 0.29, 0.285],
+      MFD_BUTTON_BASE_SCALE: [0.047, 0.047, 0.047],
+      MFD_BUTTON_COUNT: 5,
+      MFD_BUTTON_START_X: -0.048,
+      MFD_BUTTON_STEP_X: 0.023,
+      MFD_BUTTON_Y: -0.01,
+      MFD_BUTTON_Z_OFFSET: 0.083,
       MFD_LEFT_BUTTON_X: -0.085,
-      MFD_LEFT_BUTTON_Y: -0.01,
-      MFD_LEFT_BUTTON_START_Z: 0.05,
-      MFD_LEFT_BUTTON_STEP_Z: 0.023,
       MFD_RIGHT_BUTTON_X: 0.0835,
-      MFD_RIGHT_BUTTON_Y: -0.01,
-      MFD_RIGHT_BUTTON_START_Z: 0.05,
-      MFD_RIGHT_BUTTON_STEP_Z: 0.023,
+      MFD_SIDE_BUTTON_Y: -0.01,
+      MFD_SIDE_BUTTON_START_Z: 0.05,
+      MFD_SIDE_BUTTON_STEP_Z: 0.023,
       MFD_TOP_BUTTON_VISUAL_SCALE: 2 / 3,
       MFD_CLICK_HALF_WIDTH: 0.36,
       MFD_CLICK_HALF_HEIGHT: 0.36,
@@ -6985,6 +7574,51 @@
       if (side === 'bottom') return this.getBottomButtonPartName(index);
       if (side === 'left') return this.getLeftButtonPartName(index);
       return this.getRightButtonPartName(index);
+    }
+
+    getMfdScaleRatios() {
+      const scale = Array.isArray(this.cfg?.scale) ? this.cfg.scale : [];
+      const base = Array.isArray(this.cfg?.MFD_BASE_SCALE) ? this.cfg.MFD_BASE_SCALE : [0.29, 0.29, 0.285];
+
+      const toRatio = (value, baseValue) => {
+        const numerator = Number(value);
+        const denominator = Number(baseValue);
+        if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) {
+          return 1;
+        }
+        const ratio = numerator / denominator;
+        if (!Number.isFinite(ratio) || ratio <= 0) return 1;
+        return ratio;
+      };
+
+      return [
+        toRatio(scale[0], base[0]),
+        toRatio(scale[1], base[1]),
+        toRatio(scale[2], base[2])
+      ];
+    }
+
+    scaleButtonLocalPosition(basePosition) {
+      const source = Array.isArray(basePosition) ? basePosition : [0, 0, 0];
+      const [sx, sy, sz] = this.getMfdScaleRatios();
+      return [
+        (Number(source[0]) || 0) * sx,
+        (Number(source[1]) || 0) * sy,
+        (Number(source[2]) || 0) * sz
+      ];
+    }
+
+    getScaledButtonPartScale() {
+      const [sx, sy, sz] = this.getMfdScaleRatios();
+      const base = Array.isArray(this.cfg?.MFD_BUTTON_BASE_SCALE)
+        ? this.cfg.MFD_BUTTON_BASE_SCALE
+        : [0.047, 0.047, 0.047];
+
+      return [
+        (Number(base[0]) || 0.047) * sx,
+        (Number(base[1]) || 0.047) * sy,
+        (Number(base[2]) || 0.047) * sz
+      ];
     }
 
     ensureUiState() {
@@ -7163,13 +7797,7 @@
       if (!this.ensureButtonRendererFunction()) return false;
       if (!aircraft.parts?.[this.names.MFD_PART_NAME]) return false;
 
-      const count = side === 'top'
-        ? this.cfg.MFD_TOP_BUTTON_COUNT
-        : side === 'bottom'
-          ? this.cfg.MFD_BOTTOM_BUTTON_COUNT
-        : side === 'left'
-          ? this.cfg.MFD_LEFT_BUTTON_COUNT
-          : this.cfg.MFD_RIGHT_BUTTON_COUNT;
+      const count = this.cfg.MFD_BUTTON_COUNT;
 
       const partsToAdd = [];
       for (let i = 0; i < count; i++) {
@@ -7177,36 +7805,38 @@
         if (aircraft.parts?.[partName]) continue;
         if (!this.ensureButtonIncludeDefinition(partName)) return false;
 
-        const position = side === 'top'
+        const basePosition = side === 'top'
           ? [
-              this.cfg.MFD_TOP_BUTTON_START_X + i * this.cfg.MFD_TOP_BUTTON_STEP_X,
-              this.cfg.MFD_TOP_BUTTON_Y,
-              this.cfg.MFD_TOP_BUTTON_Z
+              this.cfg.MFD_BUTTON_START_X + i * this.cfg.MFD_BUTTON_STEP_X,
+              this.cfg.MFD_BUTTON_Y,
+              Math.abs(this.cfg.MFD_BUTTON_Z_OFFSET)
             ]
           : side === 'bottom'
             ? [
-                this.cfg.MFD_BOTTOM_BUTTON_START_X + i * this.cfg.MFD_BOTTOM_BUTTON_STEP_X,
-                this.cfg.MFD_BOTTOM_BUTTON_Y,
-                this.cfg.MFD_BOTTOM_BUTTON_Z
+                this.cfg.MFD_BUTTON_START_X + i * this.cfg.MFD_BUTTON_STEP_X,
+                this.cfg.MFD_BUTTON_Y,
+                -Math.abs(this.cfg.MFD_BUTTON_Z_OFFSET)
               ]
-          : side === 'left'
-            ? [
-                this.cfg.MFD_LEFT_BUTTON_X,
-                this.cfg.MFD_LEFT_BUTTON_Y,
-                this.cfg.MFD_LEFT_BUTTON_START_Z - i * this.cfg.MFD_LEFT_BUTTON_STEP_Z
-              ]
-            : [
-                this.cfg.MFD_RIGHT_BUTTON_X,
-                this.cfg.MFD_RIGHT_BUTTON_Y,
-                this.cfg.MFD_RIGHT_BUTTON_START_Z - i * this.cfg.MFD_RIGHT_BUTTON_STEP_Z
-              ];
+            : side === 'left'
+              ? [
+                  this.cfg.MFD_LEFT_BUTTON_X,
+                  this.cfg.MFD_SIDE_BUTTON_Y,
+                  this.cfg.MFD_SIDE_BUTTON_START_Z - i * this.cfg.MFD_SIDE_BUTTON_STEP_Z
+                ]
+              : [
+                  this.cfg.MFD_RIGHT_BUTTON_X,
+                  this.cfg.MFD_SIDE_BUTTON_Y,
+                  this.cfg.MFD_SIDE_BUTTON_START_Z - i * this.cfg.MFD_SIDE_BUTTON_STEP_Z
+                ];
+
+        const position = this.scaleButtonLocalPosition(basePosition);
 
         partsToAdd.push({
           name: partName,
           include: this.getButtonIncludeKey(partName),
           parent: this.names.MFD_PART_NAME,
           position,
-          scale: [0.047, 0.047, 0.047],
+          scale: this.getScaledButtonPartScale(),
           shadows: 'SHADOWS_NONE'
         });
       }
@@ -7308,16 +7938,16 @@
     }
 
     removeInstalledParts() {
-      for (let i = 0; i < this.cfg.MFD_TOP_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         this.removePartByName(this.getTopButtonPartName(i));
       }
-      for (let i = 0; i < this.cfg.MFD_BOTTOM_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         this.removePartByName(this.getBottomButtonPartName(i));
       }
-      for (let i = 0; i < this.cfg.MFD_LEFT_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         this.removePartByName(this.getLeftButtonPartName(i));
       }
-      for (let i = 0; i < this.cfg.MFD_RIGHT_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         this.removePartByName(this.getRightButtonPartName(i));
       }
       this.removePartByName(this.names.MFD_PART_NAME);
@@ -7329,16 +7959,16 @@
       if (!handlers) return false;
 
       if (handlers[this.names.MFD_PART_NAME] !== this.onNodeClickBound) return false;
-      for (let i = 0; i < this.cfg.MFD_TOP_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         if (handlers[this.getTopButtonPartName(i)] !== this.onNodeClickBound) return false;
       }
-      for (let i = 0; i < this.cfg.MFD_BOTTOM_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         if (handlers[this.getBottomButtonPartName(i)] !== this.onNodeClickBound) return false;
       }
-      for (let i = 0; i < this.cfg.MFD_LEFT_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         if (handlers[this.getLeftButtonPartName(i)] !== this.onNodeClickBound) return false;
       }
-      for (let i = 0; i < this.cfg.MFD_RIGHT_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         if (handlers[this.getRightButtonPartName(i)] !== this.onNodeClickBound) return false;
       }
       return true;
@@ -7361,16 +7991,16 @@
       if (!controlsApi?.addNodeClickHandler || this.nodeClickHandlerInstalled) return false;
 
       controlsApi.addNodeClickHandler(this.names.MFD_PART_NAME, this.onNodeClickBound);
-      for (let i = 0; i < this.cfg.MFD_TOP_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         controlsApi.addNodeClickHandler(this.getTopButtonPartName(i), this.onNodeClickBound);
       }
-      for (let i = 0; i < this.cfg.MFD_BOTTOM_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         controlsApi.addNodeClickHandler(this.getBottomButtonPartName(i), this.onNodeClickBound);
       }
-      for (let i = 0; i < this.cfg.MFD_LEFT_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         controlsApi.addNodeClickHandler(this.getLeftButtonPartName(i), this.onNodeClickBound);
       }
-      for (let i = 0; i < this.cfg.MFD_RIGHT_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         controlsApi.addNodeClickHandler(this.getRightButtonPartName(i), this.onNodeClickBound);
       }
       this.nodeClickHandlerInstalled = true;
@@ -7382,16 +8012,16 @@
       if (!this.nodeClickHandlerInstalled || !controlsApi?.nodeClickHandlers) return;
 
       delete controlsApi.nodeClickHandlers[this.names.MFD_PART_NAME];
-      for (let i = 0; i < this.cfg.MFD_TOP_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         delete controlsApi.nodeClickHandlers[this.getTopButtonPartName(i)];
       }
-      for (let i = 0; i < this.cfg.MFD_BOTTOM_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         delete controlsApi.nodeClickHandlers[this.getBottomButtonPartName(i)];
       }
-      for (let i = 0; i < this.cfg.MFD_LEFT_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         delete controlsApi.nodeClickHandlers[this.getLeftButtonPartName(i)];
       }
-      for (let i = 0; i < this.cfg.MFD_RIGHT_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         delete controlsApi.nodeClickHandlers[this.getRightButtonPartName(i)];
       }
       this.nodeClickHandlerInstalled = false;
@@ -7509,13 +8139,7 @@
         [halfW, 0, -halfH]
       ];
 
-      const count = side === 'top'
-        ? this.cfg.MFD_TOP_BUTTON_COUNT
-        : side === 'bottom'
-          ? this.cfg.MFD_BOTTOM_BUTTON_COUNT
-        : side === 'left'
-          ? this.cfg.MFD_LEFT_BUTTON_COUNT
-          : this.cfg.MFD_RIGHT_BUTTON_COUNT;
+      const count = this.cfg.MFD_BUTTON_COUNT;
 
       for (let i = 0; i < count; i++) {
         const partName = this.getButtonPartName(side, i);
@@ -7537,16 +8161,16 @@
 
     isOwnedNode(nodeName) {
       if (nodeName === this.names.MFD_PART_NAME) return true;
-      for (let i = 0; i < this.cfg.MFD_TOP_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         if (nodeName === this.getTopButtonPartName(i)) return true;
       }
-      for (let i = 0; i < this.cfg.MFD_BOTTOM_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         if (nodeName === this.getBottomButtonPartName(i)) return true;
       }
-      for (let i = 0; i < this.cfg.MFD_LEFT_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         if (nodeName === this.getLeftButtonPartName(i)) return true;
       }
-      for (let i = 0; i < this.cfg.MFD_RIGHT_BUTTON_COUNT; i++) {
+      for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
         if (nodeName === this.getRightButtonPartName(i)) return true;
       }
       return false;
@@ -7565,7 +8189,7 @@
       }
 
       const topButtonIndex = (() => {
-        for (let i = 0; i < this.cfg.MFD_TOP_BUTTON_COUNT; i++) {
+        for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
           if (nodeName === this.getTopButtonPartName(i)) return i;
         }
         return -1;
@@ -7578,7 +8202,7 @@
       }
 
       const bottomButtonIndex = (() => {
-        for (let i = 0; i < this.cfg.MFD_BOTTOM_BUTTON_COUNT; i++) {
+        for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
           if (nodeName === this.getBottomButtonPartName(i)) return i;
         }
         return -1;
@@ -7586,12 +8210,12 @@
 
       if (bottomButtonIndex >= 0) {
         const uiState = this.getUiState();
-        uiState?.setPage?.(this.cfg.MFD_TOP_BUTTON_COUNT + bottomButtonIndex);
+        uiState?.setPage?.(this.cfg.MFD_BUTTON_COUNT + bottomButtonIndex);
         return true;
       }
 
       const leftButtonIndex = (() => {
-        for (let i = 0; i < this.cfg.MFD_LEFT_BUTTON_COUNT; i++) {
+        for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
           if (nodeName === this.getLeftButtonPartName(i)) return i;
         }
         return -1;
@@ -7604,7 +8228,7 @@
       }
 
       const rightButtonIndex = (() => {
-        for (let i = 0; i < this.cfg.MFD_RIGHT_BUTTON_COUNT; i++) {
+        for (let i = 0; i < this.cfg.MFD_BUTTON_COUNT; i++) {
           if (nodeName === this.getRightButtonPartName(i)) return i;
         }
         return -1;
@@ -7643,7 +8267,7 @@
 
       const pickedBottomButtonIndex = this.getButtonIndexFromScreenCoords('bottom', click.x, click.y);
       if (pickedBottomButtonIndex >= 0) {
-        uiState?.setPage?.(this.cfg.MFD_TOP_BUTTON_COUNT + pickedBottomButtonIndex);
+        uiState?.setPage?.(this.cfg.MFD_BUTTON_COUNT + pickedBottomButtonIndex);
         return true;
       }
 
@@ -7673,6 +8297,90 @@
   function getMfdSlotState(slotName) {
     const slot = normalizeOptionToken(slotName || 'LEFT') || 'LEFT';
     return addonRuntime.mfdUiStates?.[slot] ?? null;
+  }
+
+  // Resolves an active MFD module by slot name.
+  function getMfdModuleBySlot(slotName) {
+    const slot = normalizeOptionToken(slotName || 'LEFT') || 'LEFT';
+    return addonRuntime.mainPlugin?.mfdModules?.find((mfdModule) => mfdModule?.slotName === slot) ?? null;
+  }
+
+  function parseVec3(value, fallback = [0, 0, 0]) {
+    if (!Array.isArray(value) || value.length < 3) return null;
+    const out = [0, 0, 0];
+    for (let i = 0; i < 3; i++) {
+      const numeric = Number(value[i]);
+      if (!Number.isFinite(numeric)) {
+        const fallbackNumeric = Number(fallback?.[i]);
+        out[i] = Number.isFinite(fallbackNumeric) ? fallbackNumeric : 0;
+      } else {
+        out[i] = numeric;
+      }
+    }
+    return out;
+  }
+
+  // Returns the current configured transform of an MFD display slot.
+  function getMfdDisplayTransform(slotName) {
+    const mfdModule = getMfdModuleBySlot(slotName);
+    if (!mfdModule) return null;
+
+    const position = parseVec3(mfdModule.cfg?.position, [0, 0, 0]) ?? [0, 0, 0];
+    const rotation = parseVec3(mfdModule.cfg?.rotation, [0, 0, 0]) ?? [0, 0, 0];
+    const scale = parseVec3(mfdModule.cfg?.scale, [1, 1, 1]) ?? [1, 1, 1];
+
+    return {
+      slotName: mfdModule.slotName,
+      partName: mfdModule.partName,
+      position,
+      rotation,
+      scale
+    };
+  }
+
+  // Updates one or more transform vectors for an MFD slot and reapplies live parts.
+  function updateMfdDisplayTransform(slotName, transform = {}) {
+    const mfdModule = getMfdModuleBySlot(slotName);
+    if (!mfdModule) return { ok: false, reason: 'MFD_SLOT_NOT_FOUND' };
+
+    const payload = (transform && typeof transform === 'object') ? transform : {};
+    const hasPosition = Object.prototype.hasOwnProperty.call(payload, 'position');
+    const hasRotation = Object.prototype.hasOwnProperty.call(payload, 'rotation');
+    const hasScale = Object.prototype.hasOwnProperty.call(payload, 'scale');
+
+    if (!hasPosition && !hasRotation && !hasScale) {
+      return { ok: false, reason: 'NO_TRANSFORM_FIELDS' };
+    }
+
+    if (hasPosition) {
+      const parsed = parseVec3(payload.position, mfdModule.cfg?.position ?? [0, 0, 0]);
+      if (!parsed) return { ok: false, reason: 'INVALID_POSITION' };
+      mfdModule.cfg.position = parsed;
+    }
+
+    if (hasRotation) {
+      const parsed = parseVec3(payload.rotation, mfdModule.cfg?.rotation ?? [0, 0, 0]);
+      if (!parsed) return { ok: false, reason: 'INVALID_ROTATION' };
+      mfdModule.cfg.rotation = parsed;
+    }
+
+    if (hasScale) {
+      const parsed = parseVec3(payload.scale, mfdModule.cfg?.scale ?? [1, 1, 1]);
+      if (!parsed) return { ok: false, reason: 'INVALID_SCALE' };
+      mfdModule.cfg.scale = parsed;
+    }
+
+    const wasInstalled = Boolean(addonRuntime.mfdRuntimeRefs?.[mfdModule.slotName]);
+    if (wasInstalled) {
+      mfdModule.removeNodeClickHandler();
+      addonRuntime.mfdRuntimeRefs[mfdModule.slotName]?.remove?.();
+      mfdModule.ensureLoaded();
+    }
+
+    return {
+      ok: true,
+      ...getMfdDisplayTransform(mfdModule.slotName)
+    };
   }
 
   // Ensures MFD UI state objects exist before external MFD page operations.
@@ -7787,6 +8495,13 @@
         getRangeNm: () => getMapModule().getRangeNm(),
         setRangeNm: (rangeNm) => getMapModule().setRangeNm(rangeNm),
         stepRange: (step) => getMapModule().stepRange(step),
+        clearSelectedTraffic: () => getMapModule().clearSelectedTraffic(),
+        stepSelectedTraffic: (step) => getMapModule().stepSelectedTraffic(step),
+        getSelectedTrafficMark: () => getMapModule().getSelectedTrafficMark(),
+        cycleSelectedTrafficMark: () => getMapModule().cycleSelectedTrafficMark(),
+        getShowFilter: () => getMapModule().getShowFilter(),
+        setShowFilter: (value) => getMapModule().setShowFilter(value),
+        cycleShowFilter: () => getMapModule().cycleShowFilter(),
         getSceneData: () => getMapModule().getSceneData()
       },
       communication: {
@@ -7862,6 +8577,8 @@
             partName: mfdModule?.partName ?? null
           };
         },
+        getDisplayTransform: (slotName) => getMfdDisplayTransform(slotName),
+        updateDisplayTransform: (slotName, transform = {}) => updateMfdDisplayTransform(slotName, transform),
         getDisplayState: (slotName) => getMfdSlotState(slotName),
         setPage: (slotName, pageIndex) => {
           const uiState = getMfdSlotState(slotName);

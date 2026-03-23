@@ -63,12 +63,45 @@ window.F18Addon
 - `getNavaidLabel()`
 - `getAutopilotHeading()`
 
+`window.F18Addon.nav.getModule()` also exposes shared traffic filter helpers used by NAV and RDR:
+- `getFooVisibilityMode()` // reads `RDR.FOO` (`SHOW`/`HIDE`)
+- `shouldHideFooContacts()`
+- `isFooCallsign(callsign)`
+- `isTrafficContactVisible(callsign)`
+- `filterMultiplayerContacts(users)`
+
 #### `window.F18Addon.map`
 - `getModule()`
 - `getRangeNm()`
 - `setRangeNm(rangeNm)`
 - `stepRange(step)`
+- `clearSelectedTraffic()`
+- `stepSelectedTraffic(step)`
+- `getSelectedTrafficMark()`
+- `cycleSelectedTrafficMark()`
+- `getShowFilter()`
+- `setShowFilter(value)`
+- `cycleShowFilter()`
 - `getSceneData()`
+
+`window.F18Addon.map.getModule()` additionally provides advanced helpers:
+- `isRadarEnabled()`
+- `getViewMode()` / `setViewMode(mode)` / `cycleViewMode()`
+- `getTrafficInRange(contacts, rangeNm)`
+
+> Note: traffic in NAV MAP/HSI is driven by `RDR.RADAR`. When `RDR.RADAR` is `OFF`, no multiplayer traffic is fetched or rendered on NAV and RDR pages.
+>
+> The RDR page also has `RDR.FOO` (`SHOW`/`HIDE`).
+> - `SHOW`: callsign `Foo` is included.
+> - `HIDE`: callsign `Foo` is filtered out from both NAV and RDR traffic rendering.
+>
+> This callsign filtering logic is centralized in `NavModule` and reused by both pages.
+>
+> NAV target stepping (`ACSEL`) is range-aware: it only cycles contacts inside the current `NAV.RANGE`.
+>
+> Multiplayer contacts are retained for up to 10 seconds after they disappear from `visibleUsers`. After that they are removed from NAV/RDR rendering and auto-deselected if selected.
+>
+> Traffic marks (`MARK`) are kept in memory during the flight, so if a contact reappears later it keeps its previous mark state.
 
 #### `window.F18Addon.communication`
 - `getModule()`
@@ -82,6 +115,8 @@ window.F18Addon
 - `setWingman(value)`
 - `getVoiceLanguage()`
 - `setVoiceLanguage(language)`
+- `getVoiceRate()`
+- `setVoiceRate(rate)`
 - `getMessages(mode?, limit?)` // mode: `ALL`, `GROUP`, `FLIGHT`, `WINGMAN`, `NONE`
 - `getHudMessage()`
 
@@ -119,6 +154,8 @@ window.F18Addon
 - `addPage(pageDefinition, insertIndex?)`
 - `setPageDefinition(target, pageDefinition)`
 - `addDisplay(config?)`
+- `getDisplayTransform(slotName?)`
+- `updateDisplayTransform(slotName?, transform)`
 - `getDisplayState(slotName)`
 - `setPage(slotName, pageIndex)`
 - `nextPage(slotName)`
@@ -245,6 +282,9 @@ Known keys used by the addon:
 - `COMM.FLIGHT`
 - `COMM.WINGMAN`
 - `COMM.VOICE_LANG`
+- `RDR.RADAR`
+- `RDR.RNG`
+- `RDR.FOO`
 
 ### Weapon state storage
 Weapon runtime state is stored separately in `F18WpnState`.
@@ -304,6 +344,51 @@ const extra = addon.mfd.addDisplay({
 });
 
 console.log('Added MFD slot:', extra.slotName, 'part:', extra.partName);
+```
+
+### Example: read MFD position/rotation/scale
+
+```js
+const addon = window.F18Addon;
+if (!addon) throw new Error('F18Addon not ready');
+
+const rightTransform = addon.mfd.getDisplayTransform('RIGHT');
+console.log(rightTransform);
+// {
+//   slotName: 'RIGHT',
+//   partName: 'mfdPartRIGHT',
+//   position: [0.2167, 6.158, 0.584],
+//   rotation: [8, 0, 0],
+//   scale: [0.29, 0.29, 0.285]
+// }
+```
+
+### Example: update MFD position/rotation/scale
+
+```js
+const addon = window.F18Addon;
+if (!addon) throw new Error('F18Addon not ready');
+
+const result = addon.mfd.updateDisplayTransform('CENTER', {
+  position: [0.0, 6.02, 0.40],
+  rotation: [23, 0, 0],
+  scale: [0.30, 0.30, 0.30]
+});
+
+if (!result.ok) {
+  console.warn('MFD transform update failed:', result.reason);
+} else {
+  console.log('Updated transform:', result);
+}
+```
+
+`updateDisplayTransform(slotName?, transform)` supports partial updates as well. For example:
+
+```js
+// Only update scale of LEFT MFD.
+addon.mfd.updateDisplayTransform('LEFT', {
+  scale: [0.28, 0.28, 0.28]
+});
 ```
 
 ### Example: add a custom MFD page

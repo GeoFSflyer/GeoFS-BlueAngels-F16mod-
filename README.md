@@ -1,7 +1,7 @@
 ![GeoFS Blue Angels](Images/BA.png)
 
 # GeoFS Blue Angels
-Welcome to the main GeoFS Blue Angels hub. This space provides everything we need to operate. Note that we're not affiliated in any way with the real Blue Angels.
+Welcome to the main GeoFS Blue Angels hub. This space provides everything for this group to operate. Note that we're not affiliated in any way with the real Blue Angels.
 
 ## Joining us
 We welcome pilots who are able to fly in close formation. 
@@ -37,6 +37,13 @@ If you don't have rights for this, create an Issue or Pull Request with the requ
 These scripts are used by the GeoFS Blue Angels to improve their flying. Install the browser extension Tampermonkey to manage these scripts easily.
 
 Developer documentation for the scripts [can be found here](Scripts/README.md).
+
+## F-18 Add-on
+This script improves the F-18 in many ways. It add's a totally reworked F-18 HUD with a FPV and AoA bracket, adds MFD's with a radar, HSI, Communication and weapon displays, extra views in and outside the cockpit, the option to change your seat height and more.
+
+Installation: [add this script](https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/geo-fs-f18-mod.js) to Tampermonkey, or execute it in Developer Console.
+
+![F-18 add-on](Images/scripts/f-18-addon.png)
 
 ## Flight recorder
 This addon allows you to record your flight and play it back while recording a new flight. This way you can record formation flights and practise formation flying.
