@@ -4775,29 +4775,238 @@
           }
         },
         {
-          title: 'ABT',
-          leftButtons: [],
-          rightButtons: [],
-          lines: [],
-          render: (renderer, renderContext) => {
-            const ctx = renderContext?.ctx ?? renderer?.canvasAPI?.context;
-            const w = renderContext?.w ?? renderer?.canvasAPI?.canvas?.width ?? 512;
-            const h = renderContext?.h ?? renderer?.canvasAPI?.canvas?.height ?? 512;
-            const color = renderContext?.color ?? '#00ff66';
-            if (!ctx) return;
+  title: 'TGP',
 
-            ctx.save();
-            ctx.setTransform(1, 0, 0, 1, 0, 0);
-            ctx.fillStyle = color;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.font = `bold ${Math.round(h * 0.06)}px monospace`;
-            ctx.fillText('AUX PAGE 5', w * 0.5, h * 0.5);
-            ctx.restore();
-          }
+  leftButtons: [
+    { key: 'MODES', label: 'MODE', states: ['DAY', 'NITE', 'WHT'], stateIndex: 0 },
+    { key: 'RANGE', label: 'FOV',  states: ['NAR', 'WIDE'],       stateIndex: 0 },
+    { key: 'LOCK',  label: 'LOCK', states: ['FREE', 'TRK'],        stateIndex: 0 },
+  ],
+
+
+  _snap: null,
+  _tick: 0,
+  _camYaw: 0,
+  _camPitch: -15,
+  _locked: false,
+  _targetWorldH: 0,
+  _targetWorldP: 0,
+  _lockedCallsign: 'N/A',
+  _lockedDist: 0,
+
+  _updateLock: function () {
+    if (!this._locked) return;
+
+    let tLat = null, tLon = null, tAlt = 0, cs = 'UNKNOWN';
+
+    try {
+      const map = typeof getMapModule === 'function' ? getMapModule() : null;
+      if (map) {
+        const nav = map.getSceneData?.() ?? null;
+        const traffic = map.getFilteredTraffic?.(nav?.traffic ?? [], true) ?? [];
+        const uid = map.getSelectedTrafficUid?.(traffic) ?? null;
+        const target = traffic.find((c) => String(c?.uid ?? '') === String(uid ?? '')) ?? null;
+
+        if (target) {
+          tLat = Number(target.lat);
+          tLon = Number(target.lon);
+          tAlt = Number(target.alt) || 0;
+          cs = target.callsign ?? target.cs ?? 'TRACK';
         }
+      }
+    } catch (e) {}
+
+    const own = window.geofs?.aircraft?.instance?.llaLocation;
+    if (tLat === null || tLon === null || !own) return;
+
+
+    const dLat = tLat - own[0];
+    const dLon = tLon - own[1];
+    const latRad = own[0] * Math.PI / 180;
+    
+    const dN = dLat * 111319.9;
+    const dE = dLon * 111319.9 * Math.cos(latRad);
+    const dU = tAlt - own[2];
+    const distH = Math.hypot(dN, dE);
+
+    this._targetWorldH = (Math.atan2(dE, dN) * 180 / Math.PI + 360) % 360;
+    this._targetWorldP = Math.atan2(dU, distH) * 180 / Math.PI;
+
+    this._lockedCallsign = cs;
+    this._lockedDist = Math.round(Math.hypot(distH, dU) / 1852 * 10) / 10;
+  },
+
+  render: function (renderer, renderContext) {
+    const ctx = renderContext?.ctx ?? renderer?.canvasAPI?.context;
+    const w = renderContext?.w ?? 512;
+    const h = renderContext?.h ?? 512;
+    if (!ctx) return;
+
+    if (!this._snap) this._snap = document.createElement('canvas');
+
+    const page = renderContext?.page;
+    const leftBtns = page?.leftButtons;
+    const mode = leftBtns?.find(b => b.key === 'MODES')?.states[leftBtns?.find(b => b.key === 'MODES')?.stateIndex] ?? 'DAY';
+    const fovState = leftBtns?.find(b => b.key === 'RANGE')?.states[leftBtns?.find(b => b.key === 'RANGE')?.stateIndex] ?? 'WIDE';
+    
+    this._locked = (leftBtns?.find(b => b.key === 'LOCK')?.states[leftBtns?.find(b => b.key === 'LOCK')?.stateIndex] === 'TRK');
+
+    this._updateLock();
+
+    this._tick++;
+    if (this._tick % 4 === 0) {
+      const viewer = window.geofs?.api?.viewer;
+      const mode1 = window.geofs?.camera?.modes?.[1];
+
+      if (viewer?.scene && mode1) {
+        const oPos = [...mode1.position], oOri = [...mode1.orientation], oFov = mode1.FOV;
+        let oCurr = mode1.orientations ? [...mode1.orientations.current] : [...oOri];
+        let oLast = mode1.orientations ? [...mode1.orientations.last] : [...oOri];
+
+        const animVals = window.geofs?.animation?.values ?? {};
+        const acHeading = Number(animVals.heading360 ?? animVals.heading ?? 0);
+        const acPitch   = Number(animVals.atilt ?? 0); // positive = nose up, no sign flip
+        const normDeg   = (a) => ((a % 360) + 540) % 360 - 180;
+
+        let finalH, finalP;
+        if (this._locked) {
+          finalH = normDeg(this._targetWorldH - acHeading);
+          finalP = normDeg(this._targetWorldP + acPitch);
+        } else {
+          // _camYaw / _camPitch are already body-relative offsets (0 = forward, -15 = slightly down)
+          finalH = this._camYaw;
+          finalP = this._camPitch;
+        }
+
+        mode1.position = [oPos[0], oPos[1], -1];
+        mode1.orientation = [finalH, finalP, 0]; 
+        mode1.FOV = 0.6;
+
+        if (mode1.orientations) {
+          mode1.orientations.current = [finalH, finalP, 0];
+          mode1.orientations.last = [finalH, finalP, 0];
+        }
+
+        if (window.geofs.camera.currentModeName === 'cockpit') window.geofs.camera.update(0);
+        viewer.scene.render(viewer.clock.currentTime);
+
+        const vc = viewer.canvas;
+        if (this._snap.width !== vc.width) { this._snap.width = vc.width; this._snap.height = vc.height; }
+        this._snap.getContext('2d', { alpha: false }).drawImage(vc, 0, 0);
+
+        mode1.position = oPos;
+        mode1.orientation = oOri;
+        mode1.FOV = oFov;
+        if (mode1.orientations) {
+          mode1.orientations.current = oCurr;
+          mode1.orientations.last = oLast;
+        }
+        if (window.geofs.camera.currentModeName === 'cockpit') window.geofs.camera.update(0);
+      }
+    }
+
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+    if (this._snap?.width > 0) {
+      const zoom = fovState === 'NAR' ? 10.0 : 2.5; 
+      const sw = this._snap.width, sh = this._snap.height;
+      const cw = sw / zoom, ch = sh / zoom;
+      ctx.drawImage(this._snap, (sw - cw) / 2, (sh - ch) / 2, cw, ch, 0, 0, w, h);
+
+      if (mode !== 'DAY') {
+        const id = ctx.getImageData(0, 0, w, h), d = id.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const l = 0.3 * d[i] + 0.59 * d[i+1] + 0.11 * d[i+2];
+          if (mode === 'NITE') { d[i]=l*0.1; d[i+1]=l; d[i+2]=l*0.1; }
+          else { d[i]=l; d[i+1]=l; d[i+2]=l; }
+        }
+        ctx.putImageData(id, 0, 0);
+      }
+    }
+
+    ctx.strokeStyle = this._locked ? '#ff3300' : '#00ff44';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(w/2 - 20, h/2 - 20, 40, 40);
+    ctx.beginPath();
+    ctx.moveTo(w/2, h/2 - 40); ctx.lineTo(w/2, h/2 + 40);
+    ctx.moveTo(w/2 - 40, h/2); ctx.lineTo(w/2 + 40, h/2);
+    ctx.stroke();
+
+    ctx.fillStyle = '#00ff44';
+    ctx.font = 'bold 16px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(this._locked ? "LKD " + this._lockedCallsign : "SLEW", w/2, 30);
+    
+    if (this._locked) {
+      ctx.textAlign = 'left';
+      ctx.fillText(`DIST: ${this._lockedDist}NM`, 20, h - 30);
+    }
+    ctx.restore();
+  }
+}
       ];
     }
+
+    toCartesian(lla) {
+    const [lat, lon, alt] = lla;
+    return Cesium.Cartesian3.fromDegrees(lon, lat, alt);
+}
+
+directionVector(camPos, tgtPos) {
+    const v = Cesium.Cartesian3.subtract(tgtPos, camPos, new Cesium.Cartesian3());
+    return Cesium.Cartesian3.normalize(v, v);
+}
+
+globalHeadingPitch(dirVec) {
+    const hpr = Cesium.HeadingPitchRoll.fromCartesianDirection(dirVec);
+    return {
+        headingDeg: Cesium.Math.toDegrees(hpr.heading),
+        pitchDeg:   Cesium.Math.toDegrees(hpr.pitch)
+    };
+}
+
+aircraftOrientationDeg(aircraft) {
+    return {
+        yaw:   aircraft.heading360,  // geofs.animation.values.heading360
+        pitch: aircraft.pitch ?? 0,
+        roll:  aircraft.roll ?? 0
+    };
+}
+
+normalizeDeg(a) {
+    return ((a + 540) % 360) - 180;
+}
+
+relativeHPR(globalH, globalP, ac) {
+    return {
+    yawRel:   this.normalizeDeg(globalH - ac.yaw),
+    pitchRel: this.normalizeDeg(globalP - ac.pitch),
+        rollRel:  0
+    };
+}
+
+computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
+    // 1. Absolute 3D posities
+  const camPos = this.toCartesian(camLLA);
+  const tgtPos = this.toCartesian(tgtLLA);
+
+    // 2. Richting van camera naar target
+  const dir = this.directionVector(camPos, tgtPos);
+
+    // 3. Globale heading/pitch van die richting
+  const { headingDeg, pitchDeg } = this.globalHeadingPitch(dir);
+
+    // 4. Aircraft attitude ophalen
+  const acOri = this.aircraftOrientationDeg(aircraft);
+
+    // 5. Camera relativiseren
+    const { yawRel, pitchRel, rollRel } =
+    this.relativeHPR(headingDeg, pitchDeg, acOri);
+
+    return [yawRel, pitchRel, rollRel];
+}
+
 
     getCurrentPage() {
       return this.pages[this.pageIndex] ?? this.pages[0];
@@ -5150,6 +5359,22 @@
       ctx.textBaseline = 'middle';
       ctx.font = `bold ${Math.round(h * 0.045)}px monospace`;
 
+      if (typeof page.render === 'function') {
+        try {
+          page.render(renderer, {
+            ctx,
+            w,
+            h,
+            page,
+            layout,
+            uiState: this,
+            color
+          });
+        } catch (e) {
+          // Ignore page render callback errors to keep MFD responsive.
+        }
+      }
+
       for (const tab of layout.topTabs) {
         ctx.fillText(tab.title, tab.x + tab.w / 2, tab.y + tab.h / 2);
         if (tab.index === this.pageIndex) {
@@ -5371,22 +5596,6 @@
         page.lines.forEach((line, i) => {
           ctx.fillText(line, w * 0.5, h * (0.72 + i * 0.07));
         });
-      }
-
-      if (typeof page.render === 'function') {
-        try {
-          page.render(renderer, {
-            ctx,
-            w,
-            h,
-            page,
-            layout,
-            uiState: this,
-            color
-          });
-        } catch (e) {
-          // Ignore page render callback errors to keep MFD responsive.
-        }
       }
     }
   }
