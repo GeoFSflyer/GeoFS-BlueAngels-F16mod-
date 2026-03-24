@@ -4778,52 +4778,108 @@
   title: 'TGP',
 
   leftButtons: [
-    { key: 'MODES', label: 'MODE', states: ['DAY', 'NITE', 'WHT'], stateIndex: 0 },
-    { key: 'RANGE', label: 'FOV',  states: ['NAR', 'WIDE'],       stateIndex: 0 },
-    { key: 'LOCK',  label: 'LOCK', states: ['FREE', 'TRK'],        stateIndex: 0 },
+    { key: 'MODES', label: 'MODE', states: ['DAY', 'NIGHT', 'WHT'], stateIndex: 0 },
+    { key: 'RANGE', label: 'FOV',  states: ['NAR', 'WIDE'], stateIndex: 0 },
+    { key: 'LOCK',  label: 'LOCK', states: ['FREE', 'TRK', 'WPT'], stateIndex: 0 },
+  ],
+  rightButtons: [
+    {
+      key: 'SLEW_UP', label: '↑', states: [''], stateIndex: 0,
+      onClick: ({ page }) => {
+        if (page && page._lockMode === 'FREE') {
+          const step = Number(page._getSlewStep());
+          page._camPitch = Math.min(85, page._camPitch + step);
+        }
+      }
+    },
+    {
+      key: 'SLEW_DOWN', label: '↓', states: [''], stateIndex: 0,
+      onClick: ({ page }) => {
+        if (page && page._lockMode === 'FREE') {
+          const step = Number(page._getSlewStep());
+          page._camPitch = Math.max(-85, page._camPitch - step);
+        }
+      }
+    },
+    {
+      key: 'SLEW_LEFT', label: '←', states: [''], stateIndex: 0,
+      onClick: ({ page }) => {
+        if (page && page._lockMode === 'FREE') {
+          const step = Number(page._getSlewStep());
+          page._camYaw = ((page._camYaw - step) + 360) % 360;
+          if (page._camYaw > 180) page._camYaw -= 360;
+        }
+      }
+    },
+    {
+      key: 'SLEW_RIGHT', label: '→', states: [''], stateIndex: 0,
+      onClick: ({ page }) => {
+        if (page && page._lockMode === 'FREE') {
+          const step = Number(page._getSlewStep());
+          page._camYaw = ((page._camYaw + step) + 360) % 360;
+          if (page._camYaw > 180) page._camYaw -= 360;
+        }
+      }
+    },
+    {
+      key: 'SLEW_STEP', label: 'STEP', states: ['0.1', '0.25', '0.5', '1', '2.5', '5', '10'], stateIndex: 0,
+    },
   ],
 
+  _getSlewStep: function () {
+    const stored = typeof getOptionValue === 'function' ? getOptionValue('TGP', 'SLEW_STEP', '0.25') : '0.25';
+    return Number(stored) || 0.25;
+  },
 
   _snap: null,
   _tick: 0,
   _camYaw: 0,
   _camPitch: -15,
-  _locked: false,
+  _lockMode: 'FREE',
   _targetWorldH: 0,
   _targetWorldP: 0,
   _lockedCallsign: 'N/A',
   _lockedDist: 0,
 
   _updateLock: function () {
-    if (!this._locked) return;
+    if (this._lockMode === 'FREE') return;
 
     let tLat = null, tLon = null, tAlt = 0, cs = 'UNKNOWN';
 
     try {
-      const map = typeof getMapModule === 'function' ? getMapModule() : null;
-      if (map) {
-        const nav = map.getSceneData?.() ?? null;
-        const traffic = map.getFilteredTraffic?.(nav?.traffic ?? [], true) ?? [];
-        const uid = map.getSelectedTrafficUid?.(traffic) ?? null;
-        const target = traffic.find((c) => String(c?.uid ?? '') === String(uid ?? '')) ?? null;
-
-        if (target) {
-          tLat = Number(target.lat);
-          tLon = Number(target.lon);
-          tAlt = Number(target.alt) || 0;
-          cs = target.callsign ?? target.cs ?? 'TRACK';
+      if (this._lockMode === 'TRK') {
+        const map = typeof getMapModule === 'function' ? getMapModule() : null;
+        if (map) {
+          const nav = map.getSceneData?.() ?? null;
+          const traffic = map.getFilteredTraffic?.(nav?.traffic ?? [], true) ?? [];
+          const uid = map.getSelectedTrafficUid?.(traffic) ?? null;
+          const target = traffic.find((c) => String(c?.uid ?? '') === String(uid ?? '')) ?? null;
+          if (target) {
+            tLat = Number(target.lat);
+            tLon = Number(target.lon);
+            tAlt = Number(target.alt) || 0;
+            cs = target.callsign ?? target.cs ?? 'TRACK';
+          }
+        }
+      } else if (this._lockMode === 'WPT') {
+        const waypointArray = window.geofs?.flightPlan?.waypointArray;
+        const wp = Array.isArray(waypointArray) ? waypointArray.find((w) => w?.selected) : null;
+        if (wp) {
+          tLat = Number(wp.lat);
+          tLon = Number(wp.lon);
+          tAlt = Number(wp.alt) || 0;
+          cs = String(wp.ident ?? wp.name ?? wp.id ?? 'WPT');
         }
       }
     } catch (e) {}
 
     const own = window.geofs?.aircraft?.instance?.llaLocation;
-    if (tLat === null || tLon === null || !own) return;
-
+    if (tLat === null || tLon === null || !Number.isFinite(tLat) || !Number.isFinite(tLon) || !own) return;
 
     const dLat = tLat - own[0];
     const dLon = tLon - own[1];
     const latRad = own[0] * Math.PI / 180;
-    
+
     const dN = dLat * 111319.9;
     const dE = dLon * 111319.9 * Math.cos(latRad);
     const dU = tAlt - own[2];
@@ -4849,7 +4905,8 @@
     const mode = leftBtns?.find(b => b.key === 'MODES')?.states[leftBtns?.find(b => b.key === 'MODES')?.stateIndex] ?? 'DAY';
     const fovState = leftBtns?.find(b => b.key === 'RANGE')?.states[leftBtns?.find(b => b.key === 'RANGE')?.stateIndex] ?? 'WIDE';
     
-    this._locked = (leftBtns?.find(b => b.key === 'LOCK')?.states[leftBtns?.find(b => b.key === 'LOCK')?.stateIndex] === 'TRK');
+    const lockBtn = leftBtns?.find(b => b.key === 'LOCK');
+    this._lockMode = lockBtn?.states[lockBtn?.stateIndex] ?? 'FREE';
 
     this._updateLock();
 
@@ -4869,7 +4926,7 @@
         const normDeg   = (a) => ((a % 360) + 540) % 360 - 180;
 
         let finalH, finalP;
-        if (this._locked) {
+        if (this._lockMode === 'TRK' || this._lockMode === 'WPT') {
           finalH = normDeg(this._targetWorldH - acHeading);
           finalP = normDeg(this._targetWorldP + acPitch);
         } else {
@@ -4918,14 +4975,15 @@
         const id = ctx.getImageData(0, 0, w, h), d = id.data;
         for (let i = 0; i < d.length; i += 4) {
           const l = 0.3 * d[i] + 0.59 * d[i+1] + 0.11 * d[i+2];
-          if (mode === 'NITE') { d[i]=l*0.1; d[i+1]=l; d[i+2]=l*0.1; }
+          if (mode === 'NIGHT') { d[i]=l*0.1; d[i+1]=l; d[i+2]=l*0.1; }
           else { d[i]=l; d[i+1]=l; d[i+2]=l; }
         }
         ctx.putImageData(id, 0, 0);
       }
     }
 
-    ctx.strokeStyle = this._locked ? '#ff3300' : '#00ff44';
+    const isLocked = this._lockMode === 'TRK' || this._lockMode === 'WPT';
+    ctx.strokeStyle = isLocked ? '#ff3300' : '#00ff44';
     ctx.lineWidth = 2;
     ctx.strokeRect(w/2 - 20, h/2 - 20, 40, 40);
     ctx.beginPath();
@@ -4936,9 +4994,9 @@
     ctx.fillStyle = '#00ff44';
     ctx.font = 'bold 16px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(this._locked ? "LKD " + this._lockedCallsign : "SLEW", w/2, 30);
-    
-    if (this._locked) {
+    ctx.fillText(isLocked ? `${this._lockMode} ${this._lockedCallsign}` : 'SLEW', w/2, 30);
+
+    if (isLocked) {
       ctx.textAlign = 'left';
       ctx.fillText(`DIST: ${this._lockedDist}NM`, 20, h - 30);
     }
