@@ -39,7 +39,7 @@ These scripts are used by the GeoFS Blue Angels to improve their flying. Install
 Developer documentation for the scripts [can be found here](Scripts/README.md).
 
 ## F-18 Add-on
-This script improves the F-18 in many ways. It add's a totally reworked F-18 HUD with a FPV and AoA bracket, adds MFD's with a radar, HSI, Communication and weapon displays, extra views in and outside the cockpit, the option to change your seat height and more.
+This script improves the F-18 in many ways. It add's a totally reworked F-18 HUD with a FPV and AoA bracket, adds MFD's with a radar, HSI, Communication and weapon displays, extra views in and outside the cockpit, the option to change your seat height and more. In the HUD page you can now switch HUD mode between `F-18` and `DEFAULT`.
 
 Installation: [add this script](https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/geo-fs-f18-mod.js) to Tampermonkey, or execute it in Developer Console.
 

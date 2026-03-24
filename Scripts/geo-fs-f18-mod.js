@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoFS F-18 Addon
 // @namespace    https://github.com/ArjanKw/GeoFS-BlueAngels/
-// @version      1.5.0
+// @version      1.6.0
 // @description  Improves the cockpit with a new HUD and custom MFDs, adjustable seat height and more.
 // @match        https://www.geo-fs.com/*
 // @match        https://geo-fs.com/*
@@ -12,7 +12,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.5.0';
+  const VERSION = '1.6.0';
   const F18_AIRCRAFT_ID = '27';
 
   const FLIGHT_RECORDER_MIN_VERSION = '1.2.0';
@@ -1320,19 +1320,47 @@
       .replace(/^_+|_+$/g, '');
   }
 
+  const optionKeyCache = Object.create(null);
+  let optionStoreCache = null;
+
+  function getCachedOptionKey(pageTitle, buttonKey) {
+    const pageToken = normalizeOptionToken(pageTitle);
+    const buttonToken = normalizeOptionToken(buttonKey);
+    const cacheId = `${pageToken}\u0000${buttonToken}`;
+    let optionKey = optionKeyCache[cacheId];
+    if (optionKey) return optionKey;
+
+    optionKey = `${pageToken}.${buttonToken}`;
+    optionKeyCache[cacheId] = optionKey;
+    return optionKey;
+  }
+
   function buildOptionKey(pageTitle, buttonKey) {
-    return `${normalizeOptionToken(pageTitle)}.${normalizeOptionToken(buttonKey)}`;
+    return getCachedOptionKey(pageTitle, buttonKey);
   }
 
   function readOptions() {
+    if (optionStoreCache && typeof optionStoreCache === 'object' && !Array.isArray(optionStoreCache)) {
+      return optionStoreCache;
+    }
+
     try {
       const raw = window.localStorage?.getItem?.(F18_OPTIONS_STORAGE_KEY);
-      if (!raw) return {};
+      if (!raw) {
+        optionStoreCache = {};
+        return optionStoreCache;
+      }
       const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-      return parsed;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        optionStoreCache = {};
+        return optionStoreCache;
+      }
+
+      optionStoreCache = parsed;
+      return optionStoreCache;
     } catch (e) {
-      return {};
+      optionStoreCache = {};
+      return optionStoreCache;
     }
   }
 
@@ -1343,8 +1371,10 @@
   }
 
   function writeOptions(options) {
+    const payload = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+    optionStoreCache = payload;
+
     try {
-      const payload = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
       window.localStorage?.setItem?.(F18_OPTIONS_STORAGE_KEY, JSON.stringify(payload));
       return true;
     } catch (e) {
@@ -1355,7 +1385,7 @@
   function setOption(pageTitle, buttonKey, value) {
     try {
       const options = readOptions();
-      const optionKey = buildOptionKey(pageTitle, buttonKey);
+      const optionKey = getCachedOptionKey(pageTitle, buttonKey);
       options[optionKey] = value;
       writeOptions(options);
     } catch (e) {
@@ -1402,7 +1432,7 @@
   }
 
   function getMfdBrightnessFactor() {
-    const brightMode = String(getOption('HUD', 'BRIGHT', 'NORM') ?? 'NORM').toUpperCase();
+    const brightMode = getOption('HUD', 'BRIGHT', 'NORM');
     if (brightMode === 'DAY') return 1.0;
     if (brightMode === 'NIGHT') return 0.3;
     return 0.6; // NORM
@@ -1881,6 +1911,18 @@
     });
     module.addChecklist({
       type: 'OPS',
+      title: 'Targeting Pod - A/G',
+      items: ['Flightplan OPEN', 'Target MARK AS WAYPOINT', 'Entry INGRESS FROM SOUTH', 'Heading 0°', 'Flightplan SELECT TARGET WP', 'MFD SWITCH TO TGP', 'MODE/FREQ AS DESIRED', 'FOV WIDE', 'View ADJUST', 'FOV NARROW'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'OPS',
+      title: 'Targeting Pod - A/A',
+      items: ['MFD SWITCH TO RDR', 'Radar ON', 'Foo AS DESIRED', 'MFD SWITCH TO NAV', 'A/C SELECT', 'MFD SWITCH TO TGP', 'Entry INGRESS FROM SOUTH', 'Heading 0°', 'Lock SET TO TRK', 'MODE / FOV AS DESIRED'],
+      completed: false
+    });
+    module.addChecklist({
+      type: 'OPS',
       title: 'Formation (Re)join',
       items: ['Lock TARGET', 'Closure > 1 nm - +60knots', 'Closure 6000 ft - 60 knots', 'Closure 2000 ft - 40 knots', 'Closure 500 ft - 20 knots', 'Visual Contact', 'Take position'],
       completed: false
@@ -1964,8 +2006,7 @@
 
     // Returns FOO visibility setting from the RDR page.
     getFooVisibilityMode() {
-      const mode = String(getOptionValue('RDR', 'FOO', 'SHOW') ?? 'SHOW').trim().toUpperCase();
-      return mode === 'HIDE' ? 'HIDE' : 'SHOW';
+      return getOptionValue('RDR', 'FOO', 'SHOW');
     }
 
     // Returns true when contacts with callsign FOO should be hidden.
@@ -2091,7 +2132,7 @@
 
     // Returns true when radar-driven traffic should be active.
     isRadarEnabled() {
-      return String(getOptionValue('RDR', 'RADAR', 'OFF') ?? 'OFF').toUpperCase() === 'ON';
+      return getOptionValue('RDR', 'RADAR', 'OFF') === 'ON';
     }
 
     // Normalizes one NAV MAP view mode.
@@ -2119,7 +2160,7 @@
       const modes = MapModule.VIEW_MODES;
       const current = this.getViewMode();
       const idx = Math.max(0, modes.indexOf(current));
-      const next = modes[(idx + 1) % modes.length] ?? 'A/C F/W';
+      const next = modes[(idx + 1) % modes.length];
       return this.setViewMode(next);
     }
 
@@ -2877,13 +2918,13 @@
         this.messages.splice(0, this.messages.length - CommunicationModule.HISTORY_LIMIT);
       }
 
-      const voiceMode = this.normalizeModeToken(getOptionValue('COMM', 'VOICE', getOption('COMM', 'VOICE', 'NONE') ?? 'NONE'));
+      const voiceMode = this.normalizeModeToken(getOptionValue('COMM', 'VOICE', 'NONE'));
       this.refreshVoiceActivationWindow(voiceMode, payload?.serverTime);
       if (this.matchesMode(voiceMode, entry) && this.isMessageNewForVoice(entry)) {
         this.speakMessage(entry);
       }
 
-      const hudMode = this.normalizeModeToken(getOptionValue('COMM', 'HUD', getOption('COMM', 'HUD', 'NONE') ?? 'NONE'));
+      const hudMode = this.normalizeModeToken(getOptionValue('COMM', 'HUD', 'NONE'));
       if (this.matchesMode(hudMode, entry)) {
         const formatted = [
           `[${entry.category}]`,
@@ -3035,6 +3076,15 @@
         {
           title: 'HUD',
           leftButtons: [
+            {
+              key: 'HUD',
+              label: 'HUD',
+              states: ['F-18', 'DEFAULT'],
+              stateIndex: 0,
+              onClick: ({ nextState }) => {
+                addonRuntime.mainPlugin?.hudModule?.setMode?.(nextState);
+              }
+            },
             { key: 'BRIGHT', label: 'BRT', states: ['NORM', 'DAY', 'NIGHT'], stateIndex: 0 },
             { key: 'LEVEL', label: 'LVL', states: ['FULL', 'DECLUTTERED', 'MIN'], stateIndex: 0 },
             {
@@ -3135,7 +3185,7 @@
               stateIndex: 0,
               managedExternally: true,
               onClick: () => {
-                const isAllMode = String(getOption('CHK', 'ALL', 'ONE') ?? 'ONE').toUpperCase() === 'ALL';
+                const isAllMode = getOption('CHK', 'ALL', 'ONE') === 'ALL';
                 const type = getOption('CHK', 'TYPE', 'PROC');
                 const checklistModule = getChecklistModule();
 
@@ -3154,7 +3204,7 @@
               stateIndex: 0,
               managedExternally: true,
               onClick: () => {
-                const isAllMode = String(getOption('CHK', 'ALL', 'ONE') ?? 'ONE').toUpperCase() === 'ALL';
+                const isAllMode = getOption('CHK', 'ALL', 'ONE') === 'ALL';
                 const type = getOption('CHK', 'TYPE', 'PROC');
                 const checklistModule = getChecklistModule();
 
@@ -3180,8 +3230,8 @@
             if (!ctx) return;
 
             const checklistModule = getChecklistModule();
-            const selectedType = String(getOption('CHK', 'TYPE', 'PROC') ?? 'PROC').toUpperCase();
-            const showAll = String(getOption('CHK', 'ALL', 'ONE') ?? 'ONE').toUpperCase() === 'ALL';
+            const selectedType = getOption('CHK', 'TYPE', 'PROC');
+            const showAll = getOption('CHK', 'ALL', 'ONE') === 'ALL';
             const checklists = checklistModule.getChecklists(selectedType);
 
             ctx.save();
@@ -3524,7 +3574,7 @@
               states: ['A/C F/W', 'A/C CNT', 'A/C N', 'TGT', 'TGT N'],
               stateIndex: 0,
               managedExternally: true,
-              show: () => String(getOption('NAV', 'DISPLAY', 'HSI') ?? 'HSI').toUpperCase() === 'MAP',
+              show: () => getOption('NAV', 'DISPLAY', 'HSI') === 'MAP',
               onClick: () => {
                 getMapModule().cycleViewMode();
               }
@@ -3619,9 +3669,9 @@
             const contentW = w * 0.62;
             const contentH = h * 0.74;
 
-            const mode = String(getOptionValue('NAV', 'DISPLAY', 'HSI') ?? 'HSI').toUpperCase();
+            const mode = getOptionValue('NAV', 'DISPLAY', 'HSI');
             const declutterLevel = getOptionValue('NAV', 'DECLUTTER', 'OFF');
-            const radarEnabled = String(getOptionValue('RDR', 'RADAR', 'OFF') ?? 'OFF').toUpperCase() === 'ON';
+            const radarEnabled = getOptionValue('RDR', 'RADAR', 'OFF') === 'ON';
 
             ctx.save();
             ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -3689,6 +3739,16 @@
 
             const drawWaypointDiamond = (x, y, selected = false) => {
               const size = selected ? Math.max(5, h * 0.012) : Math.max(4, h * 0.010);
+              if (selected) {
+                ctx.fillStyle = waypointColor;
+                ctx.beginPath();
+                ctx.moveTo(x, y - size);
+                ctx.lineTo(x + size, y);
+                ctx.lineTo(x, y + size);
+                ctx.lineTo(x - size, y);
+                ctx.closePath();
+                ctx.fill();
+              }
               ctx.strokeStyle = waypointColor;
               ctx.lineWidth = 2;
               ctx.beginPath();
@@ -4330,7 +4390,7 @@
 
             const rangeNmRaw = Number(getOptionValue('RDR', 'RNG', 40));
             const rangeNm = Number.isFinite(rangeNmRaw) && rangeNmRaw > 0 ? rangeNmRaw : 40;
-            const radarEnabled = String(getOptionValue('RDR', 'RADAR', 'OFF') ?? 'OFF').toUpperCase() === 'ON';
+            const radarEnabled = getOptionValue('RDR', 'RADAR', 'OFF') === 'ON';
 
             const distanceMeters = (a, b) => {
               const distanceFn = window.geofs?.utils?.distanceInMeters;
@@ -4465,14 +4525,14 @@
           leftButtons: [
             { key: 'SHOW', label: 'SHOW', states: ['MSG', 'CFG'], stateIndex: 0 },
             { key: 'N/A1', label: '', states: [''], stateIndex: 0 },
-            { key: 'DISPLAY', label: 'DISP', states: ['NO', 'ALL', 'GRP', 'FLT', 'W/M'], values: ['NONE', 'ALL', 'GROUP', 'FLIGHT', 'WINGMAN'], stateIndex: 0, show: () => String(getOption('COMM', 'SHOW', 'MSG') ?? 'MSG').toUpperCase() === 'MSG' },
+            { key: 'DISPLAY', label: 'DISP', states: ['NO', 'ALL', 'GRP', 'FLT', 'W/M'], values: ['NONE', 'ALL', 'GROUP', 'FLIGHT', 'WINGMAN'], stateIndex: 0, show: () => getOption('COMM', 'SHOW', 'MSG') === 'MSG' },
             { key: 'N/A2', label: '', states: [''], stateIndex: 0 },
-            { key: 'HUD', label: 'HUD', states: ['NO', 'ALL', 'GRP', 'FLT', 'W/M'], values: ['NONE', 'ALL', 'GROUP', 'FLIGHT', 'WINGMAN'], stateIndex: 0, show: () => String(getOption('COMM', 'SHOW', 'MSG') ?? 'MSG').toUpperCase() === 'MSG' },
+            { key: 'HUD', label: 'HUD', states: ['NO', 'ALL', 'GRP', 'FLT', 'W/M'], values: ['NONE', 'ALL', 'GROUP', 'FLIGHT', 'WINGMAN'], stateIndex: 0, show: () => getOption('COMM', 'SHOW', 'MSG') === 'MSG' },
           ],
           rightButtons: [
-            { key: 'VOICE', label: 'VOICE', states: ['NONE', 'ALL', 'GROUP', 'FLIGHT', 'WINGMAN'], stateIndex: 0, show: () => String(getOption('COMM', 'SHOW', 'MSG') ?? 'MSG').toUpperCase() === 'CFG' },
+            { key: 'VOICE', label: 'VOICE', states: ['NONE', 'ALL', 'GROUP', 'FLIGHT', 'WINGMAN'], stateIndex: 0, show: () => getOption('COMM', 'SHOW', 'MSG') === 'CFG' },
             { key: 'N/A3', label: '', states: [''], stateIndex: 0 },
-            { key: 'RATE', label: 'RATE', states: ['0.75', '1', '1.25', '1.5', '2', '2.5', '3'], values: [0.75, 1, 1.25, 1.5, 2, 2.5, 3], stateIndex: 3, show: () => String(getOption('COMM', 'SHOW', 'MSG') ?? 'MSG').toUpperCase() === 'CFG' },
+            { key: 'RATE', label: 'RATE', states: ['0.75', '1', '1.25', '1.5', '2', '2.5', '3'], values: [0.75, 1, 1.25, 1.5, 2, 2.5, 3], stateIndex: 3, show: () => getOption('COMM', 'SHOW', 'MSG') === 'CFG' },
           ],
           lines: [],
           render: (renderer, renderContext) => {
@@ -4483,19 +4543,16 @@
             if (!ctx) return;
 
             const communicationModule = getCommunicationModule();
-            const profile = communicationModule?.getProfile?.() ?? { group: '', flight: '', wingman: '' };
-            const voiceLanguage = communicationModule?.getVoiceLanguage?.() ?? 'en-US';
-            const voiceRate = communicationModule?.getVoiceRate?.() ?? 1.5;
-            const voiceMode = communicationModule?.normalizeModeToken?.(getOptionValue('COMM', 'VOICE', getOption('COMM', 'VOICE', 'NONE') ?? 'NONE'))
-              ?? String(getOptionValue('COMM', 'VOICE', getOption('COMM', 'VOICE', 'NONE') ?? 'NONE') ?? 'NONE').toUpperCase();
-            const displayMode = communicationModule?.normalizeModeToken?.(getOptionValue('COMM', 'DISPLAY', getOption('COMM', 'DISPLAY', getOption('COMM', 'MFD', 'NONE')) ?? 'NONE'))
-              ?? String(getOptionValue('COMM', 'DISPLAY', getOption('COMM', 'DISPLAY', getOption('COMM', 'MFD', 'NONE')) ?? 'NONE') ?? 'NONE').toUpperCase();
-            const hudMode = communicationModule?.normalizeModeToken?.(getOptionValue('COMM', 'HUD', getOption('COMM', 'HUD', 'NONE') ?? 'NONE'))
-              ?? String(getOptionValue('COMM', 'HUD', getOption('COMM', 'HUD', 'NONE') ?? 'NONE') ?? 'NONE').toUpperCase();
-            const showMode = String(getOption('COMM', 'SHOW', 'MSG') ?? 'MSG').toUpperCase();
+            const profile = communicationModule.getProfile();
+            const voiceLanguage = communicationModule.getVoiceLanguage();
+            const voiceRate = communicationModule.getVoiceRate();
+            const voiceMode = communicationModule.normalizeModeToken(getOptionValue('COMM', 'VOICE', 'NONE'));
+            const displayMode = communicationModule.normalizeModeToken(getOptionValue('COMM', 'DISPLAY', 'NONE'));
+            const hudMode = communicationModule.normalizeModeToken(getOptionValue('COMM', 'HUD', 'NONE'));
+            const showMode = getOption('COMM', 'SHOW', 'MSG');
             const mfdMessageMode = displayMode === 'ALL' ? 'ANY' : displayMode;
 
-            const recentMessages = communicationModule?.getMessagesByMode?.(mfdMessageMode, 5) ?? [];
+            const recentMessages = communicationModule.getMessagesByMode(mfdMessageMode, 5);
 
             const fmt = (value, withBrackets = false) => {
               const token = String(value ?? '').trim();
@@ -4503,12 +4560,7 @@
               return withBrackets ? `[${token}]` : token;
             };
             const trimMessageLine = (text, maxChars = 64) => {
-              if (typeof communicationModule?.trimLine === 'function') {
-                return communicationModule.trimLine(text, maxChars);
-              }
-              const raw = String(text ?? '').replace(/\s+/g, ' ').trim();
-              if (raw.length <= maxChars) return raw;
-              return `${raw.slice(0, Math.max(0, maxChars - 1))}…`;
+              return communicationModule.trimLine(text, maxChars);
             };
             const wrapFixed = (text, lineLen = 32, maxLines = 2) => {
               const cleaned = String(text ?? '').replace(/\s+/g, ' ').trim();
@@ -4554,9 +4606,9 @@
               const cfgX = w * 0.33;
               let y = h * 0.16;
               const cfgTextPx = Math.round(h * 0.045);
-              const colorGroup = communicationModule?.getMfdCallsignColor?.({ category: 'GROUP' }) ?? '#ff4444';
-              const colorFlight = communicationModule?.getMfdCallsignColor?.({ category: 'FLIGHT' }) ?? '#3da2ff';
-              const colorWingman = communicationModule?.getMfdCallsignColor?.({ category: 'WINGMAN' }) ?? '#33ff66';
+              const colorGroup = communicationModule.getMfdCallsignColor({ category: 'GROUP' });
+              const colorFlight = communicationModule.getMfdCallsignColor({ category: 'FLIGHT' });
+              const colorWingman = communicationModule.getMfdCallsignColor({ category: 'WINGMAN' });
 
               ctx.font = `bold ${cfgTextPx}px monospace`;
               ctx.fillStyle = color;
@@ -4781,55 +4833,70 @@
     { key: 'MODES', label: 'MODE', states: ['DAY', 'NIGHT', 'WHT'], stateIndex: 0 },
     { key: 'RANGE', label: 'FOV',  states: ['NAR', 'WIDE'], stateIndex: 0 },
     { key: 'LOCK',  label: 'LOCK', states: ['FREE', 'TRK', 'WPT'], stateIndex: 0 },
+    { key: 'N/A',  label: '', states: [''], stateIndex: 0 },
+    { key: 'FREQUENCY', label: 'FREQ', states: ['2', '3', '4', '5', '15', '30', '45', '60'], stateIndex: 2 },
   ],
   rightButtons: [
     {
       key: 'SLEW_UP', label: '↑', states: [''], stateIndex: 0,
       onClick: ({ page }) => {
-        if (page && page._lockMode === 'FREE') {
-          const step = Number(page._getSlewStep());
-          page._camPitch = Math.min(85, page._camPitch + step);
+        if (page) {
+          const step = Number(getOptionValue('TGP', 'SLEW_STEP', '0.25'));
+          if (page._lockMode === 'FREE') {
+            page._camPitch = Math.min(85, page._camPitch + step);
+          } else {
+            page._relPitch = Math.min(85, page._relPitch + step);
+          }
         }
       }
     },
     {
       key: 'SLEW_DOWN', label: '↓', states: [''], stateIndex: 0,
       onClick: ({ page }) => {
-        if (page && page._lockMode === 'FREE') {
-          const step = Number(page._getSlewStep());
-          page._camPitch = Math.max(-85, page._camPitch - step);
+        if (page) {
+          const step = Number(getOptionValue('TGP', 'SLEW_STEP', '0.25'));
+          if (page._lockMode === 'FREE') {
+            page._camPitch = Math.max(-85, page._camPitch - step);
+          } else {
+            page._relPitch = Math.max(-85, page._relPitch - step);
+          }
         }
       }
     },
     {
       key: 'SLEW_LEFT', label: '←', states: [''], stateIndex: 0,
       onClick: ({ page }) => {
-        if (page && page._lockMode === 'FREE') {
-          const step = Number(page._getSlewStep());
-          page._camYaw = ((page._camYaw - step) + 360) % 360;
-          if (page._camYaw > 180) page._camYaw -= 360;
+        if (page) {
+          const step = Number(getOptionValue('TGP', 'SLEW_STEP', '0.25'));
+          if (page._lockMode === 'FREE') {
+            page._camYaw = ((page._camYaw - step) + 360) % 360;
+            if (page._camYaw > 180) page._camYaw -= 360;
+          } else {
+            page._relYaw = ((page._relYaw - step) + 360) % 360;
+            if (page._relYaw > 180) page._relYaw -= 360;
+          }
         }
       }
     },
     {
       key: 'SLEW_RIGHT', label: '→', states: [''], stateIndex: 0,
       onClick: ({ page }) => {
-        if (page && page._lockMode === 'FREE') {
-          const step = Number(page._getSlewStep());
-          page._camYaw = ((page._camYaw + step) + 360) % 360;
-          if (page._camYaw > 180) page._camYaw -= 360;
+        if (page) {
+          const step = Number(getOptionValue('TGP', 'SLEW_STEP', '0.25'));
+          if (page._lockMode === 'FREE') {
+            page._camYaw = ((page._camYaw + step) + 360) % 360;
+            if (page._camYaw > 180) page._camYaw -= 360;
+          } else {
+            page._relYaw = ((page._relYaw + step) + 360) % 360;
+            if (page._relYaw > 180) page._relYaw -= 360;
+          }
         }
       }
     },
     {
-      key: 'SLEW_STEP', label: 'STEP', states: ['0.1', '0.25', '0.5', '1', '2.5', '5', '10'], stateIndex: 0,
+      key: 'SLEW_STEP', label: 'STEP', states: ['0.05','0.1', '0.25', '0.5', '1', '2.5', '5', '10'], stateIndex: 0,
     },
   ],
-
-  _getSlewStep: function () {
-    const stored = typeof getOptionValue === 'function' ? getOptionValue('TGP', 'SLEW_STEP', '0.25') : '0.25';
-    return Number(stored) || 0.25;
-  },
 
   _snap: null,
   _tick: 0,
@@ -4838,13 +4905,20 @@
   _lockMode: 'FREE',
   _targetWorldH: 0,
   _targetWorldP: 0,
+  _relYaw: 0,
+  _relPitch: 0,
+  _lockTargetKey: null,
   _lockedCallsign: 'N/A',
   _lockedDist: 0,
 
   _updateLock: function () {
-    if (this._lockMode === 'FREE') return;
+    if (this._lockMode === 'FREE') {
+      this._lockTargetKey = null;
+      return;
+    }
 
     let tLat = null, tLon = null, tAlt = 0, cs = 'UNKNOWN';
+    let targetKey = null;
 
     try {
       if (this._lockMode === 'TRK') {
@@ -4859,6 +4933,7 @@
             tLon = Number(target.lon);
             tAlt = Number(target.alt) || 0;
             cs = target.callsign ?? target.cs ?? 'TRACK';
+            targetKey = `TRK:${String(target.uid ?? uid ?? cs)}`;
           }
         }
       } else if (this._lockMode === 'WPT') {
@@ -4869,12 +4944,22 @@
           tLon = Number(wp.lon);
           tAlt = Number(wp.alt) || 0;
           cs = String(wp.ident ?? wp.name ?? wp.id ?? 'WPT');
+          targetKey = `WPT:${cs}`;
         }
       }
     } catch (e) {}
 
     const own = window.geofs?.aircraft?.instance?.llaLocation;
-    if (tLat === null || tLon === null || !Number.isFinite(tLat) || !Number.isFinite(tLon) || !own) return;
+    if (tLat === null || tLon === null || !Number.isFinite(tLat) || !Number.isFinite(tLon) || !own) {
+      this._lockTargetKey = null;
+      return;
+    }
+
+    if (targetKey && targetKey !== this._lockTargetKey) {
+      this._lockTargetKey = targetKey;
+      this._relYaw = 0;
+      this._relPitch = 0;
+    }
 
     const dLat = tLat - own[0];
     const dLon = tLon - own[1];
@@ -4896,6 +4981,7 @@
     const ctx = renderContext?.ctx ?? renderer?.canvasAPI?.context;
     const w = renderContext?.w ?? 512;
     const h = renderContext?.h ?? 512;
+    const color = renderContext?.color ?? '#00ff66';
     if (!ctx) return;
 
     if (!this._snap) this._snap = document.createElement('canvas');
@@ -4904,6 +4990,7 @@
     const leftBtns = page?.leftButtons;
     const mode = leftBtns?.find(b => b.key === 'MODES')?.states[leftBtns?.find(b => b.key === 'MODES')?.stateIndex] ?? 'DAY';
     const fovState = leftBtns?.find(b => b.key === 'RANGE')?.states[leftBtns?.find(b => b.key === 'RANGE')?.stateIndex] ?? 'WIDE';
+    const frequency = Number(getOption('TGP', 'FREQUENCY', '4'));
     
     const lockBtn = leftBtns?.find(b => b.key === 'LOCK');
     this._lockMode = lockBtn?.states[lockBtn?.stateIndex] ?? 'FREE';
@@ -4911,7 +4998,7 @@
     this._updateLock();
 
     this._tick++;
-    if (this._tick % 4 === 0) {
+    if (this._tick % frequency === 0) {
       const viewer = window.geofs?.api?.viewer;
       const mode1 = window.geofs?.camera?.modes?.[1];
 
@@ -4927,8 +5014,8 @@
 
         let finalH, finalP;
         if (this._lockMode === 'TRK' || this._lockMode === 'WPT') {
-          finalH = normDeg(this._targetWorldH - acHeading);
-          finalP = normDeg(this._targetWorldP + acPitch);
+          finalH = normDeg(this._targetWorldH - acHeading + this._relYaw);
+          finalP = Math.max(-85, Math.min(85, this._targetWorldP + acPitch + this._relPitch));
         } else {
           // _camYaw / _camPitch are already body-relative offsets (0 = forward, -15 = slightly down)
           finalH = this._camYaw;
@@ -4983,7 +5070,7 @@
     }
 
     const isLocked = this._lockMode === 'TRK' || this._lockMode === 'WPT';
-    ctx.strokeStyle = isLocked ? '#ff3300' : '#00ff44';
+    ctx.strokeStyle = isLocked ? '#ff3300' : '#00ff66';
     ctx.lineWidth = 2;
     ctx.strokeRect(w/2 - 20, h/2 - 20, 40, 40);
     ctx.beginPath();
@@ -4991,14 +5078,13 @@
     ctx.moveTo(w/2 - 40, h/2); ctx.lineTo(w/2 + 40, h/2);
     ctx.stroke();
 
-    ctx.fillStyle = '#00ff44';
-    ctx.font = 'bold 16px monospace';
+    ctx.fillStyle = color;
+    ctx.font = 'bold 20px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(isLocked ? `${this._lockMode} ${this._lockedCallsign}` : 'SLEW', w/2, 30);
+    ctx.fillText(isLocked ? `${this._lockMode} ${this._lockedCallsign}` : 'SLEW', w/2, 60);
 
     if (isLocked) {
-      ctx.textAlign = 'left';
-      ctx.fillText(`DIST: ${this._lockedDist}NM`, 20, h - 30);
+      ctx.fillText(`DIST: ${this._lockedDist}NM`, w/2, h - 60);
     }
     ctx.restore();
   }
@@ -5404,8 +5490,8 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
       const h = renderer.canvasAPI.canvas.height;
       const page = this.getCurrentPage();
       const layout = this.getLayout(w, h);
-      const baseColor = getOptionValue('HUD', 'COLOR', '#00ff66') ?? '#00ff66';
-      const color = applyBrightnessToHexColor(baseColor, getMfdBrightnessFactor()) ?? baseColor;
+      const baseColor = getOptionValue('HUD', 'COLOR', '#00ff66');
+      const color = applyBrightnessToHexColor(baseColor, getMfdBrightnessFactor());
       renderer.canvasAPI.clear();
 
       ctx.strokeStyle = color;
@@ -5659,7 +5745,7 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
   }
 
   function getHudColorFromStoredOptions() {
-    return getOptionValue('HUD', 'COLOR', DEFAULT_COLOR) ?? DEFAULT_COLOR;
+    return getOptionValue('HUD', 'COLOR', DEFAULT_COLOR);
   }
 
   // Returns pixelsPerDeg (vertical), pixelsPerDegX (horizontal) and
@@ -6517,7 +6603,7 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
         }
       : null;
     const hudBaseColor = getHudColorFromStoredOptions();
-    const hudColor = applyBrightnessToHexColor(hudBaseColor, getMfdBrightnessFactor()) ?? hudBaseColor;
+    const hudColor = applyBrightnessToHexColor(hudBaseColor, getMfdBrightnessFactor());
     const hudLevel = getOption('HUD', 'LEVEL', 'FULL');
     currentHudColor = hudColor;
 
@@ -6638,7 +6724,7 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
       this.originalRenderer = renderers.genericHUD;
       const self = this;
       renderers.genericHUD = function (renderer) {
-        if (!isF18Active()) {
+        if (!isF18Active() || getOption('HUD', 'HUD', 'F-18') === 'DEFAULT') {
           return self.originalRenderer.call(this, renderer);
         }
         renderF18Hud(renderer);
@@ -6648,8 +6734,23 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
       return true;
     }
 
+    getMode() {
+      return getOption('HUD', 'HUD', 'F-18');
+    }
+
+    setMode(mode) {
+      setOption('HUD', 'HUD', mode);
+      this.ensureLoaded();
+      return mode;
+    }
+
     // Ensures the HUD renderer is installed and active.
     ensureLoaded() {
+      if (getOption('HUD', 'HUD', 'F-18') === 'DEFAULT') {
+        this.restore();
+        return true;
+      }
+
       if (!this.install()) {
         return false;
       }
@@ -7107,7 +7208,7 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
     }
 
     getFlapsMode() {
-      return String(getOption('SYS', 'FLAPS', 'MAN') ?? 'MAN').toUpperCase();
+      return getOption('SYS', 'FLAPS', 'MAN');
     }
 
     getSpeedbrakeCapNormalized() {
@@ -8090,8 +8191,8 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
         const w = renderer.canvasAPI.canvas.width;
         const h = renderer.canvasAPI.canvas.height;
         renderer.canvasAPI.clear('#000000');
-        const fallbackBaseColor = getOptionValue('HUD', 'COLOR', DEFAULT_COLOR) ?? DEFAULT_COLOR;
-        ctx.fillStyle = applyBrightnessToHexColor(fallbackBaseColor, getMfdBrightnessFactor()) ?? fallbackBaseColor;
+        const fallbackBaseColor = getOptionValue('HUD', 'COLOR', DEFAULT_COLOR);
+        ctx.fillStyle = applyBrightnessToHexColor(fallbackBaseColor, getMfdBrightnessFactor());
         ctx.font = `bold ${Math.round(h * 0.18)}px monospace`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -8802,9 +8903,9 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
       return target >= 0 && target < uiState.pages.length ? target : -1;
     }
 
-    const titleToken = String(target ?? '').trim().toUpperCase();
+    const titleToken = String(target).trim().toUpperCase();
     if (!titleToken) return -1;
-    return uiState.pages.findIndex((p) => String(p?.title ?? '').trim().toUpperCase() === titleToken);
+    return uiState.pages.findIndex((p) => String(p.title).trim().toUpperCase() === titleToken);
   }
 
   function createAddonApi() {
@@ -8905,6 +9006,18 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
         setVoiceRate: (rate) => getCommunicationModule()?.setVoiceRate?.(rate) ?? 1.5,
         getMessages: (mode = 'ALL', limit = 5) => getCommunicationModule()?.getMessagesByMode?.(mode, limit) ?? [],
         getHudMessage: () => getCommunicationModule()?.getHudOverlayText?.() ?? null
+      },
+      hud: {
+        getModule: () => addonRuntime.mainPlugin?.hudModule ?? null,
+        getMode: () => getOption('HUD', 'HUD', 'F-18'),
+        setMode: (mode) => {
+          if (addonRuntime.mainPlugin?.hudModule?.setMode) {
+            return addonRuntime.mainPlugin.hudModule.setMode(mode);
+          }
+          setOption('HUD', 'HUD', mode);
+          return mode;
+        },
+        isCustomEnabled: () => getOption('HUD', 'HUD', 'F-18') !== 'DEFAULT'
       },
       mfd: {
         getSlots: () => Object.keys(addonRuntime.mfdUiStates),

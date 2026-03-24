@@ -120,6 +120,12 @@ window.F18Addon
 - `getMessages(mode?, limit?)` // mode: `ALL`, `GROUP`, `FLIGHT`, `WINGMAN`, `NONE`
 - `getHudMessage()`
 
+#### `window.F18Addon.hud`
+- `getModule()`
+- `getMode()` // `F-18` or `DEFAULT`
+- `setMode(mode)` // accepts `F-18` or `DEFAULT`
+- `isCustomEnabled()`
+
 `window.F18Addon.nav.getReadouts()` returns a shared snapshot used by both HUD and MFD NAV rendering:
 
 ```js
@@ -251,6 +257,7 @@ Known keys used by the addon:
 - `REC.STATE`
 - `REC.PLAYBACK`
 - `HUD.BRIGHT`
+- `HUD.HUD`
 - `HUD.LEVEL`
 - `HUD.MAX_G`
 - `HUD.COLOR`
