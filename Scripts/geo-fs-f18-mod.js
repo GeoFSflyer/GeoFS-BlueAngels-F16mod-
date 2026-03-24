@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoFS F-18 Addon
 // @namespace    https://github.com/ArjanKw/GeoFS-BlueAngels/
-// @version      1.6.0
+// @version      1.6.1
 // @description  Improves the cockpit with a new HUD and custom MFDs, adjustable seat height and more.
 // @match        https://www.geo-fs.com/*
 // @match        https://geo-fs.com/*
@@ -12,7 +12,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.6.0';
+  const VERSION = '1.6.1';
   const F18_AIRCRAFT_ID = '27';
 
   const FLIGHT_RECORDER_MIN_VERSION = '1.2.0';
@@ -4828,130 +4828,124 @@
         },
         {
   title: 'TGP',
-
   leftButtons: [
-    { key: 'MODES', label: 'MODE', states: ['DAY', 'NIGHT', 'WHT'], stateIndex: 0 },
-    { key: 'RANGE', label: 'FOV',  states: ['NAR', 'WIDE'], stateIndex: 0 },
-    { key: 'LOCK',  label: 'LOCK', states: ['FREE', 'TRK', 'WPT'], stateIndex: 0 },
-    { key: 'N/A',  label: '', states: [''], stateIndex: 0 },
+    { key: 'MODES',     label: 'MODE', states: ['DAY', 'NIGHT', 'WHT'], stateIndex: 0 },
+    { key: 'RANGE',     label: 'FOV',  states: ['NAR', 'WIDE'],         stateIndex: 0 },
+    { key: 'LOCK',      label: 'LOCK', states: ['FREE', 'TRK', 'WPT'],  stateIndex: 0 },
+    { key: 'N/A',       label: '',     states: [''],                     stateIndex: 0 },
     { key: 'FREQUENCY', label: 'FREQ', states: ['2', '3', '4', '5', '15', '30', '45', '60'], stateIndex: 2 },
   ],
   rightButtons: [
     {
       key: 'SLEW_UP', label: '↑', states: [''], stateIndex: 0,
-      onClick: ({ page }) => {
-        if (page) {
-          const step = Number(getOptionValue('TGP', 'SLEW_STEP', '0.25'));
-          if (page._lockMode === 'FREE') {
-            page._camPitch = Math.min(85, page._camPitch + step);
-          } else {
-            page._relPitch = Math.min(85, page._relPitch + step);
-          }
-        }
-      }
+      onClick: ({ page }) => page && page._updateSlew(0, 1)
     },
     {
       key: 'SLEW_DOWN', label: '↓', states: [''], stateIndex: 0,
-      onClick: ({ page }) => {
-        if (page) {
-          const step = Number(getOptionValue('TGP', 'SLEW_STEP', '0.25'));
-          if (page._lockMode === 'FREE') {
-            page._camPitch = Math.max(-85, page._camPitch - step);
-          } else {
-            page._relPitch = Math.max(-85, page._relPitch - step);
-          }
-        }
-      }
+      onClick: ({ page }) => page && page._updateSlew(0, -1)
     },
     {
       key: 'SLEW_LEFT', label: '←', states: [''], stateIndex: 0,
-      onClick: ({ page }) => {
-        if (page) {
-          const step = Number(getOptionValue('TGP', 'SLEW_STEP', '0.25'));
-          if (page._lockMode === 'FREE') {
-            page._camYaw = ((page._camYaw - step) + 360) % 360;
-            if (page._camYaw > 180) page._camYaw -= 360;
-          } else {
-            page._relYaw = ((page._relYaw - step) + 360) % 360;
-            if (page._relYaw > 180) page._relYaw -= 360;
-          }
-        }
-      }
+      onClick: ({ page }) => page && page._updateSlew(-1, 0)
     },
     {
       key: 'SLEW_RIGHT', label: '→', states: [''], stateIndex: 0,
-      onClick: ({ page }) => {
-        if (page) {
-          const step = Number(getOptionValue('TGP', 'SLEW_STEP', '0.25'));
-          if (page._lockMode === 'FREE') {
-            page._camYaw = ((page._camYaw + step) + 360) % 360;
-            if (page._camYaw > 180) page._camYaw -= 360;
-          } else {
-            page._relYaw = ((page._relYaw + step) + 360) % 360;
-            if (page._relYaw > 180) page._relYaw -= 360;
-          }
-        }
-      }
+      onClick: ({ page }) => page && page._updateSlew(1, 0)
     },
     {
-      key: 'SLEW_STEP', label: 'STEP', states: ['0.05','0.1', '0.25', '0.5', '1', '2.5', '5', '10'], stateIndex: 0,
+      key: 'SLEW_STEP', label: 'STEP', 
+      states: ['0.05', '0.1', '0.25', '0.5', '1', '2.5', '5', '10'], 
+      stateIndex: 2,
     },
   ],
 
-  _snap: null,
-  _tick: 0,
-  _camYaw: 0,
-  _camPitch: -15,
-  _lockMode: 'FREE',
-  _targetWorldH: 0,
-  _targetWorldP: 0,
-  _relYaw: 0,
-  _relPitch: 0,
-  _lockTargetKey: null,
+  // ── Internal state ──────────────────────────────────────────────────────────
+  _snap:           null,
+  _tick:           0,
+  _camYaw:         0,     // Local yaw offset (FREE mode)
+  _camPitch:       -15,   // Local pitch offset (FREE mode)
+  _relYaw:         0,     // Target yaw slew offset (LOCKED mode)
+  _relPitch:       0,     // Target pitch slew offset (LOCKED mode)
+  _lockMode:       'FREE',
+  _targetWorldH:   0,
+  _targetWorldP:   0,
+  _targetLat:      null,
+  _targetLon:      null,
+  _targetAltM:     null,
+  _targetNorthM:   0,
+  _targetEastM:    0,
+  _targetUpM:      0,
+  _lockTargetKey:  null,
   _lockedCallsign: 'N/A',
-  _lockedDist: 0,
+  _lockedDist:     0,
+
+  // ── Slew Logic ──────────────────────────────────────────────────────────────
+  _updateSlew: function(x, y) {
+    const stepBtn = this.rightButtons.find(b => b.key === 'SLEW_STEP');
+    const step = Number(stepBtn.states[stepBtn.stateIndex]);
+    
+    if (this._lockMode === 'FREE') {
+      this._camYaw = ((this._camYaw + (x * step)) + 360) % 360;
+      if (this._camYaw > 180) this._camYaw -= 360;
+      this._camPitch = Math.max(-85, Math.min(30, this._camPitch + (y * step)));
+    } else {
+      this._relYaw = ((this._relYaw + (x * step)) + 360) % 360;
+      if (this._relYaw > 180) this._relYaw -= 360;
+      this._relPitch = Math.max(-85, Math.min(85, this._relPitch + (y * step)));
+    }
+  },
 
   _updateLock: function () {
     if (this._lockMode === 'FREE') {
       this._lockTargetKey = null;
+      this._targetLat = null;
+      this._targetLon = null;
+      this._targetAltM = null;
+      this._targetNorthM = 0;
+      this._targetEastM = 0;
+      this._targetUpM = 0;
       return;
     }
 
-    let tLat = null, tLon = null, tAlt = 0, cs = 'UNKNOWN';
-    let targetKey = null;
+    let tLat = null, tLon = null, tAltM = 0, cs = 'UNKNOWN', targetKey = null;
 
-    try {
-      if (this._lockMode === 'TRK') {
-        const map = typeof getMapModule === 'function' ? getMapModule() : null;
-        if (map) {
-          const nav = map.getSceneData?.() ?? null;
-          const traffic = map.getFilteredTraffic?.(nav?.traffic ?? [], true) ?? [];
-          const uid = map.getSelectedTrafficUid?.(traffic) ?? null;
-          const target = traffic.find((c) => String(c?.uid ?? '') === String(uid ?? '')) ?? null;
-          if (target) {
-            tLat = Number(target.lat);
-            tLon = Number(target.lon);
-            tAlt = Number(target.alt) || 0;
-            cs = target.callsign ?? target.cs ?? 'TRACK';
-            targetKey = `TRK:${String(target.uid ?? uid ?? cs)}`;
-          }
-        }
-      } else if (this._lockMode === 'WPT') {
-        const waypointArray = window.geofs?.flightPlan?.waypointArray;
-        const wp = Array.isArray(waypointArray) ? waypointArray.find((w) => w?.selected) : null;
-        if (wp) {
-          tLat = Number(wp.lat);
-          tLon = Number(wp.lon);
-          tAlt = Number(wp.alt) || 0;
-          cs = String(wp.ident ?? wp.name ?? wp.id ?? 'WPT');
-          targetKey = `WPT:${cs}`;
-        }
+    if (this._lockMode === 'TRK') {
+      const map = typeof getMapModule === 'function' ? getMapModule() : null;
+      const nav = map?.getSceneData?.() ?? null;
+      const traffic = map?.getFilteredTraffic?.(nav?.traffic ?? [], true) ?? [];
+      const uid = map?.getSelectedTrafficUid?.(traffic) ?? null;
+      const target = traffic.find(c => String(c?.uid ?? '') === String(uid ?? '')) ?? null;
+
+      if (target) {
+        tLat = Number(target.lat);
+        tLon = Number(target.lon);
+        tAltM = Number(target.alt) || 0; // meters
+        cs = target.callsign ?? target.cs ?? 'TRACK';
+        targetKey = `TRK:${String(target.uid ?? uid ?? cs)}`;
       }
-    } catch (e) {}
+    } else if (this._lockMode === 'WPT') {
+      const waypointArray = window.geofs?.flightPlan?.waypointArray;
+      const wp = Array.isArray(waypointArray) ? waypointArray.find(w => w?.selected) : null;
+
+      if (wp) {
+        tLat = Number(wp.lat);
+        tLon = Number(wp.lon);
+        tAltM = (Number(wp.alt) || 0) * 0.3048; // ft to meters
+        cs = String(wp.ident ?? wp.name ?? wp.id ?? 'WPT');
+        targetKey = `WPT:${cs}`;
+      }
+    }
 
     const own = window.geofs?.aircraft?.instance?.llaLocation;
+
     if (tLat === null || tLon === null || !Number.isFinite(tLat) || !Number.isFinite(tLon) || !own) {
       this._lockTargetKey = null;
+      this._targetLat = null;
+      this._targetLon = null;
+      this._targetAltM = null;
+      this._targetNorthM = 0;
+      this._targetEastM = 0;
+      this._targetUpM = 0;
       return;
     }
 
@@ -4961,89 +4955,165 @@
       this._relPitch = 0;
     }
 
-    const dLat = tLat - own[0];
-    const dLon = tLon - own[1];
     const latRad = own[0] * Math.PI / 180;
+    const dN = (tLat - own[0]) * 111319.9;
+    const dE = (tLon - own[1]) * 111319.9 * Math.cos(latRad);
+    const dU = tAltM - own[2];
 
-    const dN = dLat * 111319.9;
-    const dE = dLon * 111319.9 * Math.cos(latRad);
-    const dU = tAlt - own[2];
     const distH = Math.hypot(dN, dE);
+    const dist3 = Math.hypot(distH, dU);
 
     this._targetWorldH = (Math.atan2(dE, dN) * 180 / Math.PI + 360) % 360;
     this._targetWorldP = Math.atan2(dU, distH) * 180 / Math.PI;
+    this._targetLat = tLat;
+    this._targetLon = tLon;
+    this._targetAltM = tAltM;
+    this._targetNorthM = dN;
+    this._targetEastM = dE;
+    this._targetUpM = dU;
 
     this._lockedCallsign = cs;
-    this._lockedDist = Math.round(Math.hypot(distH, dU) / 1852 * 10) / 10;
+    this._lockedDist = Math.round(dist3 / 1852 * 10) / 10; // m to NM
   },
 
   render: function (renderer, renderContext) {
-    const ctx = renderContext?.ctx ?? renderer?.canvasAPI?.context;
-    const w = renderContext?.w ?? 512;
-    const h = renderContext?.h ?? 512;
+    const ctx   = renderContext?.ctx ?? renderer?.canvasAPI?.context;
+    const w     = renderContext?.w   ?? 512;
+    const h     = renderContext?.h   ?? 512;
     const color = renderContext?.color ?? '#00ff66';
     if (!ctx) return;
 
     if (!this._snap) this._snap = document.createElement('canvas');
 
     const page = renderContext?.page;
-    const leftBtns = page?.leftButtons;
-    const mode = leftBtns?.find(b => b.key === 'MODES')?.states[leftBtns?.find(b => b.key === 'MODES')?.stateIndex] ?? 'DAY';
-    const fovState = leftBtns?.find(b => b.key === 'RANGE')?.states[leftBtns?.find(b => b.key === 'RANGE')?.stateIndex] ?? 'WIDE';
-    const frequency = Number(getOption('TGP', 'FREQUENCY', '4'));
+    if (!page) return;
+
+    const getLeft = (key) => {
+      const b = page.leftButtons.find(btn => btn.key === key);
+      return b ? b.states[b.stateIndex] : null;
+    };
+
+    const imgMode   = getLeft('MODES') ?? 'DAY';
+    const fovState  = getLeft('RANGE') ?? 'WIDE';
+    const frequency = Number(getLeft('FREQUENCY') || 4);
     
-    const lockBtn = leftBtns?.find(b => b.key === 'LOCK');
-    this._lockMode = lockBtn?.states[lockBtn?.stateIndex] ?? 'FREE';
+    this._lockMode = getLeft('LOCK') ?? 'FREE';
+    const isLocked = this._lockMode === 'TRK' || this._lockMode === 'WPT';
 
     this._updateLock();
 
     this._tick++;
     if (this._tick % frequency === 0) {
       const viewer = window.geofs?.api?.viewer;
-      const mode1 = window.geofs?.camera?.modes?.[1];
+      const mode1  = window.geofs?.camera?.modes?.[1];
 
       if (viewer?.scene && mode1) {
-        const oPos = [...mode1.position], oOri = [...mode1.orientation], oFov = mode1.FOV;
-        let oCurr = mode1.orientations ? [...mode1.orientations.current] : [...oOri];
-        let oLast = mode1.orientations ? [...mode1.orientations.last] : [...oOri];
+        // Save state
+        const oPos  = [...mode1.position];
+        const oOri  = [...mode1.orientation];
+        const oFov  = mode1.FOV;
+        const oCurr = mode1.orientations ? [...mode1.orientations.current] : [...oOri];
+        const oLast = mode1.orientations ? [...mode1.orientations.last]    : [...oOri];
 
-        const animVals = window.geofs?.animation?.values ?? {};
+        const animVals  = window.geofs?.animation?.values ?? {};
         const acHeading = Number(animVals.heading360 ?? animVals.heading ?? 0);
-        const acPitch   = Number(animVals.atilt ?? 0); // positive = nose up, no sign flip
-        const normDeg   = (a) => ((a % 360) + 540) % 360 - 180;
+        const acPitch   = -Number(animVals.atilt ?? 0); // atilt is negative-up in GeoFS convention
+        const acRoll    = Number(animVals.aroll ?? 0);
 
-        let finalH, finalP;
-        if (this._lockMode === 'TRK' || this._lockMode === 'WPT') {
-          finalH = normDeg(this._targetWorldH - acHeading + this._relYaw);
-          finalP = Math.max(-85, Math.min(85, this._targetWorldP + acPitch + this._relPitch));
+        const normDeg = (a) => ((a % 360) + 540) % 360 - 180;
+        let finalH, finalP, finalR;
+
+        if (isLocked && this._lockTargetKey) {
+          // Use the active GeoFS camera position as reference.
+          let refLat = Number(window.geofs?.camera?.lla?.[0]);
+          let refLon = Number(window.geofs?.camera?.lla?.[1]);
+          let refAlt = Number(window.geofs?.camera?.lla?.[2]);
+
+            const sceneCamera = viewer?.scene?.camera;
+            if (typeof Cesium !== 'undefined' && sceneCamera?.positionWC) {
+              const carto = Cesium.Cartographic.fromCartesian(sceneCamera.positionWC);
+              refLat = Cesium.Math.toDegrees(carto.latitude);
+              refLon = Cesium.Math.toDegrees(carto.longitude);
+              refAlt = Number(carto.height);
+            }
+
+          const tgtLat = Number(this._targetLat);
+          const tgtLon = Number(this._targetLon);
+          const tgtAlt = Number(this._targetAltM);
+
+          if (Number.isFinite(refLat) && Number.isFinite(refLon) && Number.isFinite(refAlt)
+            && Number.isFinite(tgtLat) && Number.isFinite(tgtLon) && Number.isFinite(tgtAlt)) {
+            const latRad = refLat * Math.PI / 180;
+            const dN = (tgtLat - refLat) * 111319.9;
+            const dE = (tgtLon - refLon) * 111319.9 * Math.cos(latRad);
+            const dU = tgtAlt - refAlt;
+
+            const hdgRad   = acHeading * Math.PI / 180;
+            const pitchRad = acPitch   * Math.PI / 180;
+            const rollRad  = -acRoll   * Math.PI / 180;  // aroll is negative for right-roll
+
+            // World (N/E/U) -> heading frame (rotate around up-axis by -heading).
+            const xH = dN * Math.cos(hdgRad) + dE * Math.sin(hdgRad); // forward
+            const yH = -dN * Math.sin(hdgRad) + dE * Math.cos(hdgRad); // right
+            const zH = dU; // up
+
+            // Remove aircraft pitch (rotate around right-axis by -pitch).
+            const xP = xH * Math.cos(pitchRad) + zH * Math.sin(pitchRad);
+            const yP = yH;
+            const zP = -xH * Math.sin(pitchRad) + zH * Math.cos(pitchRad);
+
+            // Remove aircraft roll (rotate around forward-axis by -roll; right roll positive).
+            const xB = xP;
+            const yB = yP * Math.cos(rollRad) - zP * Math.sin(rollRad);
+            const zB = yP * Math.sin(rollRad) + zP * Math.cos(rollRad);
+
+            const baseYaw   = Math.atan2(yB, xB) * 180 / Math.PI;
+            const basePitch = Math.atan2(zB, Math.hypot(xB, yB)) * 180 / Math.PI;
+
+            finalH = normDeg(baseYaw + this._relYaw);
+            finalP = Math.max(-85, Math.min(85, basePitch + this._relPitch));
+            finalR = 0; // Roll compensation already applied in body-frame transform
+          } else {
+            finalH = normDeg(this._targetWorldH - acHeading + this._relYaw);
+            finalP = Math.max(-85, Math.min(85, this._targetWorldP - acPitch + this._relPitch));
+            finalR = 0; // Roll compensation not needed in fallback mode
+          }
         } else {
-          // _camYaw / _camPitch are already body-relative offsets (0 = forward, -15 = slightly down)
+          // BODY RELATIVE: Moves with the aircraft
           finalH = this._camYaw;
           finalP = this._camPitch;
+          finalR = 0;
         }
 
-        mode1.position = [oPos[0], oPos[1], -1];
-        mode1.orientation = [finalH, finalP, 0]; 
-        mode1.FOV = 0.6;
+        // Apply override
+        mode1.position    = [oPos[0], oPos[1], -1.2]; // Slight forward offset to avoid clipping
+        mode1.orientation = [finalH, finalP, finalR];
+        mode1.FOV         = 0.6;
 
         if (mode1.orientations) {
-          mode1.orientations.current = [finalH, finalP, 0];
-          mode1.orientations.last = [finalH, finalP, 0];
+          mode1.orientations.current = [finalH, finalP, finalR];
+          mode1.orientations.last    = [finalH, finalP, finalR];
         }
 
         if (window.geofs.camera.currentModeName === 'cockpit') window.geofs.camera.update(0);
         viewer.scene.render(viewer.clock.currentTime);
 
+        // Capture
         const vc = viewer.canvas;
-        if (this._snap.width !== vc.width) { this._snap.width = vc.width; this._snap.height = vc.height; }
+        if (this._snap.width !== vc.width) {
+          this._snap.width  = vc.width;
+          this._snap.height = vc.height;
+        }
         this._snap.getContext('2d', { alpha: false }).drawImage(vc, 0, 0);
 
-        mode1.position = oPos;
+        // Restore state
+        mode1.position    = oPos;
         mode1.orientation = oOri;
-        mode1.FOV = oFov;
+        mode1.FOV         = oFov;
+
         if (mode1.orientations) {
           mode1.orientations.current = oCurr;
-          mode1.orientations.last = oLast;
+          mode1.orientations.last    = oLast;
         }
         if (window.geofs.camera.currentModeName === 'cockpit') window.geofs.camera.update(0);
       }
@@ -5053,39 +5123,47 @@
     ctx.setTransform(1, 0, 0, 1, 0, 0);
 
     if (this._snap?.width > 0) {
-      const zoom = fovState === 'NAR' ? 10.0 : 2.5; 
-      const sw = this._snap.width, sh = this._snap.height;
-      const cw = sw / zoom, ch = sh / zoom;
+      const zoom = fovState === 'NAR' ? 10.0 : 2.5;
+      const sw = this._snap.width,  sh = this._snap.height;
+      const cw = sw / zoom,         ch = sh / zoom;
+      
       ctx.drawImage(this._snap, (sw - cw) / 2, (sh - ch) / 2, cw, ch, 0, 0, w, h);
 
-      if (mode !== 'DAY') {
-        const id = ctx.getImageData(0, 0, w, h), d = id.data;
+      // Filters
+      if (imgMode !== 'DAY') {
+        const id = ctx.getImageData(0, 0, w, h);
+        const d  = id.data;
         for (let i = 0; i < d.length; i += 4) {
-          const l = 0.3 * d[i] + 0.59 * d[i+1] + 0.11 * d[i+2];
-          if (mode === 'NIGHT') { d[i]=l*0.1; d[i+1]=l; d[i+2]=l*0.1; }
-          else { d[i]=l; d[i+1]=l; d[i+2]=l; }
+          const l = 0.3 * d[i] + 0.59 * d[i + 1] + 0.11 * d[i + 2];
+          if (imgMode === 'NIGHT') {
+            d[i] = l * 0.1; d[i + 1] = l; d[i + 2] = l * 0.1; // Green
+          } else {
+            d[i] = l; d[i + 1] = l; d[i + 2] = l; // White Hot
+          }
         }
         ctx.putImageData(id, 0, 0);
       }
     }
 
-    const isLocked = this._lockMode === 'TRK' || this._lockMode === 'WPT';
     ctx.strokeStyle = isLocked ? '#ff3300' : '#00ff66';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(w/2 - 20, h/2 - 20, 40, 40);
+    ctx.lineWidth   = 2;
+    
+    ctx.strokeRect(w / 2 - 20, h / 2 - 20, 40, 40);
     ctx.beginPath();
-    ctx.moveTo(w/2, h/2 - 40); ctx.lineTo(w/2, h/2 + 40);
-    ctx.moveTo(w/2 - 40, h/2); ctx.lineTo(w/2 + 40, h/2);
+    ctx.moveTo(w / 2, h / 2 - 40); ctx.lineTo(w / 2, h / 2 + 40);
+    ctx.moveTo(w / 2 - 40, h / 2); ctx.lineTo(w / 2 + 40, h / 2);
     ctx.stroke();
 
     ctx.fillStyle = color;
-    ctx.font = 'bold 20px monospace';
+    ctx.font      = 'bold 20px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(isLocked ? `${this._lockMode} ${this._lockedCallsign}` : 'SLEW', w/2, 60);
+    
+    ctx.fillText(isLocked ? `${this._lockMode}  ${this._lockedCallsign}` : 'SLEW', w / 2, 60);
 
     if (isLocked) {
-      ctx.fillText(`DIST: ${this._lockedDist}NM`, w/2, h - 60);
+      ctx.fillText(`DIST: ${this._lockedDist} NM`, w / 2, h - 60);
     }
+
     ctx.restore();
   }
 }
