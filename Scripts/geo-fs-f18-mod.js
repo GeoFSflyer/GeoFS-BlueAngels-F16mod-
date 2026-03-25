@@ -1485,6 +1485,24 @@
     return Math.max(min, Math.min(max, value));
   }
 
+  // Selects the next/previous flightplan waypoint relative to current selection.
+  function stepSelectedFlightPlanWaypoint(step = 1) {
+    const direction = Number(step) >= 0 ? 1 : -1;
+    const flightPlan = window.geofs?.flightPlan;
+    const waypointArray = flightPlan?.waypointArray;
+
+    if (!Array.isArray(waypointArray) || waypointArray.length === 0) return;
+    if (typeof flightPlan?.selectWaypoint !== 'function') return;
+
+    const currentIndex = waypointArray.findIndex((waypoint) => waypoint?.selected === true);
+    const baseIndex = currentIndex >= 0
+      ? currentIndex
+      : (direction > 0 ? -1 : 0);
+    const nextIndex = (baseIndex + direction + waypointArray.length) % waypointArray.length;
+
+    flightPlan.selectWaypoint(nextIndex);
+  }
+
   // Checks if the currently selected aircraft is the F-18.
   function isF18Active() {
     return (window.geofs?.aircraft?.instance?.id ?? '') === F18_AIRCRAFT_ID;
@@ -3553,6 +3571,7 @@
               values: ['', 'FRIEND', 'CIVILIAN', 'UNKNOWN', 'FOO'],
               stateIndex: 0,
               managedExternally: true,
+              show() { return getOption('NAV', 'DISPLAY', 'HSI') === 'MAP'; },
               onClick: () => {
                 getMapModule().cycleSelectedTrafficMark();
               }
@@ -3564,6 +3583,7 @@
               values: ['', 'FRIEND', 'CIVILIAN', 'UNKNOWN', 'FOO'],
               stateIndex: 0,
               managedExternally: true,
+              show() { return getOption('NAV', 'DISPLAY', 'HSI') === 'MAP'; },
               onClick: () => {
                 getMapModule().cycleShowFilter();
               }
@@ -3578,7 +3598,34 @@
               onClick: () => {
                 getMapModule().cycleViewMode();
               }
-            }
+            },
+            { key: 'N/A', label: '', states: [''], stateIndex: 0 },
+            {
+              key: 'WPSEL',
+              label: '↑',
+              states: [''],
+              stateIndex: 0,
+              minimal: true,
+              managedExternally: true,
+              combinedGroupLabel: 'WP',
+              show() { return getOption('NAV', 'DISPLAY', 'HSI') === 'HSI'; },
+              onClick: () => {
+                stepSelectedFlightPlanWaypoint(1);
+              }
+            },
+            {
+              key: 'WPSEL',
+              label: '↓',
+              states: [''],
+              stateIndex: 0,
+              minimal: true,
+              managedExternally: true,
+              combinedGroupLabel: 'WP',
+              show() { return getOption('NAV', 'DISPLAY', 'HSI') === 'HSI'; },
+              onClick: () => {
+                stepSelectedFlightPlanWaypoint(-1);
+              }
+            },
           ],
           rightButtons: [
             {
@@ -5740,9 +5787,13 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
           if (isMinimalGroup) {
             const entry = group.entries?.[0];
             const button = entry?.button;
-            const displayValue = (Array.isArray(button?.values) && button.values.length)
+            const rawDisplayValue = (Array.isArray(button?.values) && button.values.length)
               ? getOptionValue(page?.title ?? 'PAGE', button?.key || button?.label || '', '')
               : this.getStateLabel(button, page, entry?.actualIndex ?? 0, side);
+            const hasDisplayValue = String(rawDisplayValue ?? '').trim().length > 0;
+            const displayValue = hasDisplayValue
+              ? rawDisplayValue
+              : (button?.combinedGroupLabel ?? button?.key ?? '');
 
             const yTop = startSlot.y + startSlot.h * 0.22;
             const yBottom = endSlot.y + endSlot.h * 0.78;
