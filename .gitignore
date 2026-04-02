@@ -1,8 +1,5 @@
 Scripts/base
 
-# Build output
-build/
-
 # Node modules
 node_modules/
 
