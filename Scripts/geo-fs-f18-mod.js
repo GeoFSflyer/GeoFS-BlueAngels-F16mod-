@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoFS F-18 Addon
 // @namespace    https://github.com/ArjanKw/GeoFS-BlueAngels/
-// @version      1.6.1
+// @version      1.7.0
 // @description  Improves the cockpit with a new HUD and custom MFDs, adjustable seat height and more.
 // @match        https://www.geo-fs.com/*
 // @match        https://geo-fs.com/*
@@ -12,15 +12,12 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.6.1';
+  const VERSION = '1.7.0';
   const F18_AIRCRAFT_ID = '27';
 
   const FLIGHT_RECORDER_MIN_VERSION = '1.2.0';
   const RAD_TO_DEG = 180 / Math.PI;
   const CAMERA_TO_HUD_DISTANCE_M = 0.92;
-  const PROBE_OPEN_BUTTON_ID = 'f18-probe-open';
-  const PROBE_LABEL_BUTTON_ID = 'f18-probe-label';
-  const PROBE_CLOSE_BUTTON_ID = 'f18-probe-close';
   const F18_OPTIONS_STORAGE_KEY = 'F18Options';
   const F18_WPN_STATE_STORAGE_KEY = 'F18WpnState';
   const DEFAULT_COLOR = '#00ff00';
@@ -560,7 +557,6 @@
             }
         }
     },
-
     };
 
     static STATION_RENDER_ORDER = [
@@ -605,117 +601,30 @@
   };
 
   function parseSemver(version) {
-    const value = String(version ?? '').trim();
-    const match = value.match(/(\d+)\.(\d+)\.(\d+)/);
-    if (!match) return null;
+    const [major, minor, patch] = version.split('.').map(Number);
     return {
-      major: Number(match[1]),
-      minor: Number(match[2]),
-      patch: Number(match[3])
+      major,
+      minor,
+      patch
     };
   }
 
   function isSemverAtLeast(version, minimumVersion) {
     const a = parseSemver(version);
     const b = parseSemver(minimumVersion);
-    if (!a || !b) return false;
-
     if (a.major !== b.major) return a.major > b.major;
     if (a.minor !== b.minor) return a.minor > b.minor;
     return a.patch >= b.patch;
   }
 
-  function getFlightRecorderApi() {
-    return window.FlightRecorder?.api ?? null;
-  }
-
-  function getFlightRecorderVersion(api = getFlightRecorderApi()) {
-    if (!api || typeof api.getVersion !== 'function') return null;
-    try {
-      return String(api.getVersion() ?? '').trim() || null;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  function isFlightRecorderCompatible(api = getFlightRecorderApi()) {
-    if (!api) return false;
-    const version = getFlightRecorderVersion(api);
-    if (!version) return false;
-    return isSemverAtLeast(version, FLIGHT_RECORDER_MIN_VERSION);
-  }
-
-  function normalizeFlightRecorderRecordingState(rawState) {
-    const value = String(rawState ?? '').trim().toUpperCase();
-    if (value.includes('RECORD')) return 'RECORDING';
-    if (value.includes('STOP')) return 'STOPPED';
-    if (value.includes('OFF') || value.includes('IDLE') || value.includes('NONE')) return 'OFF';
-    return 'OFF';
-  }
-
-  function normalizeFlightRecorderPlaybackState(rawState) {
-    const value = String(rawState ?? '').trim().toUpperCase();
-    if (value.includes('START') || value.includes('PLAY')) return 'STARTED';
-    if (value.includes('PAUSE')) return 'PAUSED';
-    if (value.includes('STOP') || value.includes('OFF') || value.includes('IDLE') || value.includes('NONE')) return 'STOPPED';
-    return 'STOPPED';
-  }
-
-  function getNestedStateValue(raw) {
-    if (typeof raw === 'string') return raw;
-    if (raw && typeof raw === 'object') {
-      if (typeof raw.state === 'string') return raw.state;
-      if (typeof raw.status === 'string') return raw.status;
-      if (typeof raw.mode === 'string') return raw.mode;
-      if (typeof raw.value === 'string') return raw.value;
-    }
-    return null;
-  }
-
-  function getFlightRecorderRecordingState(api = getFlightRecorderApi()) {
-    if (!isFlightRecorderCompatible(api)) return 'OFF';
-
-    let raw = null;
-    try {
-      raw = api?.recording?.getState?.();
-    } catch (e) {
-      raw = null;
-    }
-
-    if (raw && typeof raw === 'object' && typeof raw.recording === 'boolean') {
-      return raw.recording ? 'RECORDING' : 'STOPPED';
-    }
-
-    const nested = getNestedStateValue(raw);
-    return normalizeFlightRecorderRecordingState(nested);
-  }
-
-  function getFlightRecorderPlaybackState(api = getFlightRecorderApi()) {
-    if (!isFlightRecorderCompatible(api)) return 'STOPPED';
-
-    let raw = null;
-    try {
-      raw = api?.playback?.getState?.();
-    } catch (e) {
-      raw = null;
-    }
-
-    if (raw && typeof raw === 'object' && typeof raw.playing === 'boolean') {
-      if (raw.playing) return 'STARTED';
-      if (raw.paused === true) return 'PAUSED';
-      return 'STOPPED';
-    }
-
-    const nested = getNestedStateValue(raw);
-    return normalizeFlightRecorderPlaybackState(nested);
+  function isFlightRecorderCompatible() {
+    return isSemverAtLeast(window.FlightRecorder?.api.getVersion() ?? '0.0.0', FLIGHT_RECORDER_MIN_VERSION);
   }
 
   function getFlightRecorderMfdStatus() {
-    const api = getFlightRecorderApi();
-    const installed = Boolean(api);
-    const version = getFlightRecorderVersion(api);
-    const compatible = isFlightRecorderCompatible(api);
-
+    const installed = Boolean(window.FlightRecorder?.api);
+    const version = window.FlightRecorder?.api.getVersion();
+    const compatible = isFlightRecorderCompatible();
     if (!installed || !compatible) {
       return {
         installed,
@@ -731,48 +640,40 @@
       installed,
       compatible: true,
       version,
-      recordingState: getFlightRecorderRecordingState(api),
-      playbackState: getFlightRecorderPlaybackState(api),
+      recordingState: window.FlightRecorder?.api.recording.getState().state,
+      playbackState: window.FlightRecorder?.api.playback.getState().state,
       message: ''
     };
   }
 
   function toggleFlightRecorderRecordingFromMfd() {
-    const api = getFlightRecorderApi();
-    if (!isFlightRecorderCompatible(api)) return false;
+    if (!isFlightRecorderCompatible()) return false;
 
-    const currentState = getFlightRecorderRecordingState(api);
-    try {
-      if (currentState === 'RECORDING') {
-        api?.recording?.stop?.();
-      } else {
-        api?.recording?.start?.();
-      }
-      return true;
-    } catch (e) {
-      return false;
+    const currentState = window.FlightRecorder?.api.recording.getState().state;
+    if (currentState === 'RECORDING') {
+      window.FlightRecorder?.api.recording.stop();
+    } else {
+      window.FlightRecorder?.api.recording.start();
     }
+    return true;
   }
 
   function controlFlightRecorderPlaybackFromMfd(action) {
-    const api = getFlightRecorderApi();
-    if (!isFlightRecorderCompatible(api)) return false;
+    if (!isFlightRecorderCompatible()) return false;
 
-    const command = String(action ?? '').trim().toUpperCase();
-    try {
-      if (command === 'START') {
-        api?.playback?.start?.();
-      } else if (command === 'PAUSE') {
-        api?.playback?.pause?.();
-      } else if (command === 'STOP') {
-        api?.playback?.stop?.();
-      } else {
-        return false;
-      }
+    if (action === 'START') {
+      window.FlightRecorder?.api.playback.start();
       return true;
-    } catch (e) {
-      return false;
     }
+    if (action === 'PAUSE') {
+      window.FlightRecorder?.api.playback.pause();
+      return true;
+    }
+    if (action === 'STOP') {
+      window.FlightRecorder?.api.playback.stop();
+      return true;
+    }
+    return false;
   }
 
   function deepCloneJson(value) {
@@ -781,7 +682,10 @@
 
   function getWpnModeFromOptions() {
     const mode = getOption('WPN', 'MODE', 'NAV');
-    return mode === 'A/A' || mode === 'A/G' || mode === 'NAV' || mode === 'JETTISON' ? mode : 'NAV';
+    if (mode === 'A/A') return 'A/A';
+    if (mode === 'A/G') return 'A/G';
+    if (mode === 'JETTISON') return 'JETTISON';
+    return 'NAV';
   }
 
   function isModeCompatibleStation(mode, stationName, stationData) {
@@ -792,96 +696,69 @@
       return mode !== 'NAV';
     }
     if (mode === 'NAV') return false;
-    const stationType = stationData?.type;
+    const stationType = stationData.type;
     if (!stationType) return true;
     return stationType === mode;
   }
 
   function saveWpnStateToStorage() {
-    try {
-      const payload = {
-        config: getOption('WPN', 'CONFIG', 'A/A'),
-        loadout: wpnCurrentLoadout,
-        selected: wpnSelectedWeaponByMode
-      };
-      window.localStorage?.setItem?.(F18_WPN_STATE_STORAGE_KEY, JSON.stringify(payload));
-    } catch (e) {
-      // Ignore storage write issues.
-    }
+    const payload = {
+      config: getOption('WPN', 'CONFIG', 'A/A'),
+      loadout: wpnCurrentLoadout,
+      selected: wpnSelectedWeaponByMode
+    };
+    window.localStorage.setItem(F18_WPN_STATE_STORAGE_KEY, JSON.stringify(payload));
   }
 
   function loadWpnStateFromStorage() {
-      const raw = window.localStorage?.getItem?.(F18_WPN_STATE_STORAGE_KEY);
-      if (!raw) return;
+    const raw = window.localStorage.getItem(F18_WPN_STATE_STORAGE_KEY);
+    if (!raw) return;
 
-      const parsed = JSON.parse(raw);
-      const storedLoadout = parsed?.loadout;
-      if (!storedLoadout || typeof storedLoadout !== 'object') return;
+    const parsed = JSON.parse(raw);
+    const storedLoadout = parsed.loadout;
+    const baseTemplate = deepCloneJson(wpnLoadoutTemplates['A/A']);
 
-      const baseTemplate = deepCloneJson(
-        wpnLoadoutTemplates?.['A/A']
-        ?? Object.values(wpnLoadoutTemplates ?? {})[0]
-        ?? {}
-      );
-
-      const modeKeys = Object.keys(wpnLoadoutTemplates ?? {});
-      const looksLikeLegacyByMode = modeKeys.some((k) => storedLoadout?.[k] && typeof storedLoadout[k] === 'object');
-      const sourceLoadout = looksLikeLegacyByMode
-        ? (storedLoadout?.[parsed?.config] ?? storedLoadout?.['A/A'] ?? storedLoadout?.[modeKeys[0]])
-        : storedLoadout;
-
-      if (sourceLoadout && typeof sourceLoadout === 'object') {
-        baseTemplate.gun = Number.isFinite(sourceLoadout?.gun) ? sourceLoadout.gun : baseTemplate.gun;
-        for (const sideKey of ['left', 'right']) {
-          for (const stationKey of Object.keys(baseTemplate?.[sideKey] ?? {})) {
-            const stationTemplate = baseTemplate[sideKey][stationKey];
-            const stationStored = sourceLoadout?.[sideKey]?.[stationKey];
-            if (!stationStored || typeof stationStored !== 'object') continue;
-
-            stationTemplate.quantity = Number.isFinite(stationStored.quantity)
-              ? stationStored.quantity
-              : stationTemplate.quantity;
-            if (typeof stationStored.load === 'string') stationTemplate.load = stationStored.load;
-            if (typeof stationStored.display === 'string') stationTemplate.display = stationStored.display;
-            if (typeof stationStored.type === 'string') stationTemplate.type = stationStored.type;
-          }
-        }
+    baseTemplate.gun = storedLoadout.gun;
+    for (const sideKey of ['left', 'right']) {
+      for (const stationKey of Object.keys(baseTemplate[sideKey])) {
+        const stationTemplate = baseTemplate[sideKey][stationKey];
+        const stationStored = storedLoadout[sideKey][stationKey];
+        stationTemplate.quantity = stationStored.quantity;
+        stationTemplate.load = stationStored.load;
+        stationTemplate.display = stationStored.display;
+        stationTemplate.type = stationStored.type;
       }
+    }
 
-      wpnCurrentLoadout = baseTemplate;
+    wpnCurrentLoadout = baseTemplate;
 
-      const storedSelected = parsed?.selected;
-      if (storedSelected && typeof storedSelected === 'object') {
-        for (const key of Object.keys(wpnSelectedWeaponByMode)) {
-          delete wpnSelectedWeaponByMode[key];
-        }
-        for (const modeKey of Object.keys(storedSelected)) {
-          const selected = storedSelected[modeKey];
-          if (!selected || typeof selected !== 'object' || !selected.station) continue;
-          wpnSelectedWeaponByMode[modeKey] = {
-            side: selected.side,
-            station: selected.station
-          };
-        }
-      }
+    const storedSelected = parsed.selected;
+    for (const key of Object.keys(wpnSelectedWeaponByMode)) {
+      delete wpnSelectedWeaponByMode[key];
+    }
+    for (const modeKey of Object.keys(storedSelected)) {
+      const selected = storedSelected[modeKey];
+      wpnSelectedWeaponByMode[modeKey] = {
+        side: selected.side,
+        station: selected.station
+      };
+    }
 
-      if (typeof parsed?.config === 'string') {
-        wpnRearmState.config = parsed.config;
-      }
+    wpnRearmState.config = parsed.config;
   }
 
   loadWpnStateFromStorage();
 
   function resolveWpnTemplateConfig(config) {
-    if (config && wpnLoadoutTemplates?.[config]) return config;
-    if (wpnLoadoutTemplates?.['A/A']) return 'A/A';
-    const first = Object.keys(wpnLoadoutTemplates ?? {})[0];
-    return first ?? null;
+    if (wpnLoadoutTemplates[config]) return config;
+    if (wpnLoadoutTemplates['A/A']) return 'A/A';
+    const first = Object.keys(wpnLoadoutTemplates)[0];
+    return first;
   }
 
   function getRearmTemplateByMode(config) {
     const resolvedConfig = resolveWpnTemplateConfig(config);
-    const sourceTemplate = resolvedConfig ? wpnLoadoutTemplates?.[resolvedConfig] : null;
+    const sourceTemplate = wpnLoadoutTemplates[resolvedConfig];
     if (!sourceTemplate) return null;
 
     return JSON.parse(JSON.stringify(sourceTemplate));
@@ -892,10 +769,9 @@
 
     wpnCurrentLoadout.gun = 0;
     for (const sideKey of ['left', 'right']) {
-      const sideStations = wpnCurrentLoadout?.[sideKey];
-      if (!sideStations || typeof sideStations !== 'object') continue;
+      const sideStations = wpnCurrentLoadout[sideKey];
       for (const stationKey of Object.keys(sideStations)) {
-        if (!Number.isFinite(sideStations[stationKey]?.quantity)) continue;
+        if (!Number.isFinite(sideStations[stationKey].quantity)) continue;
         sideStations[stationKey].quantity = 0;
       }
     }
@@ -905,21 +781,21 @@
     const p = Math.max(0, Math.min(1, progress));
     if (!wpnCurrentLoadout || !targetByMode) return;
 
-    wpnCurrentLoadout.gun = Math.floor((Number.isFinite(targetByMode.gun) ? targetByMode.gun : 0) * p);
+    wpnCurrentLoadout.gun = Math.floor(targetByMode.gun * p);
 
     for (const sideKey of ['left', 'right']) {
       wpnCurrentLoadout[sideKey] = wpnCurrentLoadout[sideKey] ?? {};
-      const targetSide = targetByMode?.[sideKey] ?? {};
+      const targetSide = targetByMode[sideKey] ?? {};
 
       for (const stationKey of Object.keys(targetSide)) {
-        const targetStation = targetSide?.[stationKey] ?? {};
+        const targetStation = targetSide[stationKey] ?? {};
         wpnCurrentLoadout[sideKey][stationKey] = wpnCurrentLoadout[sideKey][stationKey] ?? {};
 
-        wpnCurrentLoadout[sideKey][stationKey].load = targetStation?.load;
-        wpnCurrentLoadout[sideKey][stationKey].display = targetStation?.display;
-        wpnCurrentLoadout[sideKey][stationKey].type = targetStation?.type;
+        wpnCurrentLoadout[sideKey][stationKey].load = targetStation.load;
+        wpnCurrentLoadout[sideKey][stationKey].display = targetStation.display;
+        wpnCurrentLoadout[sideKey][stationKey].type = targetStation.type;
 
-        const targetQuantity = Number.isFinite(targetStation?.quantity) ? targetStation.quantity : 0;
+        const targetQuantity = Number.isFinite(targetStation.quantity) ? targetStation.quantity : 0;
         wpnCurrentLoadout[sideKey][stationKey].quantity = Math.floor(targetQuantity * p);
       }
     }
@@ -933,7 +809,7 @@
     if (!resolvedConfig || !targetByMode) return false;
 
     zeroCurrentWpnLoadout();
-    for (const modeKey of Object.keys(wpnSelectedWeaponByMode ?? {})) {
+    for (const modeKey of Object.keys(wpnSelectedWeaponByMode)) {
       delete wpnSelectedWeaponByMode[modeKey];
     }
 
@@ -998,19 +874,7 @@
 
     const mode = wpnGunFireState.mode;
     const modeLoadout = getWpnModeLoadout(mode);
-    let storedPayload = null;
-    try {
-      const raw = window.localStorage?.getItem?.(F18_WPN_STATE_STORAGE_KEY);
-      storedPayload = raw ? JSON.parse(raw) : null;
-    } catch (e) {
-      storedPayload = null;
-    }
-
-    const storedGun = Number.isFinite(storedPayload?.loadout?.gun)
-      ? storedPayload.loadout.gun
-      : null;
-    const memoryGun = Number.isFinite(modeLoadout?.gun) ? modeLoadout.gun : 0;
-    const currentGun = storedGun != null ? storedGun : memoryGun;
+    const currentGun = modeLoadout.gun;
 
     if (currentGun <= 0) {
       stopWpnGunFireTimer();
@@ -1019,19 +883,8 @@
       return;
     }
 
-    const updatedGun = Math.max(0, currentGun - 1);
-    if (modeLoadout) {
-      modeLoadout.gun = updatedGun;
-    }
-
-    try {
-      const payloadToStore = (storedPayload && typeof storedPayload === 'object') ? storedPayload : {};
-      payloadToStore.loadout = (payloadToStore.loadout && typeof payloadToStore.loadout === 'object') ? payloadToStore.loadout : {};
-      payloadToStore.loadout.gun = updatedGun;
-      window.localStorage?.setItem?.(F18_WPN_STATE_STORAGE_KEY, JSON.stringify(payloadToStore));
-    } catch (e) {
-      saveWpnStateToStorage();
-    }
+    const updatedGun = currentGun - 1;
+    modeLoadout.gun = updatedGun;
 
     wpnGunFireState.roundsRemainingInBurst -= 1;
 
@@ -1044,6 +897,7 @@
 
     if (wpnGunFireState.roundsRemainingInBurst <= 0) {
       stopWpnGunFireTimer();
+      saveWpnStateToStorage();
       return;
     }
 
@@ -1336,28 +1190,18 @@
   }
 
   function readOptions() {
-    if (optionStoreCache && typeof optionStoreCache === 'object' && !Array.isArray(optionStoreCache)) {
+    if (optionStoreCache) {
       return optionStoreCache;
     }
 
-    try {
-      const raw = window.localStorage?.getItem?.(F18_OPTIONS_STORAGE_KEY);
-      if (!raw) {
-        optionStoreCache = {};
-        return optionStoreCache;
-      }
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        optionStoreCache = {};
-        return optionStoreCache;
-      }
-
-      optionStoreCache = parsed;
-      return optionStoreCache;
-    } catch (e) {
+    const raw = window.localStorage.getItem(F18_OPTIONS_STORAGE_KEY);
+    if (!raw) {
       optionStoreCache = {};
       return optionStoreCache;
     }
+
+    optionStoreCache = JSON.parse(raw);
+    return optionStoreCache;
   }
 
   function getOption(pageTitle, buttonKey, fallback = null) {
@@ -1367,15 +1211,10 @@
   }
 
   function writeOptions(options) {
-    const payload = (options && typeof options === 'object' && !Array.isArray(options)) ? options : {};
+    const payload = options ?? {};
     optionStoreCache = payload;
-
-    try {
-      window.localStorage?.setItem?.(F18_OPTIONS_STORAGE_KEY, JSON.stringify(payload));
-      return true;
-    } catch (e) {
-      return false;
-    }
+    window.localStorage.setItem(F18_OPTIONS_STORAGE_KEY, JSON.stringify(payload));
+    return true;
   }
 
   function setOption(pageTitle, buttonKey, value) {
@@ -1409,7 +1248,7 @@
 
     let stateIndex = -1;
     if (selectedState != null && Array.isArray(button.states)) {
-      stateIndex = button.states.findIndex((s) => String(s).toUpperCase() === String(selectedState).toUpperCase());
+      stateIndex = button.states.findIndex((s) => s === selectedState);
     }
 
     if (stateIndex < 0 && Number.isInteger(button.stateIndex)) {
@@ -1656,23 +1495,25 @@
       }
     }
 
-    normalizeType(type) {
-      const value = String(type ?? '').trim().toUpperCase();
-      return this.types.includes(value) ? value : 'PROC';
+    getTypeList(type) {
+      const list = this.checklistsByType[type];
+      if (!Array.isArray(list)) {
+        throw new Error(`Unsupported checklist type: ${type}`);
+      }
+      return list;
     }
 
-    normalizeItemProgress(checklist) {
-      if (!checklist) return [];
-      const items = Array.isArray(checklist.items) ? checklist.items : [];
-      const raw = Array.isArray(checklist.itemCompleted) ? checklist.itemCompleted : [];
-      checklist.itemCompleted = items.map((_, idx) => Boolean(raw[idx]));
-      return checklist.itemCompleted;
+    ensureItemStates(checklist) {
+      const states = checklist.itemCompleted;
+      if (!Array.isArray(states) || states.length !== checklist.items.length) {
+        throw new Error('Checklist itemCompleted must be an array matching items length');
+      }
+      return states;
     }
 
     addChecklist(definition) {
-      const type = this.normalizeType(definition?.type);
-      const list = this.checklistsByType[type];
-      if (!Array.isArray(list)) return false;
+      const type = definition.type;
+      const list = this.getTypeList(type);
 
       const title = String(definition?.title ?? '').trim();
       if (!title) return false;
@@ -1687,11 +1528,13 @@
         type,
         title,
         items,
-        itemCompleted: Array.isArray(definition?.itemCompleted) ? definition.itemCompleted : [],
+        itemCompleted: Array.isArray(definition?.itemCompleted)
+          ? definition.itemCompleted.slice(0, items.length)
+          : new Array(items.length).fill(false),
         completed: Boolean(definition?.completed)
       };
 
-      this.normalizeItemProgress(checklist);
+      this.ensureItemStates(checklist);
       if (checklist.completed && checklist.itemCompleted.length) {
         checklist.itemCompleted = checklist.itemCompleted.map(() => true);
       }
@@ -1704,78 +1547,70 @@
     }
 
     getChecklists(type) {
-      const normalized = this.normalizeType(type);
-      return this.checklistsByType[normalized] ?? [];
+      return this.getTypeList(type);
     }
 
     getCurrentIndex(type) {
-      const normalized = this.normalizeType(type);
-      const list = this.getChecklists(normalized);
+      const list = this.getChecklists(type);
       if (!list.length) return 0;
-      const idx = Number(this.currentIndexByType[normalized]);
+      const idx = Number(this.currentIndexByType[type]);
       if (!Number.isFinite(idx)) return 0;
       return Math.max(0, Math.min(list.length - 1, Math.floor(idx)));
     }
 
     setCurrentIndex(type, index) {
-      const normalized = this.normalizeType(type);
-      const list = this.getChecklists(normalized);
+      const list = this.getChecklists(type);
       if (!list.length) {
-        this.currentIndexByType[normalized] = 0;
+        this.currentIndexByType[type] = 0;
         return 0;
       }
       const idx = Number(index);
       const clamped = Number.isFinite(idx)
         ? Math.max(0, Math.min(list.length - 1, Math.floor(idx)))
         : 0;
-      this.currentIndexByType[normalized] = clamped;
+      this.currentIndexByType[type] = clamped;
       return clamped;
     }
 
     nextChecklist(type) {
-      const normalized = this.normalizeType(type);
-      const list = this.getChecklists(normalized);
+      const list = this.getChecklists(type);
       if (!list.length) return null;
-      const next = (this.getCurrentIndex(normalized) + 1) % list.length;
-      this.currentIndexByType[normalized] = next;
+      const next = (this.getCurrentIndex(type) + 1) % list.length;
+      this.currentIndexByType[type] = next;
       return list[next];
     }
 
     prevChecklist(type) {
-      const normalized = this.normalizeType(type);
-      const list = this.getChecklists(normalized);
+      const list = this.getChecklists(type);
       if (!list.length) return null;
-      const next = (this.getCurrentIndex(normalized) - 1 + list.length) % list.length;
-      this.currentIndexByType[normalized] = next;
+      const next = (this.getCurrentIndex(type) - 1 + list.length) % list.length;
+      this.currentIndexByType[type] = next;
       return list[next];
     }
 
     getCurrentChecklist(type) {
-      const normalized = this.normalizeType(type);
-      const list = this.getChecklists(normalized);
+      const list = this.getChecklists(type);
       if (!list.length) return null;
-      return list[this.getCurrentIndex(normalized)] ?? null;
+      return list[this.getCurrentIndex(type)] ?? null;
     }
 
     hasNextChecklist(type) {
-      const normalized = this.normalizeType(type);
-      const list = this.getChecklists(normalized);
+      const list = this.getChecklists(type);
       if (!list.length) return false;
-      return this.getCurrentIndex(normalized) < (list.length - 1);
+      return this.getCurrentIndex(type) < (list.length - 1);
     }
 
     nextChecklistNoWrap(type) {
-      const normalized = this.normalizeType(type);
-      const list = this.getChecklists(normalized);
+      const list = this.getChecklists(type);
       if (!list.length) return null;
 
-      const current = this.getCurrentIndex(normalized);
+      const current = this.getCurrentIndex(type);
       if (current >= list.length - 1) {
         return list[current] ?? null;
       }
 
       const next = current + 1;
-      this.currentIndexByType[normalized] = next;
+      this.currentIndexByType[type] = next;
       return list[next] ?? null;
     }
 
@@ -1785,7 +1620,7 @@
       const nextCompleted = Boolean(completed);
       checklist.completed = nextCompleted;
 
-      const states = this.normalizeItemProgress(checklist);
+      const states = this.ensureItemStates(checklist);
       for (let i = 0; i < states.length; i++) {
         states[i] = nextCompleted;
       }
@@ -1802,14 +1637,14 @@
     getCurrentItemCompleted(type) {
       const checklist = this.getCurrentChecklist(type);
       if (!checklist) return [];
-      return this.normalizeItemProgress(checklist);
+      return this.ensureItemStates(checklist);
     }
 
     markNextCurrentItem(type) {
       const checklist = this.getCurrentChecklist(type);
       if (!checklist) return false;
 
-      const states = this.normalizeItemProgress(checklist);
+      const states = this.ensureItemStates(checklist);
       const nextItemIndex = states.findIndex((value) => !value);
       if (nextItemIndex < 0) {
         if (states.length) {
@@ -1828,13 +1663,12 @@
     }
 
     resetType(type) {
-      const normalized = this.normalizeType(type);
-      const list = this.getChecklists(normalized);
+      const list = this.getChecklists(type);
       for (const checklist of list) {
         checklist.completed = false;
-        this.normalizeItemProgress(checklist).fill(false);
+        this.ensureItemStates(checklist).fill(false);
       }
-      this.currentIndexByType[normalized] = 0;
+      this.currentIndexByType[type] = 0;
       return true;
     }
   }
@@ -2108,19 +1942,7 @@
 
     // Clamps a raw range to the nearest configured NAV range value.
     normalizeRangeNm(rawRange) {
-      const numeric = Number(rawRange);
-      if (!Number.isFinite(numeric)) return 40;
-
-      let best = MapModule.RANGE_OPTIONS_NM[0];
-      let bestDiff = Math.abs(best - numeric);
-      for (const candidate of MapModule.RANGE_OPTIONS_NM) {
-        const diff = Math.abs(candidate - numeric);
-        if (diff < bestDiff) {
-          best = candidate;
-          bestDiff = diff;
-        }
-      }
-      return best;
+      return Number(rawRange);
     }
 
     // Stores a normalized NAV range value.
@@ -2147,9 +1969,7 @@
 
     // Normalizes one NAV MAP view mode.
     normalizeViewMode(value) {
-      const token = String(value ?? '').trim().toUpperCase();
-      if (MapModule.VIEW_MODES.includes(token)) return token;
-      return 'A/C F/W';
+      return value;
     }
 
     // Gets currently active NAV MAP view mode.
@@ -2362,16 +2182,12 @@
 
     // Builds a deterministic traffic key.
     getTrafficKey(contact) {
-      return String(contact?.uid || contact?.callsign || `${contact?.lat ?? ''}:${contact?.lon ?? ''}`).trim().toUpperCase();
+      return String(contact?.uid || contact?.callsign || `${contact?.lat ?? ''}:${contact?.lon ?? ''}`);
     }
 
     // Normalizes one mark/show token.
     normalizeMarkToken(value, fallback = '') {
-      const token = String(value ?? '').trim().toUpperCase();
-      if (!token) return fallback;
-      if (MapModule.MARK_STATES.includes(token)) return token;
-      if (MapModule.SHOW_STATES.includes(token)) return token;
-      return fallback;
+      return value || fallback;
     }
 
     // Returns a deterministic contact number for one aircraft.
@@ -2413,14 +2229,14 @@
 
     // Returns mark state for a contact uid.
     getTrafficMark(uid) {
-      const key = String(uid ?? '').trim();
+      const key = String(uid ?? '');
       if (!key) return '';
       return this.normalizeMarkToken(this.trafficMarksByUid[key], '');
     }
 
     // Sets mark state for one contact uid.
     setTrafficMark(uid, markState) {
-      const key = String(uid ?? '').trim();
+      const key = String(uid ?? '');
       if (!key) return '';
       const normalized = this.normalizeMarkToken(markState, '');
       if (!normalized) {
@@ -2487,8 +2303,8 @@
     // Returns true when one traffic contact matches current show filter.
     // Optionally keeps currently selected traffic visible independent of filter.
     matchesShowFilter(contact, includeSelected = true) {
-      const uid = String(contact?.uid ?? '').trim();
-      if (includeSelected && uid && uid === String(this.selectedTrafficUid ?? '').trim()) {
+      const uid = String(contact?.uid ?? '');
+      if (includeSelected && uid && uid === String(this.selectedTrafficUid ?? '')) {
         return true;
       }
 
@@ -2686,13 +2502,6 @@
       this.multiplayerRef = null;
     }
 
-    // Normalizes a callsign filter token and strips optional square brackets.
-    normalizeFilterToken(value) {
-      const raw = String(value ?? '').trim();
-      if (!raw) return '';
-      return raw.replace(/^\[+|\]+$/g, '').trim().toUpperCase();
-    }
-
     // Returns the configured communication profile.
     getProfile() {
       return {
@@ -2704,23 +2513,20 @@
 
     // Stores the configured communication group token.
     setGroup(value) {
-      const normalized = this.normalizeFilterToken(value);
-      setOption('COMM', 'GROUP', normalized);
-      return normalized;
+      setOption('COMM', 'GROUP', value);
+      return value;
     }
 
     // Stores the configured communication flight token.
     setFlight(value) {
-      const normalized = this.normalizeFilterToken(value);
-      setOption('COMM', 'FLIGHT', normalized);
-      return normalized;
+      setOption('COMM', 'FLIGHT', value);
+      return value;
     }
 
     // Stores the configured wingman token.
     setWingman(value) {
-      const normalized = this.normalizeFilterToken(value);
-      setOption('COMM', 'WINGMAN', normalized);
-      return normalized;
+      setOption('COMM', 'WINGMAN', value);
+      return value;
     }
 
     // Stores multiple communication profile filters in one call.
@@ -2734,78 +2540,44 @@
 
     // Reads the configured voice synthesis language.
     getVoiceLanguage() {
-      return String(getOption('COMM', 'VOICE_LANG', 'en-US') ?? 'en-US').trim() || 'en-US';
+      return String(getOption('COMM', 'VOICE_LANG', 'en-US') ?? 'en-US') || 'en-US';
     }
 
     // Stores the voice synthesis language.
     setVoiceLanguage(language) {
-      const next = String(language ?? '').trim() || 'en-US';
-      setOption('COMM', 'VOICE_LANG', next);
-      return next;
-    }
-
-    // Returns the nearest supported speech rate.
-    normalizeVoiceRate(value) {
-      const numeric = Number(value);
-      if (!Number.isFinite(numeric)) return 1;
-
-      let best = CommunicationModule.VOICE_RATE_OPTIONS[0];
-      let bestDiff = Math.abs(best - numeric);
-      for (const candidate of CommunicationModule.VOICE_RATE_OPTIONS) {
-        const diff = Math.abs(candidate - numeric);
-        if (diff < bestDiff) {
-          best = candidate;
-          bestDiff = diff;
-        }
-      }
-      return best;
+      setOption('COMM', 'VOICE_LANG', language);
+      return language;
     }
 
     // Reads the configured speech rate.
     getVoiceRate() {
-      const raw = getOptionValue('COMM', 'RATE', 1.5);
-      return this.normalizeVoiceRate(raw);
+      return Number(getOptionValue('COMM', 'RATE', 1.5));
     }
 
     // Stores the configured speech rate.
     setVoiceRate(rate) {
-      const normalized = this.normalizeVoiceRate(rate);
-      setOption('COMM', 'RATE', String(normalized));
-      return normalized;
+      setOption('COMM', 'RATE', String(rate));
+      return rate;
     }
 
     // Decodes URL-encoded multiplayer chat text.
     decodeChatText(value) {
-      const raw = String(value ?? '');
-      if (!raw) return '';
-      try {
-        return decodeURIComponent(raw.replace(/\+/g, '%20'));
-      } catch {
-        return raw;
-      }
+      return decodeURIComponent(value.replace(/\+/g, '%20'));
     }
 
     // Extracts the spoken callsign by removing all bracketed tags.
     getSpokenCallsign(callsign) {
-      const raw = String(callsign ?? '').trim();
-      if (!raw) return 'UNKNOWN';
-
-      const withoutTags = raw.replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim();
+      const withoutTags = callsign.replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim();
       return withoutTags || 'UNKNOWN';
     }
 
     // Resolves profile match flags for one callsign.
     resolveMatches(callsign) {
-      const cs = String(callsign ?? '');
-      const csUpper = cs.toUpperCase();
       const profile = this.getProfile();
-      const groupToken = this.normalizeFilterToken(profile.group);
-      const flightToken = this.normalizeFilterToken(profile.flight);
-      const wingmanToken = this.normalizeFilterToken(profile.wingman);
 
-      const groupMatch = Boolean(groupToken && csUpper.includes(`[${groupToken}]`));
-      const flightMatch = Boolean(flightToken && csUpper.includes(`[${flightToken}]`));
-      const wingmanMatch = Boolean(wingmanToken && csUpper.includes(wingmanToken));
+      const groupMatch = Boolean(profile.group && callsign.includes(`[${profile.group}]`));
+      const flightMatch = Boolean(profile.flight && callsign.includes(`[${profile.flight}]`));
+      const wingmanMatch = Boolean(profile.wingman && callsign.includes(profile.wingman));
       const allMatch = !groupMatch && !flightMatch && !wingmanMatch;
 
       return {
@@ -2818,28 +2590,14 @@
 
     // Checks if a message matches a selected communication mode.
     matchesMode(mode, entry) {
-      const normalizedMode = this.normalizeModeToken(mode);
-      if (normalizedMode === 'NONE') return false;
-      if (normalizedMode === 'ALL') return !!entry?.allMatch;
-      if (normalizedMode === 'GROUP') return !!entry?.groupMatch;
-      if (normalizedMode === 'FLIGHT') return !!entry?.flightMatch;
-      if (normalizedMode === 'WINGMAN') return !!entry?.wingmanMatch;
+      if (mode === 'NONE') return false;
+      if (mode === 'ALL') return !!entry?.allMatch;
+      if (mode === 'GROUP') return !!entry?.groupMatch;
+      if (mode === 'FLIGHT') return !!entry?.flightMatch;
+      if (mode === 'WINGMAN') return !!entry?.wingmanMatch;
       return false;
     }
 
-    // Normalizes display/voice/hud mode tokens (supports short labels and full values).
-    normalizeModeToken(mode) {
-      const token = String(mode ?? 'NONE').trim().toUpperCase();
-      if (!token) return 'NONE';
-
-      if (token === 'NO' || token === 'NONE' || token === 'OFF') return 'NONE';
-      if (token === 'ALL') return 'ALL';
-      if (token === 'GRP' || token === 'GROUP') return 'GROUP';
-      if (token === 'FLT' || token === 'FLIGHT') return 'FLIGHT';
-      if (token === 'W/M' || token === 'WM' || token === 'WINGMAN') return 'WINGMAN';
-
-      return token;
-    }
 
     // Returns a short category tag for a classified chat message.
     getCategoryTag(entry) {
@@ -2877,7 +2635,7 @@
 
     // Updates the voice activation anchor used to suppress old messages.
     refreshVoiceActivationWindow(voiceMode, payloadServerTime) {
-      const mode = String(voiceMode ?? 'NONE').toUpperCase();
+      const mode = String(voiceMode ?? 'NONE');
       const previousMode = this.lastVoiceMode;
 
       if (mode !== 'NONE' && previousMode === 'NONE') {
@@ -2907,7 +2665,7 @@
 
     // Processes one incoming chat message and dispatches side effects.
     processIncomingMessage(message, payload) {
-      const callsign = String(message?.cs ?? '').trim() || 'UNKNOWN';
+      const callsign = message?.cs || 'UNKNOWN';
       const text = this.decodeChatText(message?.msg ?? '').trim();
       if (!text) return;
 
@@ -2928,13 +2686,13 @@
         this.messages.splice(0, this.messages.length - CommunicationModule.HISTORY_LIMIT);
       }
 
-      const voiceMode = this.normalizeModeToken(getOptionValue('COMM', 'VOICE', 'NONE'));
+      const voiceMode = getOptionValue('COMM', 'VOICE', 'NONE');
       this.refreshVoiceActivationWindow(voiceMode, payload?.serverTime);
       if (this.matchesMode(voiceMode, entry) && this.isMessageNewForVoice(entry)) {
         this.speakMessage(entry);
       }
 
-      const hudMode = this.normalizeModeToken(getOptionValue('COMM', 'HUD', 'NONE'));
+      const hudMode = getOptionValue('COMM', 'HUD', 'NONE');
       if (this.matchesMode(hudMode, entry)) {
         const formatted = [
           `[${entry.category}]`,
@@ -4603,9 +4361,9 @@
             const profile = communicationModule.getProfile();
             const voiceLanguage = communicationModule.getVoiceLanguage();
             const voiceRate = communicationModule.getVoiceRate();
-            const voiceMode = communicationModule.normalizeModeToken(getOptionValue('COMM', 'VOICE', 'NONE'));
-            const displayMode = communicationModule.normalizeModeToken(getOptionValue('COMM', 'DISPLAY', 'NONE'));
-            const hudMode = communicationModule.normalizeModeToken(getOptionValue('COMM', 'HUD', 'NONE'));
+            const voiceMode = getOptionValue('COMM', 'VOICE', 'NONE');
+            const displayMode = getOptionValue('COMM', 'DISPLAY', 'NONE');
+            const hudMode = getOptionValue('COMM', 'HUD', 'NONE');
             const showMode = getOption('COMM', 'SHOW', 'MSG');
             const mfdMessageMode = displayMode === 'ALL' ? 'ANY' : displayMode;
 
@@ -5484,40 +5242,36 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
     }
 
     ensureDefaultsInStorage() {
-      try {
-        const stored = readOptions();
-        let changed = false;
+      const stored = readOptions();
+      let changed = false;
 
-        for (let pageIndex = 0; pageIndex < this.pages.length; pageIndex++) {
-          const page = this.pages[pageIndex];
-          if (!page) continue;
+      for (let pageIndex = 0; pageIndex < this.pages.length; pageIndex++) {
+        const page = this.pages[pageIndex];
+        if (!page) continue;
 
-          for (let i = 0; i < (page.leftButtons?.length ?? 0); i++) {
-            const btn = page.leftButtons[i];
-            if (!btn || !btn.states?.length) continue;
-            const optionKey = this.getButtonStorageKey(page, btn, i, 'L');
-            if (stored[optionKey] == null) {
-              stored[optionKey] = btn.states[btn.stateIndex] ?? btn.states[0];
-              changed = true;
-            }
-          }
-
-          for (let i = 0; i < (page.rightButtons?.length ?? 0); i++) {
-            const btn = page.rightButtons[i];
-            if (!btn || !btn.states?.length) continue;
-            const optionKey = this.getButtonStorageKey(page, btn, i, 'R');
-            if (stored[optionKey] == null) {
-              stored[optionKey] = btn.states[btn.stateIndex] ?? btn.states[0];
-              changed = true;
-            }
+        for (let i = 0; i < (page.leftButtons?.length ?? 0); i++) {
+          const btn = page.leftButtons[i];
+          if (!btn || !btn.states?.length) continue;
+          const optionKey = this.getButtonStorageKey(page, btn, i, 'L');
+          if (stored[optionKey] == null) {
+            stored[optionKey] = btn.states[btn.stateIndex] ?? btn.states[0];
+            changed = true;
           }
         }
 
-        if (changed) {
-          writeOptions(stored);
+        for (let i = 0; i < (page.rightButtons?.length ?? 0); i++) {
+          const btn = page.rightButtons[i];
+          if (!btn || !btn.states?.length) continue;
+          const optionKey = this.getButtonStorageKey(page, btn, i, 'R');
+          if (stored[optionKey] == null) {
+            stored[optionKey] = btn.states[btn.stateIndex] ?? btn.states[0];
+            changed = true;
+          }
         }
-      } catch (e) {
-        // Ignore malformed storage.
+      }
+
+      if (changed) {
+        writeOptions(stored);
       }
     }
 
@@ -5530,9 +5284,6 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
       if (storedState != null) {
         const exactIndex = button.states.findIndex((s) => s === storedState);
         if (exactIndex >= 0) return exactIndex;
-
-        const ciIndex = button.states.findIndex((s) => String(s).toUpperCase() === String(storedState).toUpperCase());
-        if (ciIndex >= 0) return ciIndex;
       }
 
       if (Number.isInteger(button.stateIndex) && button.stateIndex >= 0 && button.stateIndex < button.states.length) {
@@ -5553,20 +5304,16 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
       const nextState = btn.states[nextIndex] ?? btn.states[0];
 
       if (typeof btn.onClick === 'function') {
-        try {
-          btn.onClick({
-            page,
-            side,
-            index,
-            button: btn,
-            uiState: this,
-            currentIndex,
-            nextIndex,
-            nextState
-          });
-        } catch (e) {
-          // Ignore button callback errors to keep MFD responsive.
-        }
+        btn.onClick({
+          page,
+          side,
+          index,
+          button: btn,
+          uiState: this,
+          currentIndex,
+          nextIndex,
+          nextState
+        });
       }
 
       if (btn.managedExternally) {
@@ -5580,11 +5327,7 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
     isButtonVisible(button, page) {
       if (!button) return false;
       if (typeof button.show !== 'function') return true;
-      try {
-        return Boolean(button.show({ page, button, uiState: this }));
-      } catch (e) {
-        return false;
-      }
+      return Boolean(button.show({ page, button, uiState: this }));
     }
 
     getVisibleButtonEntries(side, page = this.getCurrentPage()) {
@@ -5812,19 +5555,15 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
       ctx.font = `bold ${Math.round(h * 0.045)}px monospace`;
 
       if (typeof page.render === 'function') {
-        try {
-          page.render(renderer, {
-            ctx,
-            w,
-            h,
-            page,
-            layout,
-            uiState: this,
-            color
-          });
-        } catch (e) {
-          // Ignore page render callback errors to keep MFD responsive.
-        }
+        page.render(renderer, {
+          ctx,
+          w,
+          h,
+          page,
+          layout,
+          uiState: this,
+          color
+        });
       }
 
       for (const tab of layout.topTabs) {
@@ -5968,11 +5707,10 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
 
           const isMinimalGroup = Boolean(group.entries?.[0]?.button?.minimal);
           if (isMinimalGroup) {
-            const entry = group.entries?.[0];
-            const button = entry?.button;
+            const button = group.entries[0].button;
             const rawDisplayValue = (Array.isArray(button?.values) && button.values.length)
               ? getOptionValue(page?.title ?? 'PAGE', button?.key || button?.label || '', '')
-              : this.getStateLabel(button, page, entry?.actualIndex ?? 0, side);
+              : this.getStateLabel(button, page, group.entries[0]?.actualIndex ?? 0, side);
             const hasDisplayValue = String(rawDisplayValue ?? '').trim().length > 0;
             const displayValue = hasDisplayValue
               ? rawDisplayValue
@@ -6060,10 +5798,6 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
         this.exportMfdCanvasToPng(renderer.canvasAPI.canvas, request || page.title);
       }
     }
-  }
-
-  function getHudColorFromStoredOptions() {
-    return getOptionValue('HUD', 'COLOR', DEFAULT_COLOR);
   }
 
   // Returns pixelsPerDeg (vertical), pixelsPerDegX (horizontal) and
@@ -6920,7 +6654,7 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
           line2: getSelectedWpnQuantityLine(wpnMode, wpnModeLoadout)
         }
       : null;
-    const hudBaseColor = getHudColorFromStoredOptions();
+    const hudBaseColor = getOptionValue('HUD', 'COLOR', DEFAULT_COLOR);
     const hudColor = applyBrightnessToHexColor(hudBaseColor, getMfdBrightnessFactor());
     const hudLevel = getOption('HUD', 'LEVEL', 'FULL');
     currentHudColor = hudColor;
@@ -7771,15 +7505,35 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
           }
         ]
       });
+
+      this.registerControl({
+        key: 'SYS.CANOPY',
+        defaultState: 'CLOSED',
+        durationMs: 6000,
+        parts: [
+          {
+            partName: 'CanopyFrameCockpit',
+            motion: {
+              OPEN: { delayMs: 1000, durationMs: 5000 },
+              CLOSED: { delayMs: 1000, durationMs: 5000 }
+            },
+            channels: {
+              CanopyFrameCockpitRotXDeg: { OPEN: 30, CLOSED: 0 },
+              CanopyFrameCockpitRotYDeg: { OPEN: 0, CLOSED: 0 },
+              CanopyFrameCockpitRotZDeg: { OPEN: 0, CLOSED: 0 }
+            }
+          }
+        ]
+      });
     }
 
     registerControl(definition) {
-      const key = String(definition?.key || '').trim().toUpperCase();
+      const key = String(definition?.key || '');
       if (!key) return false;
 
       const control = {
         key,
-        defaultState: String(definition?.defaultState || 'CLOSED').toUpperCase(),
+        defaultState: String(definition?.defaultState || 'CLOSED'),
         durationMs: Math.max(0, Number(definition?.durationMs) || 0),
         parts: Array.isArray(definition?.parts) ? definition.parts : [],
         runtime: {
@@ -7807,7 +7561,7 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
     }
 
     setProbeState(state) {
-      const value = String(state || '').trim().toUpperCase();
+      const value = String(state || '');
       if (value !== 'OPEN' && value !== 'CLOSED') return false;
       setOption('SYS', 'REFUELING', value);
       return true;
@@ -7834,14 +7588,14 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
       wrapper.style.gap = '0px';
       wrapper.style.alignItems = 'flex-start';
 
-      const openButton = this.createProbePadButton('OPEN', PROBE_OPEN_BUTTON_ID, () => {
+      const openButton = this.createProbePadButton('OPEN', 'f18-probe-open', () => {
         this.setProbeState('OPEN');
       }, {
         borderBottom: '1px solid #333',
         borderRadius: '15px 15px 0 0'
       });
 
-      const probeLabel = this.createProbePadButton('PROBE', PROBE_LABEL_BUTTON_ID, () => {}, {
+      const probeLabel = this.createProbePadButton('PROBE', 'f18-probe-label', () => {}, {
         marginTop: '-9px',
         borderRadius: '0',
         borderTop: '0',
@@ -7851,7 +7605,7 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
         fontWeight: '700'
       });
 
-      const closeButton = this.createProbePadButton('CLOSE', PROBE_CLOSE_BUTTON_ID, () => {
+      const closeButton = this.createProbePadButton('CLOSE', 'f18-probe-close', () => {
         this.setProbeState('CLOSED');
       }, {
         marginTop: '-9px',
@@ -7888,11 +7642,11 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
     }
 
     parseConfigKey(configKey) {
-      const raw = String(configKey || '').trim();
+      const raw = String(configKey || '');
       const [page, key] = raw.split('.');
       return {
-        page: String(page || '').toUpperCase(),
-        key: String(key || '').toUpperCase()
+        page: String(page || ''),
+        key: String(key || '')
       };
     }
 
@@ -7903,10 +7657,10 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
       const runtime = control?.runtime || {};
       const raw = getOption(tokens.page, tokens.key, null);
       if (raw == null || raw === '') {
-        return String(runtime.targetState || runtime.currentState || control.defaultState).toUpperCase();
+        return String(runtime.targetState || runtime.currentState || control.defaultState);
       }
 
-      return String(raw).toUpperCase();
+      return String(raw);
     }
 
     getAnimationValue(valueKey, fallback = 0) {
@@ -7914,13 +7668,8 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
       return Number.isFinite(raw) ? raw : Number(fallback) || 0;
     }
 
-    resolveControlKey(controlKey) {
-      const key = String(controlKey || '').trim().toUpperCase();
-      return key;
-    }
 
-    getControlByKey(controlKey) {
-      const key = this.resolveControlKey(controlKey);
+    getControlByKey(key) {
       if (!key) return null;
       return this.controls.get(key) || null;
     }
@@ -7954,13 +7703,10 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
       const control = this.getControlByKey(controlKey);
       if (!control) return false;
 
-      const partNameNorm = String(partName || '').trim();
-      const valueKeyNorm = String(valueKey || '').trim();
-      const stateNorm = String(state || '').trim().toUpperCase();
       const numericValue = Number(value);
-      if (!partNameNorm || !valueKeyNorm || !stateNorm || !Number.isFinite(numericValue)) return false;
+      if (!partName || !valueKey || !state || !Number.isFinite(numericValue)) return false;
 
-      const partDef = control.parts.find((p) => String(p?.partName || '').trim() === partNameNorm);
+      const partDef = control.parts.find((p) => p.partName === partName);
       if (!partDef) return false;
 
       partDef.channels = partDef.channels || {};
@@ -7974,7 +7720,7 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
       if (!control) return false;
 
       const valueKeyNorm = String(valueKey || '').trim();
-      const stateNorm = String(state || '').trim().toUpperCase();
+      const stateNorm = String(state || '').trim();
       const numericValue = Number(value);
       if (!valueKeyNorm || !stateNorm || !Number.isFinite(numericValue)) return false;
 
@@ -7995,7 +7741,7 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
       if (!control) return false;
 
       const partNameNorm = String(partName || '').trim();
-      const stateNorm = String(state || '').trim().toUpperCase();
+      const stateNorm = String(state || '').trim();
       const delay = Number(delayMs);
       const duration = Number(durationMs);
       if (!partNameNorm || !stateNorm) return false;
@@ -8031,20 +7777,16 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
 
       const tries = [target, target.toLowerCase(), target.toUpperCase()];
       for (const candidate of tries) {
-        try {
-          const node = model.getNode(candidate);
-          if (node) return String(node.name || node._name || node.id || target);
-        } catch { }
+        const node = model.getNode(candidate);
+        if (node) return String(node.name || node._name || node.id || target);
       }
 
-      try {
-        const wantedLow = target.toLowerCase();
-        const arr = model._runtime?.nodes || model._nodes || [];
-        for (const node of arr) {
-          const nodeName = String(node?.name || node?._name || node?.id || '').trim();
-          if (nodeName && nodeName.toLowerCase() === wantedLow) return nodeName;
-        }
-      } catch { }
+      const wantedLow = target.toLowerCase();
+      const arr = model._runtime?.nodes || model._nodes || [];
+      for (const node of arr) {
+        const nodeName = String(node?.name || node?._name || node?.id || '').trim();
+        if (nodeName && nodeName.toLowerCase() === wantedLow) return nodeName;
+      }
 
       return null;
     }
@@ -8072,11 +7814,7 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
         aircraft.definition.parts.push(partDef);
       }
 
-      try {
-        aircraft.addParts([partDef], aircraft.aircraftRecord?.fullPath, aircraft.definition?.scale || 1, aircraft.definition?.orientation);
-      } catch {
-        return null;
-      }
+      aircraft.addParts([partDef], aircraft.aircraftRecord?.fullPath, aircraft.definition?.scale || 1, aircraft.definition?.orientation);
 
       part = aircraft.parts?.[partName] || null;
       return part?.object3d ? part : null;
@@ -8334,7 +8072,7 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
         ...config
       };
 
-      this.slotName = normalizeOptionToken(this.cfg.name || 'MFD') || 'MFD';
+      this.slotName = this.cfg.name || 'MFD';
       this.slotNameLower = this.slotName.toLowerCase();
       this.names = {
         MFD_RENDERER_NAME: `mfdRenderer${this.slotName}`,
@@ -8922,11 +8660,6 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
       return dx * dx + dy * dy;
     }
 
-    // Returns normalized click coordinates for MFD hit-testing.
-    getClickScreenCoords() {
-      return HelperModule.getClickScreenCoords();
-    }
-
     getButtonIndexFromScreenCoords(side, x, y) {
       if (!Number.isFinite(x) || !Number.isFinite(y)) return -1;
 
@@ -9055,7 +8788,7 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
       const uiState = this.getUiState();
       if (!uiState) return false;
 
-      const click = clickOverride ?? this.getClickScreenCoords();
+      const click = clickOverride ?? HelperModule.getClickScreenCoords();
       if (!click) return false;
 
       const bounds = this.getProjectedMfdBounds();
@@ -9099,13 +8832,13 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
   }
 
   function getMfdSlotState(slotName) {
-    const slot = normalizeOptionToken(slotName || 'LEFT') || 'LEFT';
+    const slot = slotName || 'LEFT';
     return addonRuntime.mfdUiStates?.[slot] ?? null;
   }
 
   // Resolves an active MFD module by slot name.
   function getMfdModuleBySlot(slotName) {
-    const slot = normalizeOptionToken(slotName || 'LEFT') || 'LEFT';
+    const slot = slotName || 'LEFT';
     return addonRuntime.mainPlugin?.mfdModules?.find((mfdModule) => mfdModule?.slotName === slot) ?? null;
   }
 
@@ -9195,25 +8928,6 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
     return Object.values(addonRuntime.mfdUiStates ?? {});
   }
 
-  // Normalizes an external page definition to the expected MFD page structure.
-  function normalizeMfdPageDefinition(pageDefinition, fallbackTitle = 'PAGE') {
-    const source = (pageDefinition && typeof pageDefinition === 'object') ? pageDefinition : {};
-    const titleRaw = String(source.title ?? fallbackTitle).trim();
-    const title = titleRaw || String(fallbackTitle || 'PAGE').trim() || 'PAGE';
-    const leftButtons = Array.isArray(source.leftButtons) ? source.leftButtons : [];
-    const rightButtons = Array.isArray(source.rightButtons) ? source.rightButtons : [];
-    const lines = Array.isArray(source.lines) ? source.lines : [];
-    const render = typeof source.render === 'function' ? source.render : null;
-    return {
-      ...source,
-      title,
-      leftButtons,
-      rightButtons,
-      lines,
-      render
-    };
-  }
-
   // Resolves a page target to an index using number or title lookup.
   function resolveMfdPageTargetIndex(uiState, target) {
     if (!uiState || !Array.isArray(uiState.pages)) return -1;
@@ -9221,9 +8935,9 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
       return target >= 0 && target < uiState.pages.length ? target : -1;
     }
 
-    const titleToken = String(target).trim().toUpperCase();
+    const titleToken = target;
     if (!titleToken) return -1;
-    return uiState.pages.findIndex((p) => String(p.title).trim().toUpperCase() === titleToken);
+    return uiState.pages.findIndex((p) => p.title === titleToken);
   }
 
   function createAddonApi() {
@@ -9284,7 +8998,7 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
         getRearmState: () => ({ ...wpnRearmState })
       },
       controls: {
-        setProbeState: (state) => addonRuntime.mainPlugin?.controlModule?.setProbeState?.(state) ?? false,
+        setProbeState: (state) => addonRuntime.mainPlugin.controlModule.setProbeState(state),
         getProbeState: () => getOption('SYS', 'REFUELING', 'CLOSED')
       },
       nav: {
@@ -9310,20 +9024,20 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
       },
       communication: {
         getModule: () => getCommunicationModule(),
-        getProfile: () => getCommunicationModule()?.getProfile?.() ?? { group: '', flight: '', wingman: '' },
-        setProfile: (profile) => getCommunicationModule()?.setProfile?.(profile) ?? null,
-        getGroup: () => getCommunicationModule()?.getProfile?.().group ?? '',
-        setGroup: (value) => getCommunicationModule()?.setGroup?.(value) ?? '',
-        getFlight: () => getCommunicationModule()?.getProfile?.().flight ?? '',
-        setFlight: (value) => getCommunicationModule()?.setFlight?.(value) ?? '',
-        getWingman: () => getCommunicationModule()?.getProfile?.().wingman ?? '',
-        setWingman: (value) => getCommunicationModule()?.setWingman?.(value) ?? '',
-        getVoiceLanguage: () => getCommunicationModule()?.getVoiceLanguage?.() ?? 'en-US',
-        setVoiceLanguage: (language) => getCommunicationModule()?.setVoiceLanguage?.(language) ?? 'en-US',
-        getVoiceRate: () => getCommunicationModule()?.getVoiceRate?.() ?? 1.5,
-        setVoiceRate: (rate) => getCommunicationModule()?.setVoiceRate?.(rate) ?? 1.5,
-        getMessages: (mode = 'ALL', limit = 5) => getCommunicationModule()?.getMessagesByMode?.(mode, limit) ?? [],
-        getHudMessage: () => getCommunicationModule()?.getHudOverlayText?.() ?? null
+        getProfile: () => getCommunicationModule().getProfile(),
+        setProfile: (profile) => getCommunicationModule().setProfile(profile),
+        getGroup: () => getCommunicationModule().getProfile().group,
+        setGroup: (value) => getCommunicationModule().setGroup(value),
+        getFlight: () => getCommunicationModule().getProfile().flight,
+        setFlight: (value) => getCommunicationModule().setFlight(value),
+        getWingman: () => getCommunicationModule().getProfile().wingman,
+        setWingman: (value) => getCommunicationModule().setWingman(value),
+        getVoiceLanguage: () => getCommunicationModule().getVoiceLanguage(),
+        setVoiceLanguage: (language) => getCommunicationModule().setVoiceLanguage(language),
+        getVoiceRate: () => getCommunicationModule().getVoiceRate(),
+        setVoiceRate: (rate) => getCommunicationModule().setVoiceRate(rate),
+        getMessages: (mode = 'ALL', limit = 5) => getCommunicationModule().getMessagesByMode(mode, limit),
+        getHudMessage: () => getCommunicationModule().getHudOverlayText()
       },
       hud: {
         getModule: () => addonRuntime.mainPlugin?.hudModule ?? null,
@@ -9348,8 +9062,7 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
           const fallbackTitle = `PAGE_${nextIndex + 1}`;
 
           for (const uiState of states) {
-            const normalized = normalizeMfdPageDefinition(pageDefinition, fallbackTitle);
-            uiState.pages.splice(nextIndex, 0, normalized);
+            uiState.pages.splice(nextIndex, 0, pageDefinition);
             if (uiState.pageIndex >= nextIndex) {
               uiState.pageIndex += 1;
             }
@@ -9368,8 +9081,7 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
 
           for (const uiState of states) {
             const currentTitle = uiState.pages?.[resolvedIndex]?.title ?? `PAGE_${resolvedIndex + 1}`;
-            const normalized = normalizeMfdPageDefinition(pageDefinition, currentTitle);
-            uiState.pages[resolvedIndex] = normalized;
+            uiState.pages[resolvedIndex] = pageDefinition;
             if (uiState.pageIndex >= uiState.pages.length) {
               uiState.pageIndex = Math.max(0, uiState.pages.length - 1);
             }
@@ -9424,7 +9136,8 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
           return true;
         },
         stop: () => {
-          addonRuntime.mainPlugin?.stop?.();
+          if (!addonRuntime.mainPlugin) return false;
+          addonRuntime.mainPlugin.stop();
           addonRuntime.mainPlugin = null;
           addonRuntime.mapModule = null;
           addonRuntime.navModule = null;
@@ -9433,7 +9146,9 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
           return true;
         },
         restart: () => {
-          addonRuntime.mainPlugin?.stop?.();
+          if (addonRuntime.mainPlugin) {
+            addonRuntime.mainPlugin.stop();
+          }
           addonRuntime.mainPlugin = new F18MainPlugin();
           addonRuntime.mainPlugin.start();
           return true;
