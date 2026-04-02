@@ -1,6 +1,47 @@
 # Developer documentation
 Learn more on how to write GeoFS Addons in [this short manual](GeoFS.md).
 
+## Addon architecture (Option A)
+New addon development lives in [addon](addon), with a simplified reusable structure:
+
+- Shared runtime: [addon/core/runtime.js](addon/core/runtime.js)
+- Generic modules: [addon/modules](addon/modules)
+- Shared defaults/presets: [addon/defaults](addon/defaults)
+- Aircraft plugins: [addon/aircrafts](addon/aircrafts)
+  - Base class: [addon/aircrafts/BasePlugin.js](addon/aircrafts/BasePlugin.js)
+  - F-18 plugin: [addon/aircrafts/F18MainPlugin.js](addon/aircrafts/F18MainPlugin.js)
+- Userscript entrypoints: [addon/entrypoints](addon/entrypoints)
+  - F-18 entrypoint: [addon/entrypoints/geo-fs-f18-addon.user.js](addon/entrypoints/geo-fs-f18-addon.user.js)
+
+The F-18 entrypoint uses `@require` to load:
+
+1. shared runtime
+2. generic modules + defaults
+3. `BasePlugin`
+4. aircraft main plugin
+
+This keeps installation simple for external plugin developers: they can publish one entrypoint userscript and compose modules with `@require`.
+
+### Current F-18 storage keys
+- Options: `F18Options`
+- Weapons: `F18WpnState`
+
+### Semver
+- Shared core version is exposed as `window.GeoFSAddonCore.version`.
+- Aircraft modules declare their own plugin version and required core version.
+
+## Aircraft Builder (Tampermonkey)
+Use [geo-fs-aircraft-builder.js](geo-fs-aircraft-builder.js) as a standalone builder plugin.
+
+It supports:
+- Start empty or paste/read an existing `MainPlugin.js`
+- Read and edit `AIRCRAFT_ID` and `DEFAULT_MFD_LAYOUT`
+- Add/select MFD slots
+- Adjust `position`, `rotation`, `scale` with +/- buttons
+- Configure step sizes for position/rotation/scale
+- Live apply transform updates to the active addon (`window.F18Addon.mfd` / `window.F15Addon.mfd`)
+- Generate and download a `MainPlugin.js` and entrypoint userscript
+
 ## F-18 Addon
 The main F-18 Addon will be updated from time to time with new functionality. Unless you want to directly contribute to the plugin, it's best to customize it with your own Tampermonkey script. [This script](geo-fs-f18-mod-flightplan.js) is an example on how to add checklists, briefings and a custom IFF Codebook to the F-18.
 
@@ -157,6 +198,7 @@ window.F18Addon
 
 #### `window.F18Addon.mfd`
 - `getSlots()`
+- `getDisplay(slotName?)`
 - `addPage(pageDefinition, insertIndex?)`
 - `setPageDefinition(target, pageDefinition)`
 - `addDisplay(config?)`
@@ -166,6 +208,20 @@ window.F18Addon
 - `setPage(slotName, pageIndex)`
 - `nextPage(slotName)`
 - `toggleButton(slotName, side, index)`
+
+Console examples:
+
+```js
+window.F18Addon.mfd.getDisplay('LEFT');
+window.F18Addon.mfd.getDisplayTransform('LEFT');
+window.F18Addon.mfd.updateDisplayTransform('LEFT', {
+  position: [-0.2160, 6.158, 0.584],
+  rotation: [8, 0, 0],
+  scale: [0.29, 0.29, 0.285]
+});
+```
+
+The same methods are available on `window.F15Addon.mfd`.
 
 ### MFD page/button definition options
 When you add or overwrite an MFD page, use this structure:
@@ -540,6 +596,130 @@ api.playback.start();
 api.playback.pause();
 api.playback.stop();
 ```
+
+## Strict API contracts (current implementation)
+
+This section documents the active code contracts used by:
+- [geo-fs-f18-mod.js](geo-fs-f18-mod.js)
+- [geo-fs-flight-recorder.js](geo-fs-flight-recorder.js)
+
+### F18 addon: external dependency contracts
+
+#### `window.FlightRecorder.api` contract used by F18
+If `window.FlightRecorder.api` exists, F18 assumes all of the following are present and valid:
+
+- `getVersion(): string` returns a valid semver string (`major.minor.patch`).
+- `recording.getState(): { state: string, isRecording: boolean }`
+- `recording.start(): { ok: boolean, state: string, reason?: string }`
+- `recording.stop(): { ok: boolean, state: string, reason?: string }`
+- `playback.getState(trackIds?): { state: string, tracks: Array<object> }`
+- `playback.start(trackIds?)`, `playback.pause(trackIds?)`, `playback.stop(trackIds?)`
+
+F18 MFD mapping:
+- recorder state: `isRecording === true` -> `RECORDING`, otherwise `STOPPED`
+- playback state: `state === 'PLAYING'` -> `STARTED`, otherwise `STOPPED`
+
+#### `localStorage` contract used by F18
+- `F18Options` stores a JSON object `{ [optionKey: string]: string }`.
+- `F18WpnState` stores a JSON object:
+
+```js
+{
+  config: string,
+  loadout: {
+    gun: number,
+    left: { [station: string]: { load: string, display: string, quantity: number, type: string } },
+    right: { [station: string]: { load: string, display: string, quantity: number, type: string } }
+  },
+  selected: {
+    [mode: string]: { side: 'left' | 'right' | 'center', station: string }
+  }
+}
+```
+
+No migration path is implemented for old storage formats.
+
+### F18 public API return contracts
+
+#### `window.F18Addon.options`
+- `buildKey(pageTitle, buttonKey): string`
+- `read(): Record<string, string>`
+- `write(options): true`
+- `get(pageTitle, buttonKey, fallback?): string | null`
+- `set(pageTitle, buttonKey, value): void`
+- `getValue(pageTitle, buttonKey, fallback?): string | number | null`
+
+#### `window.F18Addon.weapons`
+- `getMode(): 'NAV' | 'A/A' | 'A/G' | 'JETTISON'`
+- `getLoadout(): object`
+- `getSelectedWeapon(): { side: string, station: string } | null`
+- `selectNext(minimumQuantity?): boolean`
+- `fireSelected(): boolean`
+- `jettisonSelected(): boolean`
+- `startRearm(config): boolean`
+- `getRearmState(): object`
+
+#### `window.F18Addon.mfd`
+- `getSlots(): string[]`
+- `addPage(pageDefinition, insertIndex?): { ok: true, index: number, title: string } | { ok: false, reason: string }`
+- `setPageDefinition(target, pageDefinition): { ok: true, index: number, title: string | null } | { ok: false, reason: string }`
+- `addDisplay(config?): { slotName: string | null, partName: string | null }`
+- `getDisplayTransform(slotName?): object`
+- `updateDisplayTransform(slotName?, transform): { ok: boolean, reason?: string, slotName?: string, partName?: string, position?: number[], rotation?: number[], scale?: number[] }`
+- `getDisplayState(slotName): object | null`
+- `setPage(slotName, pageIndex): boolean`
+- `nextPage(slotName): boolean`
+- `toggleButton(slotName, side, index): boolean`
+
+MFD page APIs now use exact values:
+- `setPageDefinition(target, ...)` resolves string `target` by exact page-title match (case-sensitive, no trimming).
+- `addPage(...)` / `setPageDefinition(...)` store the passed `pageDefinition` object as-is; required page fields must already be valid.
+
+#### `window.F18Addon.lifecycle`
+- `start(): true`
+- `stop(): boolean` (`false` when plugin is not running)
+- `restart(): true`
+- `isRunning(): boolean`
+
+### F18 exception cases (documented)
+
+Only relevant cases are listed:
+
+- `window.F18Addon.options.read()` can throw `SyntaxError` when `F18Options` contains invalid JSON.
+- `window.F18Addon.options.write()` / `set()` can throw `DOMException` on storage write failures.
+- Weapon state boot (`loadWpnStateFromStorage`) can throw when `F18WpnState` is invalid or incomplete.
+- Flight Recorder bridge calls can throw `TypeError` when `window.FlightRecorder.api` exists but does not match the required contract.
+- Checklist APIs throw `Error` for unsupported checklist types.
+- Checklist APIs throw `Error` when a checklist has invalid `itemCompleted` shape (must match `items.length`).
+
+### Flight Recorder API return contracts
+
+#### `window.FlightRecorder.api`
+- `getVersion(): string`
+- `getState(trackIds?): {
+    version: string,
+    recordState: 'IDLE' | 'RECORDING',
+    playState: 'IDLE' | 'PLAYING',
+    recording: { state: 'IDLE' | 'RECORDING', isRecording: boolean },
+    playback: { state: 'IDLE' | 'PLAYING', tracks: Array<{ id: string, name: string, playbackState: 'STOPPED' | 'PAUSED' | 'PLAYING', idx: number, sampleCount: number, sampleMs: number }> }
+  }`
+
+#### `window.FlightRecorder.api.recording`
+- `start(): { ok: boolean, state: string, reason?: string }`
+- `stop(): { ok: boolean, state: string, reason?: string }`
+- `getState(): { state: 'IDLE' | 'RECORDING', isRecording: boolean }`
+
+#### `window.FlightRecorder.api.playback`
+- `start(trackIds?): { ok: boolean, state: string, trackIds?: string[], reason?: string }`
+- `pause(trackIds?): { ok: boolean, changed?: number, state: string, trackIds?: string[], reason?: string }`
+- `stop(trackIds?): { ok: boolean, changed?: number, state: string, trackIds?: string[], reason?: string }`
+- `getState(trackIds?): { state: 'IDLE' | 'PLAYING', tracks: Array<{ id: string, name: string, playbackState: 'STOPPED' | 'PAUSED' | 'PLAYING', idx: number, sampleCount: number, sampleMs: number }> }`
+
+### Flight Recorder exception cases (documented)
+
+- `openRecorderDb()` throws when IndexedDB is unavailable or opening fails.
+- `saveToIndexedDB()` and `loadFromIndexedDB()` catch IndexedDB errors and return `false`.
+- Promise flows that call `openRecorderDb()` may surface IndexedDB errors when not caught upstream.
 
 
 # TODO
