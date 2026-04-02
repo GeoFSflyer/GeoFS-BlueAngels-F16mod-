@@ -38,10 +38,16 @@ These scripts are used by the GeoFS Blue Angels to improve their flying. Install
 
 Developer documentation for the scripts [can be found here](Scripts/README.md).
 
-## F-18 Add-on
+## F-18 / F-15 Add-on
 This script improves the F-18 in many ways. It add's a totally reworked F-18 HUD with a FPV and AoA bracket, adds MFD's with a radar, HSI, Communication and weapon displays, extra views in and outside the cockpit, the option to change your seat height and more. In the HUD page you can now switch HUD mode between `F-18` and `DEFAULT`.
 
-Installation: [add this script](https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/geo-fs-f18-mod.js) to Tampermonkey, or execute it in Developer Console.
+## Stable
+Installation (v1.7.0 stable): [geo-fs-f18-mod.js](https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/geo-fs-f18-mod.js).
+
+## Beta
+Installation (F-18 v2.0.0 beta): [add this readable script](https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/build/geo-fs-f18-addon.user.full.js) to Tampermonkey, or [this minified version](https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/build/geo-fs-f18-addon.user.min.js).
+Installation (F-15 v2.0.0 beta): [add this script](https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/build/geo-fs-f15-addon.user.full.js) to Tampermonkey, or [this minified version](https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/build/geo-fs-f15-addon.user.min.js).
+
 
 ![F-18 add-on](Images/scripts/f-18-addon.png)
 

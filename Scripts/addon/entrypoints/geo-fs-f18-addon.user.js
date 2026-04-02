@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         GeoFS F-18 Addon NEW
+// @name         GeoFS F-18 Addon BETA
 // @namespace    https://github.com/ArjanKw/GeoFS-BlueAngels/
 // @version      2.0.0
 // @description  F-18 addon entrypoint with generic modules + one aircraft orchestrator.
