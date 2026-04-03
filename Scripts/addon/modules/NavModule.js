@@ -1,11 +1,17 @@
 
   class NavModule {
-      constructor(mapModule = null) {
+      constructor(mapModule = null, dataCartridgeModule = null) {
         this.mapModule = mapModule;
+        this.dataCartridgeModule = dataCartridgeModule;
       }
 
     setMapModule(mapModule) {
       this.mapModule = mapModule;
+      return this;
+    }
+
+    setDataCartridgeModule(dataCartridgeModule) {
+      this.dataCartridgeModule = dataCartridgeModule;
       return this;
     }
 
@@ -207,6 +213,7 @@
           const visibleTraffic = shouldShowTraffic ? this.mapModule.getFilteredTraffic(scene?.traffic ?? []) : [];
           const selectedTrafficUid = shouldShowTraffic ? this.mapModule.getSelectedTrafficUid(visibleTraffic) : null;
           const selectedTraffic = visibleTraffic.find((c) => String(c?.uid ?? '') === String(selectedTrafficUid ?? '')) ?? null;
+          const dataCartridgeScene = this.getDataCartridgeScene();
           const waypointColor = '#3da2ff';
           const navObjectTextPx = Math.round(h * 0.032);
 
@@ -254,6 +261,56 @@
             ctx.lineTo(x, y + size);
             ctx.lineTo(x - size, y);
             ctx.closePath();
+            ctx.stroke();
+          };
+
+          const drawCartridgePoint = (x, y, pointColor, label = '', isMarkpoint = false) => {
+            const radius = Math.max(3.5, h * 0.008);
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1;
+            ctx.fillStyle = pointColor;
+
+            if (isMarkpoint) {
+              ctx.beginPath();
+              ctx.moveTo(x, y - radius - 1);
+              ctx.lineTo(x + radius, y + radius);
+              ctx.lineTo(x - radius, y + radius);
+              ctx.closePath();
+              ctx.fill();
+              ctx.stroke();
+            } else {
+              ctx.beginPath();
+              ctx.arc(x, y, radius, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
+            }
+
+            if (declutterLevel !== 'L2' && label) {
+              ctx.fillStyle = pointColor;
+              ctx.font = `bold ${Math.round(h * 0.026)}px monospace`;
+              ctx.textAlign = 'left';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(label.slice(0, 10), x + w * 0.010, y - h * 0.012);
+            }
+          };
+
+          const drawCartridgeAreaPath = (points, style) => {
+            if (!Array.isArray(points) || points.length < 3) return;
+
+            ctx.strokeStyle = style.color;
+            ctx.lineWidth = 1.4;
+            ctx.fillStyle = style.fillColor;
+            ctx.globalAlpha = Number.isFinite(style.fillOpacity) ? style.fillOpacity : 0.12;
+            ctx.beginPath();
+            for (let i = 0; i < points.length; i++) {
+              const p = points[i];
+              if (!p) continue;
+              if (i === 0) ctx.moveTo(p.x, p.y);
+              else ctx.lineTo(p.x, p.y);
+            }
+            ctx.closePath();
+            ctx.fill();
+            ctx.globalAlpha = 1;
             ctx.stroke();
           };
 
@@ -468,7 +525,7 @@
               const navCourseDeviation = getValue
                 ? (getValue('NAVCourseDeviation') ?? 0)
                 : (window.geofs?.animation?.values?.NAVCourseDeviation ?? 0);
-              const courseOffsetPx = clampValue(5 * navCourseDeviation, -100, 100) * (w / 512);
+              const courseOffsetPx = HelperModule.clampValue(5 * navCourseDeviation, -100, 100) * (w / 512);
 
               const courseRelRad = (courseDisplay - heading) * Math.PI / 180;
               const dirX = Math.sin(courseRelRad);
@@ -518,6 +575,41 @@
               waypointPoints.push({ ...p, wp });
             }
 
+            const projectGeoToHsi = (lat, lon) => {
+              const ownship = scene?.ownship;
+              if (!ownship || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lon))) return null;
+              const relNm = this.mapModule.toRelativeNm(ownship, Number(lat), Number(lon));
+              const framePoint = this.mapModule.toHeadingFrame(relNm, ownship.heading);
+              return projectHsi(framePoint);
+            };
+
+            const sortedAreas = [...(dataCartridgeScene?.areas ?? [])]
+              .sort((a, b) => Number(a?.order ?? 0) - Number(b?.order ?? 0));
+            for (const area of sortedAreas) {
+              const style = this.getAreaStyle(area?.type);
+              if (String(area?.variant).toUpperCase() === 'CIRCLE') {
+                const center = Array.isArray(area?.center) ? area.center : null;
+                const centerPt = center ? projectGeoToHsi(center[0], center[1]) : null;
+                const radiusMeters = Number(area?.radius);
+                if (!centerPt || !Number.isFinite(radiusMeters) || radiusMeters <= 0) continue;
+                const radiusPx = (radiusMeters / 1852) / rangeNm * radius;
+                ctx.fillStyle = style.fillColor;
+                ctx.globalAlpha = Number.isFinite(style.fillOpacity) ? style.fillOpacity : 0.12;
+                ctx.beginPath();
+                ctx.arc(centerPt.x, centerPt.y, radiusPx, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+                ctx.strokeStyle = style.color;
+                ctx.lineWidth = 1.4;
+                ctx.stroke();
+                continue;
+              }
+
+              const points = Array.isArray(area?.points) ? area.points : [];
+              const projected = points.map((pt) => projectGeoToHsi(pt?.[0], pt?.[1])).filter(Boolean);
+              drawCartridgeAreaPath(projected, style);
+            }
+
             if (waypointPoints.length >= 2) {
               ctx.strokeStyle = waypointColor;
               ctx.lineWidth = 1.4;
@@ -544,6 +636,20 @@
                   ctx.fillText(wpName, p.x + w * 0.010, p.y + h * 0.016);
                 }
               }
+            }
+
+            for (const navaid of (dataCartridgeScene?.navaids ?? [])) {
+              const p = projectGeoToHsi(navaid?.lat, navaid?.lon);
+              if (!p) continue;
+              const label = String(navaid?.ident ?? navaid?.icao ?? navaid?.name ?? '').trim();
+              drawCartridgePoint(p.x, p.y, this.getNavaidColor(navaid?.missionType), label, false);
+            }
+
+            for (const markpoint of (dataCartridgeScene?.markpoints ?? [])) {
+              const p = projectGeoToHsi(markpoint?.lat, markpoint?.lon);
+              if (!p) continue;
+              const label = String(markpoint?.abbreviation ?? markpoint?.name ?? '').trim();
+              drawCartridgePoint(p.x, p.y, this.getMarkpointColor(markpoint?.type), label, true);
             }
 
             if (shouldShowTraffic) {
@@ -779,6 +885,35 @@
               waypointPoints.push({ ...p, wp });
             }
 
+            const sortedAreas = [...(dataCartridgeScene?.areas ?? [])]
+              .sort((a, b) => Number(a?.order ?? 0) - Number(b?.order ?? 0));
+            for (const area of sortedAreas) {
+              const style = this.getAreaStyle(area?.type);
+              if (String(area?.variant).toUpperCase() === 'CIRCLE') {
+                const center = Array.isArray(area?.center) ? area.center : null;
+                const centerPt = center ? projectMap({ lat: center[0], lon: center[1] }, 'lat', 'lon') : null;
+                const radiusMeters = Number(area?.radius);
+                if (!centerPt || !Number.isFinite(radiusMeters) || radiusMeters <= 0) continue;
+                const radiusPx = (radiusMeters / 1852) * pxPerNm;
+                ctx.fillStyle = style.fillColor;
+                ctx.globalAlpha = Number.isFinite(style.fillOpacity) ? style.fillOpacity : 0.12;
+                ctx.beginPath();
+                ctx.arc(centerPt.x, centerPt.y, radiusPx, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+                ctx.strokeStyle = style.color;
+                ctx.lineWidth = 1.4;
+                ctx.stroke();
+                continue;
+              }
+
+              const points = Array.isArray(area?.points) ? area.points : [];
+              const projected = points
+                .map((pt) => projectMap({ lat: pt?.[0], lon: pt?.[1] }, 'lat', 'lon'))
+                .filter(Boolean);
+              drawCartridgeAreaPath(projected, style);
+            }
+
             if (waypointPoints.length >= 2) {
               ctx.strokeStyle = waypointColor;
               ctx.lineWidth = 1.5;
@@ -805,6 +940,20 @@
                   ctx.fillText(wpName, p.x + w * 0.010, p.y + h * 0.016);
                 }
               }
+            }
+
+            for (const navaid of (dataCartridgeScene?.navaids ?? [])) {
+              const p = projectMap(navaid, 'lat', 'lon');
+              if (!p) continue;
+              const label = String(navaid?.ident ?? navaid?.icao ?? navaid?.name ?? '').trim();
+              drawCartridgePoint(p.x, p.y, this.getNavaidColor(navaid?.missionType), label, false);
+            }
+
+            for (const markpoint of (dataCartridgeScene?.markpoints ?? [])) {
+              const p = projectMap(markpoint, 'lat', 'lon');
+              if (!p) continue;
+              const label = String(markpoint?.abbreviation ?? markpoint?.name ?? '').trim();
+              drawCartridgePoint(p.x, p.y, this.getMarkpointColor(markpoint?.type), label, true);
             }
 
             if (shouldShowTraffic) {
@@ -835,6 +984,75 @@
         }
       });
       return true;
+    }
+
+    getDataCartridgeModule() {
+      if (this.dataCartridgeModule) return this.dataCartridgeModule;
+
+      const aircraftId = String(window.geofs?.aircraft?.instance?.id ?? '');
+      if (aircraftId === '27' && window.F18Addon?.dataCartridge) return window.F18Addon.dataCartridge;
+      if (aircraftId === '3591' && window.F15Addon?.dataCartridge) return window.F15Addon.dataCartridge;
+      if (window.F18Addon?.dataCartridge) return window.F18Addon.dataCartridge;
+      if (window.F15Addon?.dataCartridge) return window.F15Addon.dataCartridge;
+
+      return null;
+    }
+
+    getDataCartridgeScene() {
+      const cartridge = this.getDataCartridgeModule();
+      const data = cartridge?.getRenderableData?.() ?? cartridge?.getMissionData?.() ?? {};
+
+      return {
+        navaids: Array.isArray(data?.navaids) ? data.navaids : [],
+        markpoints: Array.isArray(data?.markpoints) ? data.markpoints : [],
+        areas: Array.isArray(data?.areas) ? data.areas : []
+      };
+    }
+
+    getAreaStyle(type) {
+      const cartridge = this.getDataCartridgeModule();
+      if (cartridge?.getAreaStyle) {
+        return cartridge.getAreaStyle(type);
+      }
+
+      const fallback = {
+        SAM: { color: '#ff5252', fillColor: '#ff5252', fillOpacity: 0.18 },
+        NOFLY: { color: '#ff9800', fillColor: '#ff9800', fillOpacity: 0.16 },
+        UNRESTRICTED: { color: '#4caf50', fillColor: '#4caf50', fillOpacity: 0.12 },
+        DANGER: { color: '#9c27b0', fillColor: '#9c27b0', fillOpacity: 0.16 },
+        AREA: { color: '#03a9f4', fillColor: '#03a9f4', fillOpacity: 0.14 }
+      };
+      return fallback[type] ?? fallback.AREA;
+    }
+
+    getMarkpointColor(type) {
+      const cartridge = this.getDataCartridgeModule();
+      if (cartridge?.getMarkpointColor) {
+        return cartridge.getMarkpointColor(type);
+      }
+
+      const fallback = {
+        TARGET: '#f44336',
+        FRIENDLY: '#2196f3',
+        RESQUE: '#ff9800',
+        CIVILIAN: '#4caf50'
+      };
+      return fallback[type] ?? '#00bcd4';
+    }
+
+    getNavaidColor(missionType) {
+      const cartridge = this.getDataCartridgeModule();
+      if (cartridge?.getNavaidColor) {
+        return cartridge.getNavaidColor(missionType);
+      }
+
+      const fallback = {
+        CIVILIAN: '#4caf50',
+        FOO: '#f44336',
+        FRIEND: '#2196f3',
+        ALTERNATE: '#ff9800'
+      };
+      return fallback[missionType ?? 'FRIEND'] ?? '#2196f3';
     }
 
     // Returns the currently selected GeoFS NAV unit.

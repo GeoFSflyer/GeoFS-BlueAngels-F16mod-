@@ -214,6 +214,7 @@
         }),
         checklists: ChecklistModule.loadDefaults('f18') ?? new ChecklistModule(),
         helper: new HelperModule(),
+        dataCartridge: null,
         map: null,
         nav: null,
         communication: new CommunicationModule(),
@@ -238,11 +239,13 @@
       // Initialize modules that need helper reference
       window.F18Addon.camera = new CameraModule(window.F18Addon.helper, F18MainPlugin.CAMERA_CONFIG);
       window.F18Addon.controls = new ControlModule(window.F18Addon.helper);
+      window.F18Addon.dataCartridge = new DataCartridgeModule();
       window.F18Addon.nav = new NavModule();
       window.F18Addon.map = new MapModule();
       window.F18Addon.radar = new RadarModule({ navModule: window.F18Addon.nav });
       window.F18Addon.targetingPod = new TargetingPodModule(() => window.F18Addon);
       window.F18Addon.nav.setMapModule(window.F18Addon.map);
+      window.F18Addon.nav.setDataCartridgeModule(window.F18Addon.dataCartridge);
       window.F18Addon.map.setNavModule(window.F18Addon.nav);
 
       // Create MFD module

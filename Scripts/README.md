@@ -45,6 +45,33 @@ It supports:
 ## F-18 Addon
 The main F-18 Addon will be updated from time to time with new functionality. Unless you want to directly contribute to the plugin, it's best to customize it with your own Tampermonkey script. [This script](geo-fs-f18-mod-flightplan.js) is an example on how to add checklists, briefings and a custom IFF Codebook to the F-18.
 
+## Mission Planner (Tampermonkey)
+Use [geo-fs-mission-planner.user.js](geo-fs-mission-planner.user.js) for mission authoring directly on the GeoFS map.
+
+### Public API
+The script exposes:
+
+```js
+window.GeoFSMissionPlanner
+```
+
+Current shape:
+
+```js
+{
+  version: '0.2.0',
+  app
+}
+```
+
+The app contains these domain modules:
+- `app.store` (mission persistence and mission model)
+- `app.map` (map rendering + navaid popup integration)
+- `app.tools` (drawing tools: polygon, square, circle)
+
+### Stored option / local storage key
+- `GeoFSMissionPlanner.v2`: complete mission JSON snapshot
+
 ## F18Addon API (public)
 The addon now exposes a single global namespace:
 

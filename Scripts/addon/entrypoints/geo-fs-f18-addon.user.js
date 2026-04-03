@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GeoFS F-18 Addon BETA
 // @namespace    https://github.com/ArjanKw/GeoFS-BlueAngels/
-// @version      2.0.0
-// @description  F-18 addon entrypoint with generic modules + one aircraft orchestrator.
+// @version      2.0.1
+// @description  Improves the cockpit with a new HUD and custom MFDs, adjustable seat height and more.
 // @match        https://www.geo-fs.com/*
 // @match        https://geo-fs.com/*
 // @match        https://*.geo-fs.com/*
@@ -12,6 +12,7 @@
 // @require      https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/addon/modules/OptionModule.js
 // @require      https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/addon/modules/WeaponModule.js
 // @require      https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/addon/modules/ChecklistModule.js
+// @require      https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/addon/modules/DataCartridgeModule.js
 // @require      https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/addon/modules/NavModule.js
 // @require      https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/addon/modules/MapModule.js
 // @require      https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/addon/modules/RadarModule.js
@@ -35,7 +36,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '2.0.0';
+  const VERSION = '2.0.1';
 
   const PluginCtor = window.F18MainPlugin;
   if (typeof PluginCtor !== 'function') {

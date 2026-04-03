@@ -56,6 +56,7 @@
         }),
         checklists: ChecklistModule.loadDefaults('f18') ?? new ChecklistModule(),
         helper: new HelperModule(),
+        dataCartridge: null,
         map: null,
         nav: null,
         communication: new CommunicationModule(),
@@ -80,11 +81,13 @@
       // Initialize modules that need helper reference
       window.F15Addon.camera = new CameraModule(window.F15Addon.helper, F15MainPlugin.CAMERA_CONFIG);
       window.F15Addon.controls = new ControlModule(window.F15Addon.helper);
+      window.F15Addon.dataCartridge = new DataCartridgeModule();
       window.F15Addon.nav = new NavModule();
       window.F15Addon.map = new MapModule();
       window.F15Addon.radar = new RadarModule({ navModule: window.F15Addon.nav });
       window.F15Addon.targetingPod = new TargetingPodModule(() => window.F15Addon);
       window.F15Addon.nav.setMapModule(window.F15Addon.map);
+      window.F15Addon.nav.setDataCartridgeModule(window.F15Addon.dataCartridge);
       window.F15Addon.map.setNavModule(window.F15Addon.nav);
 
       // Create MFD module BEFORE page registration

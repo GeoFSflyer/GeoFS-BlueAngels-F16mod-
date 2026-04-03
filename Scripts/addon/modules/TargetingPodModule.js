@@ -7,11 +7,40 @@ class TargetingPodModule {
   registerMfdPages(mfdModule) {
     const getMapModule = () => this.getAddon()?.map ?? null;
     const getOption = (page, key, fallback) => OptionModule.getOption(page, key, fallback);
+    const getMode = () => OptionModule.getOption('TGP', 'MODE', 'CAPTURE');
+    const isCaptureMode = () => getMode() === 'CAPTURE';
+    const isMarkMode = () => getMode() === 'MARK';
+    const isCaptureOrMarkMode = () => {
+      const mode = getMode();
+      return mode === 'CAPTURE' || mode === 'MARK';
+    };
+    const isSettingsMode = () => getMode() === 'SETTINGS';
 
     mfdModule.registerPage({
       title: 'TGP',
       leftButtons: [
-        { key: 'MODE', label: 'MODE', states: ['CAPTURE', 'SETTINGS'], stateIndex: 0 },
+        {
+          key: 'MODE',
+          label: 'MODE',
+          states: ['CAPTURE', 'MARK', 'SETTINGS'],
+          stateIndex: 0,
+          onClick: ({ page, nextState }) => {
+            if (!page) return;
+
+            if (nextState === 'MARK') {
+              page._setLockState('FREE');
+              page._resetLockData();
+              page._lockedCallsign = 'N/A';
+              page._relYaw = 0;
+              page._relPitch = 0;
+            } else if (nextState === 'CAPTURE') {
+              const lockState = OptionModule.getOption('TGP', 'LOCK', 'FREE');
+              if (lockState === 'FIX' || lockState === 'MARK') {
+                page._setLockState('FREE');
+              }
+            }
+          }
+        },
         {
           key: 'RANGE',
           label: '↑',
@@ -20,7 +49,7 @@ class TargetingPodModule {
           minimal: true,
           managedExternally: true,
           combinedGroupLabel: 'RNG',
-          show() { return OptionModule.getOption('TGP', 'MODE', 'CAPTURE') === 'CAPTURE'; },
+          show() { return isCaptureOrMarkMode(); },
           onClick: ({ page }) => page && page._stepRange(1)
         },
         {
@@ -31,34 +60,114 @@ class TargetingPodModule {
           minimal: true,
           managedExternally: true,
           combinedGroupLabel: 'RNG',
-          show() { return OptionModule.getOption('TGP', 'MODE', 'CAPTURE') === 'CAPTURE'; },
+          show() { return isCaptureOrMarkMode(); },
           onClick: ({ page }) => page && page._stepRange(-1)
         },
-        { key: 'LOCK', label: 'LOCK', states: ['FREE', 'TRK', 'WPT'], stateIndex: 0, show() { return OptionModule.getOption('TGP', 'MODE', 'CAPTURE') === 'CAPTURE'; } },
+        {
+          key: 'LOCK',
+          label: 'LOCK',
+          states: ['FREE', 'TRK', 'WPT', 'FIX', 'MARK'],
+          stateIndex: 0,
+          managedExternally: true,
+          show() { return isCaptureOrMarkMode(); },
+          onClick: ({ page }) => {
+            if (!page) return;
+
+            if (isMarkMode()) {
+              const lockState = OptionModule.getOption('TGP', 'LOCK', 'FREE');
+              if (lockState === 'FIX' || lockState === 'MARK') {
+                page._setLockState('FREE');
+                page._resetLockData();
+                page._lockedCallsign = 'N/A';
+                page._relYaw = 0;
+                page._relPitch = 0;
+                return;
+              }
+
+              const lookPoint = page._resolveCurrentAimGroundPoint();
+              if (!lookPoint) return;
+
+              page._applyLockedPoint(lookPoint, 'FIX', 'FIX');
+              return;
+            }
+
+            const cycle = ['FREE', 'TRK', 'WPT'];
+            const current = OptionModule.getOption('TGP', 'LOCK', 'FREE');
+            const currentIndex = Math.max(0, cycle.findIndex((state) => state === current));
+            const next = cycle[(currentIndex + 1) % cycle.length];
+            page._setLockState(next);
+
+            if (next === 'FREE') {
+              page._resetLockData();
+              page._lockedCallsign = 'N/A';
+            }
+          }
+        },
         {
           key: 'CAPTURE',
           label: 'CPT',
           states: [''],
-          show() { return OptionModule.getOption('TGP', 'MODE', 'CAPTURE') === 'CAPTURE'; },
+          show() { return isCaptureMode(); },
           onClick: ({ page, uiState }) => {
             uiState.queueMfdExport(page.title);
           },
           stateIndex: 0
         },
         {
-          key: 'NA1',
+          key: 'MARKPOINT',
+          label: 'MRK',
+          states: [''],
+          show() { return isMarkMode(); },
+          onClick: ({ page }) => {
+            if (!page) return;
+            const lookPoint = page._resolveCurrentAimGroundPoint();
+            if (!lookPoint) return;
+
+            page._markPoint = {
+              lat: lookPoint.lat,
+              lon: lookPoint.lon,
+              altM: lookPoint.altM,
+              createdAt: Date.now()
+            };
+
+            page._applyLockedPoint(page._markPoint, 'MARK', 'MRK');
+
+            const addon = this.getAddon?.();
+            const dataCartridge = addon?.dataCartridge;
+            if (dataCartridge?.addTgpMarkpoint) {
+              dataCartridge.addTgpMarkpoint(page._markPoint);
+            }
+          },
+          stateIndex: 0
+        },
+        {
+          key: 'NA10',
           label: '',
           states: [''],
           stateIndex: 0,
-          show() { return OptionModule.getOption('TGP', 'MODE', 'CAPTURE') === 'SETTINGS'; }
+          show() { return isSettingsMode(); }
         },
         {
           key: 'FREQUENCY',
           label: 'FREQ',
           states: ['2', '3', '5', '10', '15', '30', '45', '60'],
           stateIndex: 3,
-          show() { return OptionModule.getOption('TGP', 'MODE', 'CAPTURE') === 'SETTINGS'; }
-        }
+          show() { return isSettingsMode(); }
+        },
+        {
+          key: 'NA12',
+          label: '',
+          states: [''],
+          stateIndex: 0,
+          show() { return isSettingsMode(); }
+        },
+        {
+          key: 'POWER',
+          label: 'PWR',
+          states: ['ON', 'OFF'],
+          stateIndex: 1,
+          show() { return isSettingsMode(); }
+        },
       ],
       rightButtons: [
         {
@@ -66,7 +175,7 @@ class TargetingPodModule {
           label: '↑',
           states: [''],
           stateIndex: 0,
-          show() { return OptionModule.getOption('TGP', 'MODE', 'CAPTURE') === 'CAPTURE'; },
+          show() { return isCaptureOrMarkMode(); },
           onClick: ({ page }) => page && page._updateSlew(0, 1)
         },
         {
@@ -74,7 +183,7 @@ class TargetingPodModule {
           label: '↓',
           states: [''],
           stateIndex: 0,
-          show() { return OptionModule.getOption('TGP', 'MODE', 'CAPTURE') === 'CAPTURE'; },
+          show() { return isCaptureOrMarkMode(); },
           onClick: ({ page }) => page && page._updateSlew(0, -1)
         },
         {
@@ -82,7 +191,7 @@ class TargetingPodModule {
           label: '←',
           states: [''],
           stateIndex: 0,
-          show() { return OptionModule.getOption('TGP', 'MODE', 'CAPTURE') === 'CAPTURE'; },
+          show() { return isCaptureOrMarkMode(); },
           onClick: ({ page }) => page && page._updateSlew(-1, 0)
         },
         {
@@ -90,7 +199,7 @@ class TargetingPodModule {
           label: '→',
           states: [''],
           stateIndex: 0,
-          show() { return OptionModule.getOption('TGP', 'MODE', 'CAPTURE') === 'CAPTURE'; },
+          show() { return isCaptureOrMarkMode(); },
           onClick: ({ page }) => page && page._updateSlew(1, 0)
         },
         {
@@ -98,35 +207,35 @@ class TargetingPodModule {
           label: 'STEP',
           states: ['0.01', '0.05', '0.1', '0.25', '0.5', '1', '2.5', '5', '10'],
           stateIndex: 2,
-          show() { return OptionModule.getOption('TGP', 'MODE', 'CAPTURE') === 'CAPTURE'; }
+          show() { return isCaptureOrMarkMode(); }
         },
         {
           key: 'STYLE',
           label: 'STL',
           states: ['DAY', 'NIGHT', 'WHITE'],
           stateIndex: 0,
-          show() { return OptionModule.getOption('TGP', 'MODE', 'CAPTURE') === 'SETTINGS'; }
+          show() { return isSettingsMode(); }
         },
         {
           key: 'NA3',
           label: '',
           states: [''],
           stateIndex: 0,
-          show() { return OptionModule.getOption('TGP', 'MODE', 'CAPTURE') === 'SETTINGS'; }
+          show() { return isSettingsMode(); }
         },
         {
           key: 'TRACK',
           label: 'TRK',
           states: ['SIMPLE', 'ADVANCED'],
           stateIndex: 0,
-          show() { return OptionModule.getOption('TGP', 'MODE', 'CAPTURE') === 'SETTINGS'; }
+          show() { return isSettingsMode(); }
         },
         {
           key: 'NA4',
           label: '',
           states: [''],
           stateIndex: 0,
-          show() { return OptionModule.getOption('TGP', 'MODE', 'CAPTURE') === 'SETTINGS'; }
+          show() { return isSettingsMode(); }
         },
         {
           key: 'SLEW_RESET',
@@ -134,13 +243,15 @@ class TargetingPodModule {
           states: ['RESET'],
           stateIndex: 0,
           onClick: ({ page }) => page && page._resetSlew(),
-          show() { return OptionModule.getOption('TGP', 'MODE', 'CAPTURE') === 'SETTINGS'; }
+          show() { return isSettingsMode(); }
         },
       ],
 
       _snap: null,
       _snapCtx: null,
       _snapCoverCrop: null,
+      _styleCanvas: null,
+      _styleCtx: null,
       _captureQueued: false,
       _captureFovRad: 0,
       _captureIsLocked: false,
@@ -166,6 +277,7 @@ class TargetingPodModule {
       _targetHdg: 0,
       _closureKts: 0,
       _trackUpdateByUid: {},
+      _markPoint: null,
 
       _WGS84_A: 6378137.0,
       _WGS84_E2: 0.00669437999014,
@@ -291,6 +403,167 @@ class TargetingPodModule {
         return { lat: nextLat, lon: nextLon, altM };
       },
 
+      _setLockState: function(nextState) {
+        const state = String(nextState ?? 'FREE').toUpperCase();
+        OptionModule.setOption('TGP', 'LOCK', state);
+        this._lockMode = state;
+
+        const lockButtons = this.leftButtons?.filter((button) => button?.key === 'LOCK') ?? [];
+        for (const button of lockButtons) {
+          const index = button.states.findIndex((entry) => entry === state);
+          button.stateIndex = index >= 0 ? index : 0;
+        }
+      },
+
+      _getCaptureOrientation: function(isLocked) {
+        const animVals = window.geofs?.animation?.values ?? {};
+        const acHeading = Number(animVals.heading360 ?? animVals.heading ?? 0);
+        const acPitch = -Number(animVals.atilt ?? 0);
+        const acRoll = Number(animVals.aroll ?? 0);
+        const normDeg = (a) => ((a % 360) + 540) % 360 - 180;
+
+        let finalH;
+        let finalP;
+        let finalR;
+
+        if (isLocked && this._lockTargetKey) {
+          const viewer = window.geofs?.api?.viewer;
+          let refLat = Number(window.geofs?.camera?.lla?.[0]);
+          let refLon = Number(window.geofs?.camera?.lla?.[1]);
+          let refAlt = Number(window.geofs?.camera?.lla?.[2]);
+
+          const sceneCamera = viewer?.scene?.camera;
+          if (typeof Cesium !== 'undefined' && sceneCamera?.positionWC) {
+            const carto = Cesium.Cartographic.fromCartesian(sceneCamera.positionWC);
+            refLat = Cesium.Math.toDegrees(carto.latitude);
+            refLon = Cesium.Math.toDegrees(carto.longitude);
+            refAlt = Number(carto.height);
+          }
+
+          const tgtLat = Number(this._targetLat);
+          const tgtLon = Number(this._targetLon);
+          const tgtAlt = Number(this._targetAltM);
+
+          if (Number.isFinite(refLat) && Number.isFinite(refLon) && Number.isFinite(refAlt)
+            && Number.isFinite(tgtLat) && Number.isFinite(tgtLon) && Number.isFinite(tgtAlt)) {
+            const refEcef = this._llaToEcef(refLat, refLon, refAlt);
+            const tgtEcef = this._llaToEcef(tgtLat, tgtLon, tgtAlt);
+            const dX = tgtEcef[0] - refEcef[0];
+            const dY = tgtEcef[1] - refEcef[1];
+            const dZ = tgtEcef[2] - refEcef[2];
+            const [dN, dE, dU] = this._ecefDeltaToNeu(refLat, refLon, dX, dY, dZ);
+
+            const hdgRad = acHeading * Math.PI / 180;
+            const pitchRad = acPitch * Math.PI / 180;
+            const rollRad = -acRoll * Math.PI / 180;
+
+            const xH = dN * Math.cos(hdgRad) + dE * Math.sin(hdgRad);
+            const yH = -dN * Math.sin(hdgRad) + dE * Math.cos(hdgRad);
+            const zH = dU;
+
+            const xP = xH * Math.cos(pitchRad) + zH * Math.sin(pitchRad);
+            const yP = yH;
+            const zP = -xH * Math.sin(pitchRad) + zH * Math.cos(pitchRad);
+
+            const xB = xP;
+            const yB = yP * Math.cos(rollRad) - zP * Math.sin(rollRad);
+            const zB = yP * Math.sin(rollRad) + zP * Math.cos(rollRad);
+
+            finalH = normDeg(Math.atan2(yB, xB) * 180 / Math.PI + this._relYaw);
+            finalP = Math.max(-85, Math.min(85, Math.atan2(zB, Math.hypot(xB, yB)) * 180 / Math.PI + this._relPitch));
+            finalR = 0;
+          } else {
+            finalH = normDeg(this._targetWorldH - acHeading + this._relYaw);
+            finalP = Math.max(-85, Math.min(85, this._targetWorldP - acPitch + this._relPitch));
+            finalR = 0;
+          }
+        } else {
+          finalH = this._camYaw;
+          finalP = this._camPitch;
+          finalR = 0;
+        }
+
+        return { finalH, finalP, finalR };
+      },
+
+      _resolveCurrentAimGroundPoint: function() {
+        const viewer = window.geofs?.api?.viewer;
+        const mode1 = window.geofs?.camera?.modes?.[1];
+        if (!viewer?.scene || !mode1 || typeof Cesium === 'undefined') return null;
+
+        const fovDeg = Number(getOption('TGP', 'RANGE', 30));
+        const fovRad = fovDeg * Math.PI / 180;
+        const currentLock = OptionModule.getOption('TGP', 'LOCK', 'FREE');
+        const isLocked = currentLock !== 'FREE';
+        const { finalH, finalP, finalR } = this._getCaptureOrientation(isLocked);
+
+        const oPos = [...mode1.position];
+        const oOri = [...mode1.orientation];
+        const oFov = mode1.FOV;
+        const oCurr = mode1.orientations ? [...mode1.orientations.current] : [...oOri];
+        const oLast = mode1.orientations ? [...mode1.orientations.last] : [...oOri];
+        const frustum = viewer.scene.camera.frustum;
+        const origFrustumFov = frustum.fov;
+
+        try {
+          mode1.position = [oPos[0], oPos[1], -1.2];
+          mode1.orientation = [finalH, finalP, finalR];
+          mode1.FOV = fovRad;
+
+          if (mode1.orientations) {
+            mode1.orientations.current = [finalH, finalP, finalR];
+            mode1.orientations.last = [finalH, finalP, finalR];
+          }
+
+          frustum.fov = fovRad;
+          viewer.scene.render(viewer.clock.currentTime);
+
+          const vc = viewer.canvas;
+          const ray = viewer.scene.camera.getPickRay(new Cesium.Cartesian2(vc.width / 2, vc.height / 2));
+          const hit = ray ? viewer.scene.globe.pick(ray, viewer.scene) : null;
+          if (!hit) return null;
+
+          const carto = Cesium.Cartographic.fromCartesian(hit);
+          if (!carto) return null;
+
+          return {
+            lat: Cesium.Math.toDegrees(carto.latitude),
+            lon: Cesium.Math.toDegrees(carto.longitude),
+            altM: Number(carto.height) || 0
+          };
+        } finally {
+          mode1.position = oPos;
+          mode1.orientation = oOri;
+          mode1.FOV = oFov;
+          frustum.fov = origFrustumFov;
+
+          if (mode1.orientations) {
+            mode1.orientations.current = oCurr;
+            mode1.orientations.last = oLast;
+          }
+        }
+      },
+
+      _applyLockedPoint: function(point, lockState = 'FIX', callsign = 'FIX') {
+        if (!point) return false;
+
+        const lat = Number(point.lat);
+        const lon = Number(point.lon);
+        const altM = Number(point.altM) || 0;
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+
+        this._targetLat = lat;
+        this._targetLon = lon;
+        this._targetAltM = altM;
+        this._targetAltFt = Math.round(altM * 3.28084);
+        this._lockTargetKey = `${lockState}:${Date.now()}`;
+        this._lockedCallsign = callsign;
+        this._relYaw = 0;
+        this._relPitch = 0;
+        this._setLockState(lockState);
+        return true;
+      },
+
       _updateSlew: function(x, y) {
         const stepBtn = this.rightButtons.find((b) => b.key === 'SLEW_STEP');
         const step = Number(stepBtn.states[stepBtn.stateIndex]);
@@ -384,6 +657,13 @@ class TargetingPodModule {
             targetKey = `WPT:${cs}`;
             this._targetAltFt = Math.round(tAltM * 3.28084);
           }
+        } else if (this._lockMode === 'FIX' || this._lockMode === 'MARK') {
+          tLat = Number(this._targetLat);
+          tLon = Number(this._targetLon);
+          tAltM = Number(this._targetAltM) || 0;
+          cs = this._lockMode === 'MARK' ? 'MRK' : 'FIX';
+          targetKey = String(this._lockTargetKey ?? `${this._lockMode}:POINT`);
+          this._targetAltFt = Math.round(tAltM * 3.28084);
         }
 
         const own = window.geofs?.aircraft?.instance?.llaLocation;
@@ -452,71 +732,7 @@ class TargetingPodModule {
         const oCurr = mode1.orientations ? [...mode1.orientations.current] : [...oOri];
         const oLast = mode1.orientations ? [...mode1.orientations.last] : [...oOri];
 
-        const animVals = window.geofs?.animation?.values ?? {};
-        const acHeading = Number(animVals.heading360 ?? animVals.heading ?? 0);
-        const acPitch = -Number(animVals.atilt ?? 0);
-        const acRoll = Number(animVals.aroll ?? 0);
-
-        const normDeg = (a) => ((a % 360) + 540) % 360 - 180;
-        let finalH;
-        let finalP;
-        let finalR;
-
-        if (isLocked && this._lockTargetKey) {
-          let refLat = Number(window.geofs?.camera?.lla?.[0]);
-          let refLon = Number(window.geofs?.camera?.lla?.[1]);
-          let refAlt = Number(window.geofs?.camera?.lla?.[2]);
-
-          const sceneCamera = viewer?.scene?.camera;
-          if (typeof Cesium !== 'undefined' && sceneCamera?.positionWC) {
-            const carto = Cesium.Cartographic.fromCartesian(sceneCamera.positionWC);
-            refLat = Cesium.Math.toDegrees(carto.latitude);
-            refLon = Cesium.Math.toDegrees(carto.longitude);
-            refAlt = Number(carto.height);
-          }
-
-          const tgtLat = Number(this._targetLat);
-          const tgtLon = Number(this._targetLon);
-          const tgtAlt = Number(this._targetAltM);
-
-          if (Number.isFinite(refLat) && Number.isFinite(refLon) && Number.isFinite(refAlt)
-            && Number.isFinite(tgtLat) && Number.isFinite(tgtLon) && Number.isFinite(tgtAlt)) {
-            const refEcef = this._llaToEcef(refLat, refLon, refAlt);
-            const tgtEcef = this._llaToEcef(tgtLat, tgtLon, tgtAlt);
-            const dX = tgtEcef[0] - refEcef[0];
-            const dY = tgtEcef[1] - refEcef[1];
-            const dZ = tgtEcef[2] - refEcef[2];
-            const [dN, dE, dU] = this._ecefDeltaToNeu(refLat, refLon, dX, dY, dZ);
-
-            const hdgRad = acHeading * Math.PI / 180;
-            const pitchRad = acPitch * Math.PI / 180;
-            const rollRad = -acRoll * Math.PI / 180;
-
-            const xH = dN * Math.cos(hdgRad) + dE * Math.sin(hdgRad);
-            const yH = -dN * Math.sin(hdgRad) + dE * Math.cos(hdgRad);
-            const zH = dU;
-
-            const xP = xH * Math.cos(pitchRad) + zH * Math.sin(pitchRad);
-            const yP = yH;
-            const zP = -xH * Math.sin(pitchRad) + zH * Math.cos(pitchRad);
-
-            const xB = xP;
-            const yB = yP * Math.cos(rollRad) - zP * Math.sin(rollRad);
-            const zB = yP * Math.sin(rollRad) + zP * Math.cos(rollRad);
-
-            finalH = normDeg(Math.atan2(yB, xB) * 180 / Math.PI + this._relYaw);
-            finalP = Math.max(-85, Math.min(85, Math.atan2(zB, Math.hypot(xB, yB)) * 180 / Math.PI + this._relPitch));
-            finalR = 0;
-          } else {
-            finalH = normDeg(this._targetWorldH - acHeading + this._relYaw);
-            finalP = Math.max(-85, Math.min(85, this._targetWorldP - acPitch + this._relPitch));
-            finalR = 0;
-          }
-        } else {
-          finalH = this._camYaw;
-          finalP = this._camPitch;
-          finalR = 0;
-        }
+        const { finalH, finalP, finalR } = this._getCaptureOrientation(isLocked);
 
         mode1.position = [oPos[0], oPos[1], -1.2];
         mode1.orientation = [finalH, finalP, finalR];
@@ -600,9 +816,11 @@ class TargetingPodModule {
       },
 
       // Apply DAY/NIGHT/WHT image mode.
-      _applyImageMode: function(ctx, w, h, imgMode) {
+      _applyImageMode: function(ctx, imgMode) {
         if (imgMode === 'DAY') return;
 
+        const w = ctx.canvas.width;
+        const h = ctx.canvas.height;
         const id = ctx.getImageData(0, 0, w, h);
         const d = id.data;
         for (let i = 0; i < d.length; i += 4) {
@@ -618,6 +836,30 @@ class TargetingPodModule {
           }
         }
         ctx.putImageData(id, 0, 0);
+      },
+
+      // Draw snapshot and apply selected style.
+      _drawStyledSnapshot: function(ctx, w, h, imgMode) {
+        if (imgMode === 'DAY') {
+          this._drawSnapshot(ctx, w, h);
+          return;
+        }
+
+        if (!this._styleCanvas) {
+          this._styleCanvas = document.createElement('canvas');
+        }
+        if (this._styleCanvas.width !== w || this._styleCanvas.height !== h) {
+          this._styleCanvas.width = w;
+          this._styleCanvas.height = h;
+          this._styleCtx = null;
+        }
+        if (!this._styleCtx) {
+          this._styleCtx = this._styleCanvas.getContext('2d', { alpha: false, willReadFrequently: true });
+        }
+
+        this._drawSnapshot(this._styleCtx, w, h);
+        this._applyImageMode(this._styleCtx, imgMode);
+        ctx.drawImage(this._styleCanvas, 0, 0, w, h);
       },
 
       // Draw A/G overlay.
@@ -651,10 +893,10 @@ class TargetingPodModule {
 
         ctx.font = 'bold 18px monospace';
         ctx.textAlign = 'left';
-        ctx.fillText('A/G', 8, 24);
+        ctx.fillText('A/G', 70, 60);
 
         ctx.textAlign = 'right';
-        ctx.fillText(`FOV ${fovDeg}°`, w - 8, 24);
+        ctx.fillText(`FOV ${fovDeg}°`, w - 50, 60);
 
         ctx.textAlign = 'center';
         ctx.fillText(isLocked ? `${this._lockMode} ◆ ${this._lockedCallsign}` : 'SLEW', cx, 48);
@@ -662,15 +904,15 @@ class TargetingPodModule {
         if (isLocked && this._targetLat !== null) {
           ctx.font = 'bold 17px monospace';
           ctx.textAlign = 'left';
-          ctx.fillText(`LAT  ${this._targetLat.toFixed(4)}`, 8, h - 72);
-          ctx.fillText(`LON  ${this._targetLon.toFixed(4)}`, 8, h - 50);
-          ctx.fillText(`ELEV ${this._targetAltFt} ft`, 8, h - 28);
+          ctx.fillText(`LAT  ${this._targetLat.toFixed(4)}`, 70, h - 124);
+          ctx.fillText(`LON  ${this._targetLon.toFixed(4)}`, 70, h - 97);
+          ctx.fillText(`ELEV ${this._targetAltFt} ft`, 70, h - 70);
 
           ctx.textAlign = 'right';
           if (this._lockedDist !== null) {
-            ctx.fillText(`RNG  ${this._lockedDist} NM`, w - 8, h - 50);
+            ctx.fillText(`RNG  ${this._lockedDist} NM`, w - 120, h - 97);
           }
-          ctx.fillText(`BRG  ${Math.round(this._targetWorldH)}°`, w - 8, h - 28);
+          ctx.fillText(`BRG  ${Math.round(this._targetWorldH)}°`, w - 120, h - 70);
         } else {
           ctx.textAlign = 'center';
           ctx.font = 'bold 16px monospace';
@@ -745,9 +987,9 @@ class TargetingPodModule {
           ctx.font = 'bold 17px monospace';
           ctx.textAlign = 'left';
 
-          ctx.fillText(`ALT  ${this._targetAltFt} ft`, 70, h - 141);
+          ctx.fillText(`ALT  ${this._targetAltFt} ft`, 70, h - 151);
           if (this._lockedDist !== null) {
-            ctx.fillText(`RNG  ${this._lockedDist} NM`, 70, h - 119);
+            ctx.fillText(`RNG  ${this._lockedDist} NM`, 70, h - 124);
           }
 
           if (Math.abs(this._closureKts) > 200) ctx.fillStyle = '#ffcc00';
@@ -779,10 +1021,39 @@ class TargetingPodModule {
         const fovDeg = Number(getOption('TGP', 'RANGE', 30));
         const fovRad = fovDeg * Math.PI / 180;
         const frequency = Number(getOption('TGP', 'FREQUENCY', 4));
+        const powerState = String(getOption('TGP', 'POWER', 'OFF')).toUpperCase();
+        const isPoweredOn = powerState === 'ON';
         this._activeMode = getOption('WPN', 'MODE', 'A/G');
         this._lockMode = getOption('TGP', 'LOCK', 'FREE');
 
-        const isLocked = this._lockMode === 'TRK' || this._lockMode === 'WPT';
+        if (!isPoweredOn) {
+          ctx.save();
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(0, 0, w, h);
+
+          ctx.fillStyle = color;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.font = `bold ${Math.round(h * 0.075)}px monospace`;
+          ctx.fillText('TGP OFF', w * 0.5, h * 0.5);
+          ctx.restore();
+          return;
+        }
+
+        const mode = getMode();
+        if (mode === 'MARK' && !['FREE', 'FIX', 'MARK'].includes(this._lockMode)) {
+          this._setLockState('FREE');
+          this._lockMode = 'FREE';
+          this._resetLockData();
+        }
+        if (mode !== 'MARK' && ['FIX', 'MARK'].includes(this._lockMode)) {
+          this._setLockState('FREE');
+          this._lockMode = 'FREE';
+          this._resetLockData();
+        }
+
+        const isLocked = this._lockMode !== 'FREE';
         const isAA = this._activeMode === 'A/A';
 
         this._updateLock();
@@ -796,8 +1067,7 @@ class TargetingPodModule {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
 
         if (this._snap?.width > 0) {
-          this._drawSnapshot(ctx, w, h);
-          this._applyImageMode(ctx, w, h, imgMode);
+          this._drawStyledSnapshot(ctx, w, h, imgMode);
         }
 
         const hud = isLocked ? '#ff0000' : color;

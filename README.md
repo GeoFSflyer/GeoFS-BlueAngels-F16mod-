@@ -54,6 +54,9 @@ Installation (v1.7.0 stable): [geo-fs-f18-mod.js](https://raw.githubusercontent.
 
 ![F-18 add-on](Images/scripts/f-18-addon.png)
 
+## Mission Planner
+Install [the mission planner](https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/) to create a mission and share it with your aircraft.
+
 ## Flight recorder
 This addon allows you to record your flight and play it back while recording a new flight. This way you can record formation flights and practise formation flying.
 

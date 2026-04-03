@@ -2,7 +2,7 @@
 // @name         GeoFS F-15 Addon BETA
 // @namespace    https://github.com/ArjanKw/GeoFS-BlueAngels/
 // @version      2.0.0
-// @description  F-15 addon entrypoint with generic modules + one aircraft orchestrator.
+// @description  Improves the cockpit with custom MFDs, adjustable seat height and more.
 // @match        https://www.geo-fs.com/*
 // @match        https://geo-fs.com/*
 // @match        https://*.geo-fs.com/*
@@ -12,6 +12,7 @@
 // @require      https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/addon/modules/OptionModule.js
 // @require      https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/addon/modules/WeaponModule.js
 // @require      https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/addon/modules/ChecklistModule.js
+// @require      https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/addon/modules/DataCartridgeModule.js
 // @require      https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/addon/modules/NavModule.js
 // @require      https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/addon/modules/MapModule.js
 // @require      https://raw.githubusercontent.com/ArjanKw/GeoFS-BlueAngels/refs/heads/main/Scripts/addon/modules/RadarModule.js
