@@ -245,7 +245,7 @@
     ctx.fillStyle = this.DEFAULT_COLOR;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(`Î± ${aoa.toFixed(1)}`, w * 0.716, h * 0.93);
+    ctx.fillText(`α ${aoa.toFixed(1)}`, w * 0.716, h * 0.93);
     ctx.textAlign = previousAlign;
     ctx.textBaseline = previousBaseline;
   
