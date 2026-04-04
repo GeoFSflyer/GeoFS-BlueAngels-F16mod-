@@ -212,7 +212,7 @@
           ...window.WeaponModuleDefaults?.fighter,
           storageKey: 'F18WpnState'
         }),
-        checklists: ChecklistModule.loadDefaults('f18') ?? new ChecklistModule(),
+        checklists: ChecklistModule.loadDefaults('fighter') ?? new ChecklistModule(),
         helper: new HelperModule(),
         dataCartridge: null,
         map: null,

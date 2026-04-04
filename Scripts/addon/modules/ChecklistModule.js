@@ -1,6 +1,6 @@
 
   class ChecklistModule {
-    static loadDefaults(presetName = 'f18') {
+    static loadDefaults(presetName = 'fighter') {
       const defaultsApi = window.ChecklistModuleDefaults;
       const createFromDefaults = defaultsApi?.createModule;
       if (typeof createFromDefaults !== 'function') {

@@ -1063,7 +1063,7 @@ class WeaponModule {
 
 
   class ChecklistModule {
-    static loadDefaults(presetName = 'f18') {
+    static loadDefaults(presetName = 'fighter') {
       const defaultsApi = window.ChecklistModuleDefaults;
       const createFromDefaults = defaultsApi?.createModule;
       if (typeof createFromDefaults !== 'function') {
@@ -1682,7 +1682,7 @@ class DataCartridgeModule {
   }
 
   getAreaStyle(type, group = '') {
-    if (String(group ?? '').toUpperCase() === 'FOO') {
+    if (group === 'FOO') {
       return this._clone(DataCartridgeModule.FOO_AREA_STYLE);
     }
     return this._clone(DataCartridgeModule.AREA_STYLE_BY_TYPE[type] ?? DataCartridgeModule.AREA_STYLE_BY_TYPE.AREA);
@@ -10752,7 +10752,7 @@ class MfdModule {
           ...window.WeaponModuleDefaults?.fighter,
           storageKey: 'F18WpnState'
         }),
-        checklists: ChecklistModule.loadDefaults('f18') ?? new ChecklistModule(),
+        checklists: ChecklistModule.loadDefaults('fighter') ?? new ChecklistModule(),
         helper: new HelperModule(),
         dataCartridge: null,
         map: null,
