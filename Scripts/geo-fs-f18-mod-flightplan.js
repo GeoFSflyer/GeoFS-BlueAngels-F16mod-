@@ -42,12 +42,12 @@
   const timer = setInterval(() => {
     tries += 1;
 
-    // Check if the F18Addon checklist API is available already.
-    const api = window.F18Addon?.checklists;
+    // Check if the active addon checklist API is available already.
+    const api = window.BasePlugin?.getActiveAddon?.()?.checklists;
     if (!api) {
       if (tries >= MAX_TRIES) {
         clearInterval(timer);
-        console.warn('[F18 Checklist Demo] F18Addon.checklists not found.');
+        console.warn('[Checklist Demo] Active addon checklist API not found.');
       }
       return;
     }

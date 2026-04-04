@@ -586,7 +586,7 @@
             const sortedAreas = [...(dataCartridgeScene?.areas ?? [])]
               .sort((a, b) => Number(a?.order ?? 0) - Number(b?.order ?? 0));
             for (const area of sortedAreas) {
-              const style = this.getAreaStyle(area?.type);
+              const style = this.getAreaStyle(area);
               if (String(area?.variant).toUpperCase() === 'CIRCLE') {
                 const center = Array.isArray(area?.center) ? area.center : null;
                 const centerPt = center ? projectGeoToHsi(center[0], center[1]) : null;
@@ -888,7 +888,7 @@
             const sortedAreas = [...(dataCartridgeScene?.areas ?? [])]
               .sort((a, b) => Number(a?.order ?? 0) - Number(b?.order ?? 0));
             for (const area of sortedAreas) {
-              const style = this.getAreaStyle(area?.type);
+              const style = this.getAreaStyle(area);
               if (String(area?.variant).toUpperCase() === 'CIRCLE') {
                 const center = Array.isArray(area?.center) ? area.center : null;
                 const centerPt = center ? projectMap({ lat: center[0], lon: center[1] }, 'lat', 'lon') : null;
@@ -1002,10 +1002,21 @@
       };
     }
 
-    getAreaStyle(type) {
+    getAreaStyle(areaOrType, maybeGroup = '') {
+      const type = typeof areaOrType === 'object' && areaOrType
+        ? areaOrType.type
+        : areaOrType;
+      const group = typeof areaOrType === 'object' && areaOrType
+        ? areaOrType.group
+        : maybeGroup;
+
       const cartridge = this.getDataCartridgeModule();
       if (cartridge?.getAreaStyle) {
-        return cartridge.getAreaStyle(type);
+        return cartridge.getAreaStyle(type, group);
+      }
+
+      if (String(group ?? '').toUpperCase() === 'FOO') {
+        return { color: '#f44336', fillColor: '#f44336', fillOpacity: 0.16 };
       }
 
       const fallback = {

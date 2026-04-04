@@ -1440,6 +1440,8 @@ class WeaponModule {
 
 
 class DataCartridgeModule {
+  static FOO_AREA_STYLE = { color: '#f44336', fillColor: '#f44336', fillOpacity: 0.16 };
+
   static AREA_STYLE_BY_TYPE = {
     SAM: { color: '#ff5252', fillColor: '#ff5252', fillOpacity: 0.18 },
     NOFLY: { color: '#ff9800', fillColor: '#ff9800', fillOpacity: 0.16 },
@@ -1679,7 +1681,10 @@ class DataCartridgeModule {
     };
   }
 
-  getAreaStyle(type) {
+  getAreaStyle(type, group = '') {
+    if (String(group ?? '').toUpperCase() === 'FOO') {
+      return this._clone(DataCartridgeModule.FOO_AREA_STYLE);
+    }
     return this._clone(DataCartridgeModule.AREA_STYLE_BY_TYPE[type] ?? DataCartridgeModule.AREA_STYLE_BY_TYPE.AREA);
   }
 
@@ -2282,7 +2287,7 @@ window.DataCartridgeModule = DataCartridgeModule;
             const sortedAreas = [...(dataCartridgeScene?.areas ?? [])]
               .sort((a, b) => Number(a?.order ?? 0) - Number(b?.order ?? 0));
             for (const area of sortedAreas) {
-              const style = this.getAreaStyle(area?.type);
+              const style = this.getAreaStyle(area);
               if (String(area?.variant).toUpperCase() === 'CIRCLE') {
                 const center = Array.isArray(area?.center) ? area.center : null;
                 const centerPt = center ? projectGeoToHsi(center[0], center[1]) : null;
@@ -2584,7 +2589,7 @@ window.DataCartridgeModule = DataCartridgeModule;
             const sortedAreas = [...(dataCartridgeScene?.areas ?? [])]
               .sort((a, b) => Number(a?.order ?? 0) - Number(b?.order ?? 0));
             for (const area of sortedAreas) {
-              const style = this.getAreaStyle(area?.type);
+              const style = this.getAreaStyle(area);
               if (String(area?.variant).toUpperCase() === 'CIRCLE') {
                 const center = Array.isArray(area?.center) ? area.center : null;
                 const centerPt = center ? projectMap({ lat: center[0], lon: center[1] }, 'lat', 'lon') : null;
@@ -2698,10 +2703,21 @@ window.DataCartridgeModule = DataCartridgeModule;
       };
     }
 
-    getAreaStyle(type) {
+    getAreaStyle(areaOrType, maybeGroup = '') {
+      const type = typeof areaOrType === 'object' && areaOrType
+        ? areaOrType.type
+        : areaOrType;
+      const group = typeof areaOrType === 'object' && areaOrType
+        ? areaOrType.group
+        : maybeGroup;
+
       const cartridge = this.getDataCartridgeModule();
       if (cartridge?.getAreaStyle) {
-        return cartridge.getAreaStyle(type);
+        return cartridge.getAreaStyle(type, group);
+      }
+
+      if (String(group ?? '').toUpperCase() === 'FOO') {
+        return { color: '#f44336', fillColor: '#f44336', fillOpacity: 0.16 };
       }
 
       const fallback = {
@@ -10192,17 +10208,17 @@ class MfdModule {
 (function () {
   'use strict';
 
-  const f18ChecklistDefaults = [
+  const fighterChecklistDefaults = [
     {
       type: 'PROC',
       title: 'Engine Start',
-      items: ['Parking Brake ON', 'Data Cartridge LOADED', 'Briefing CHECKED', 'Master Arm OFF', 'Radar OFF', 'Weapon Config SELECTED', 'Rearming FINISHED', 'Area CLEAR', 'Engine ON', 'Instruments CHECK'],
+      items: ['Parking Brake ON', 'Data Cartridge LOADED', 'Briefing/Mission CHECKED', 'Master Arm OFF', 'Radar OFF', 'Weapon Config SELECTED', 'Rearming FINISHED', 'Area CLEAR', 'Engine ON', 'Instruments CHECK'],
       completed: false
     },
     {
       type: 'PROC',
       title: 'Before Taxi',
-      items: ['Ladder UP', 'Tailhook UP', 'Fuel Probe CLOSED', 'Wings LOCKED', 'Flaps MAN', 'Canopy AS DESIRED', 'Recording AS DESIRED', 'Taxi REQUESTED'],
+      items: ['Ladder UP', 'Tailhook UP', 'Fuel Probe CLOSED', 'TGP Power OFF', 'Wings LOCKED', 'Flaps MAN', 'Canopy AS DESIRED', 'Recording AS DESIRED', 'Taxi REQUESTED'],
       completed: false
     },
     {
@@ -10232,43 +10248,37 @@ class MfdModule {
     {
       type: 'PROC',
       title: 'Descent',
-      items: ['Trim SET'],
+      items: ['Trim SET', 'Approach BRIEFED', 'ATIS CHECKED', 'Approach Clearance REQUESTED'],
       completed: false
     },
     {
       type: 'PROC',
       title: 'Before landing',
-      items: ['Master Arm OFF', 'TODO'],
+      items: ['Master Arm OFF', 'Radar OFF', 'Targeting Pod OFF', 'Landing Gear 3 GREEN', 'Flaps FULL'],
       completed: false
     },
     {
       type: 'PROC',
-      title: 'Landing',
-      items: ['TODO'],
+      title: 'After Landing',
+      items: ['Taxi CLEAR OF RUNWAY', 'Taxi Clearance REQUESTED', 'Flaps UP'],
       completed: false
     },
     {
       type: 'PROC',
       title: 'Taxi',
-      items: ['TODO'],
+      items: ['Taxi TO PARKING', 'Canopy AS DESIRED'],
       completed: false
     },
     {
       type: 'PROC',
       title: 'Shutdown',
-      items: ['TODO'],
+      items: ['Parking Brake ON', 'Engine OFF'],
       completed: false
     },
     {
       type: 'EMER',
       title: 'Engine Fire',
       items: ['Throttle IDLE', 'Engine OFF', 'Divert NEAREST', 'Descent GLIDE', 'Airspeed SET OPTIMAL', 'Radio MAYDAY', 'Land ASAP'],
-      completed: false
-    },
-    {
-      type: 'OPS',
-      title: 'IFF Codebook',
-      items: ['Say \'IFF [CS] - Code [NO.]\'', 'Respond with \'IFF [Code]\'', '┌─────────────────────┐', '│  01: 457 │  02: 701 │ ', '│  03: 337 │  04: 241 │ ', '│  05: 612 │  06: 135 │ ', '│  07: 402 │  08: 984 │ ', '│  09: 264 │  10: 753 │ ', '│  11: 755 │  12: 588 │ ', '│  13: 284 │  14: 000 │ ', '└─────────────────────┘'],
       completed: false
     },
     {
@@ -10286,46 +10296,22 @@ class MfdModule {
     {
       type: 'OPS',
       title: 'Formation (Re)join',
-      items: ['Lock TARGET', 'Closure > 1 nm - +60knots', 'Closure 6000 ft - 60 knots', 'Closure 2000 ft - 40 knots', 'Closure 500 ft - 20 knots', 'Visual Contact', 'Take position'],
+      items: ['Target LOCK', 'Closure > 1 nm - +60knots', 'Closure 6000 ft - 60 knots', 'Closure 2000 ft - 40 knots', 'Closure 500 ft - 20 knots', 'Visual Contact', 'Take position'],
       completed: false
     },
     {
       type: 'OPS',
       title: 'Overhead Break (Landing)',
-      items: ['TODO'],
-      completed: false
-    },
-    {
-      type: 'FLP',
-      title: 'Briefing - Flight',
-      items: ['Flight Callsign BA', 'Start Time 1300Z', 'Start Taxi 1305Z', 'Start T/O 1310Z', 'End Time 1400Z'],
-      completed: false
-    },
-    {
-      type: 'FLP',
-      title: 'Briefing - Positions',
-      items: ['#1 - BigE', '#2 - Natrium', '#3 - Merpati', '#4 - Sonic'],
-      completed: false
-    },
-    {
-      type: 'FLP',
-      title: 'Briefing - Enroute',
-      items: ['ALT FL10', 'SPD 300 knots', 'Route as planned'],
-      completed: false
-    },
-    {
-      type: 'FLP',
-      title: 'Briefing - Landing',
-      items: ['Primary KNPA', 'Alternate KPNS', 'Runway 25L', 'Pattern OVERHEAD BREAK', 'Formation DELTA', 'ALT Entry 200ft', 'SPD Entry 300 kn', 'Pitch int. 3s', 'Downwind 200 kn'],
+      items: ['Runway DETERMINED', 'RW + break to L/R ANNOUNCED', 'Runway ALIGN', 'Alt/Speed AS BRIEFED', '#1 Break ANNOUNCE', '#1 BREAK', '#2 and up REPEAT', 'Downwind Speed AS BRIEFED', 'Land'],
       completed: false
     }
   ];
 
   const presets = {
-    f18: f18ChecklistDefaults
+    fighter: fighterChecklistDefaults
   };
 
-  function createModule(presetName = 'f18') {
+  function createModule(presetName = 'fighter') {
     if (typeof ChecklistModule !== 'function') {
       return null;
     }

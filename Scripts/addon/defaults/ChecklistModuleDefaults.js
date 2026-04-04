@@ -1,17 +1,17 @@
 (function () {
   'use strict';
 
-  const f18ChecklistDefaults = [
+  const fighterChecklistDefaults = [
     {
       type: 'PROC',
       title: 'Engine Start',
-      items: ['Parking Brake ON', 'Data Cartridge LOADED', 'Briefing CHECKED', 'Master Arm OFF', 'Radar OFF', 'Weapon Config SELECTED', 'Rearming FINISHED', 'Area CLEAR', 'Engine ON', 'Instruments CHECK'],
+      items: ['Parking Brake ON', 'Data Cartridge LOADED', 'Briefing/Mission CHECKED', 'Master Arm OFF', 'Radar OFF', 'Weapon Config SELECTED', 'Rearming FINISHED', 'Area CLEAR', 'Engine ON', 'Instruments CHECK'],
       completed: false
     },
     {
       type: 'PROC',
       title: 'Before Taxi',
-      items: ['Ladder UP', 'Tailhook UP', 'Fuel Probe CLOSED', 'Wings LOCKED', 'Flaps MAN', 'Canopy AS DESIRED', 'Recording AS DESIRED', 'Taxi REQUESTED'],
+      items: ['Ladder UP', 'Tailhook UP', 'Fuel Probe CLOSED', 'TGP Power OFF', 'Wings LOCKED', 'Flaps MAN', 'Canopy AS DESIRED', 'Recording AS DESIRED', 'Taxi REQUESTED'],
       completed: false
     },
     {
@@ -41,43 +41,37 @@
     {
       type: 'PROC',
       title: 'Descent',
-      items: ['Trim SET'],
+      items: ['Trim SET', 'Approach BRIEFED', 'ATIS CHECKED', 'Approach Clearance REQUESTED'],
       completed: false
     },
     {
       type: 'PROC',
       title: 'Before landing',
-      items: ['Master Arm OFF', 'TODO'],
+      items: ['Master Arm OFF', 'Radar OFF', 'Targeting Pod OFF', 'Landing Gear 3 GREEN', 'Flaps FULL'],
       completed: false
     },
     {
       type: 'PROC',
-      title: 'Landing',
-      items: ['TODO'],
+      title: 'After Landing',
+      items: ['Taxi CLEAR OF RUNWAY', 'Taxi Clearance REQUESTED', 'Flaps UP'],
       completed: false
     },
     {
       type: 'PROC',
       title: 'Taxi',
-      items: ['TODO'],
+      items: ['Taxi TO PARKING', 'Canopy AS DESIRED'],
       completed: false
     },
     {
       type: 'PROC',
       title: 'Shutdown',
-      items: ['TODO'],
+      items: ['Parking Brake ON', 'Engine OFF'],
       completed: false
     },
     {
       type: 'EMER',
       title: 'Engine Fire',
       items: ['Throttle IDLE', 'Engine OFF', 'Divert NEAREST', 'Descent GLIDE', 'Airspeed SET OPTIMAL', 'Radio MAYDAY', 'Land ASAP'],
-      completed: false
-    },
-    {
-      type: 'OPS',
-      title: 'IFF Codebook',
-      items: ['Say \'IFF [CS] - Code [NO.]\'', 'Respond with \'IFF [Code]\'', '┌─────────────────────┐', '│  01: 457 │  02: 701 │ ', '│  03: 337 │  04: 241 │ ', '│  05: 612 │  06: 135 │ ', '│  07: 402 │  08: 984 │ ', '│  09: 264 │  10: 753 │ ', '│  11: 755 │  12: 588 │ ', '│  13: 284 │  14: 000 │ ', '└─────────────────────┘'],
       completed: false
     },
     {
@@ -95,46 +89,22 @@
     {
       type: 'OPS',
       title: 'Formation (Re)join',
-      items: ['Lock TARGET', 'Closure > 1 nm - +60knots', 'Closure 6000 ft - 60 knots', 'Closure 2000 ft - 40 knots', 'Closure 500 ft - 20 knots', 'Visual Contact', 'Take position'],
+      items: ['Target LOCK', 'Closure > 1 nm - +60knots', 'Closure 6000 ft - 60 knots', 'Closure 2000 ft - 40 knots', 'Closure 500 ft - 20 knots', 'Visual Contact', 'Take position'],
       completed: false
     },
     {
       type: 'OPS',
       title: 'Overhead Break (Landing)',
-      items: ['TODO'],
-      completed: false
-    },
-    {
-      type: 'FLP',
-      title: 'Briefing - Flight',
-      items: ['Flight Callsign BA', 'Start Time 1300Z', 'Start Taxi 1305Z', 'Start T/O 1310Z', 'End Time 1400Z'],
-      completed: false
-    },
-    {
-      type: 'FLP',
-      title: 'Briefing - Positions',
-      items: ['#1 - BigE', '#2 - Natrium', '#3 - Merpati', '#4 - Sonic'],
-      completed: false
-    },
-    {
-      type: 'FLP',
-      title: 'Briefing - Enroute',
-      items: ['ALT FL10', 'SPD 300 knots', 'Route as planned'],
-      completed: false
-    },
-    {
-      type: 'FLP',
-      title: 'Briefing - Landing',
-      items: ['Primary KNPA', 'Alternate KPNS', 'Runway 25L', 'Pattern OVERHEAD BREAK', 'Formation DELTA', 'ALT Entry 200ft', 'SPD Entry 300 kn', 'Pitch int. 3s', 'Downwind 200 kn'],
+      items: ['Runway DETERMINED', 'RW + break to L/R ANNOUNCED', 'Runway ALIGN', 'Alt/Speed AS BRIEFED', '#1 Break ANNOUNCE', '#1 BREAK', '#2 and up REPEAT', 'Downwind Speed AS BRIEFED', 'Land'],
       completed: false
     }
   ];
 
   const presets = {
-    f18: f18ChecklistDefaults
+    fighter: fighterChecklistDefaults
   };
 
-  function createModule(presetName = 'f18') {
+  function createModule(presetName = 'fighter') {
     if (typeof ChecklistModule !== 'function') {
       return null;
     }

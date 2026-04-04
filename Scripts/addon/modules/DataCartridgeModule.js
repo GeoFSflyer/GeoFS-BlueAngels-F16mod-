@@ -1,4 +1,6 @@
 class DataCartridgeModule {
+  static FOO_AREA_STYLE = { color: '#f44336', fillColor: '#f44336', fillOpacity: 0.16 };
+
   static AREA_STYLE_BY_TYPE = {
     SAM: { color: '#ff5252', fillColor: '#ff5252', fillOpacity: 0.18 },
     NOFLY: { color: '#ff9800', fillColor: '#ff9800', fillOpacity: 0.16 },
@@ -238,7 +240,10 @@ class DataCartridgeModule {
     };
   }
 
-  getAreaStyle(type) {
+  getAreaStyle(type, group = '') {
+    if (group === 'FOO') {
+      return this._clone(DataCartridgeModule.FOO_AREA_STYLE);
+    }
     return this._clone(DataCartridgeModule.AREA_STYLE_BY_TYPE[type] ?? DataCartridgeModule.AREA_STYLE_BY_TYPE.AREA);
   }
 

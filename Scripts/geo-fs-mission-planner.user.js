@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoFS Mission Planner
 // @namespace    https://www.geo-fs.com/
-// @version      0.1.0
+// @version      1.0.0
 // @description  Plan your mission upfront, share it with your flight members and execute it together in GeoFS!
 // @match        https://www.geo-fs.com/*
 // @grant        none
@@ -33,6 +33,7 @@
       DANGER: { color: '#9c27b0', fillColor: '#9c27b0', fillOpacity: 0.16 },
       AREA: { color: '#03a9f4', fillColor: '#03a9f4', fillOpacity: 0.14 }
     };
+    const FOO_AREA_STYLE = { color: '#f44336', fillColor: '#f44336', fillOpacity: 0.16 };
     const MARKPOINT_COLOR_BY_TYPE = {
       TARGET: '#f44336',
       FRIENDLY: '#2196f3',
@@ -264,7 +265,10 @@
           .slice()
           .sort((a, b) => a.order - b.order)
           .forEach((area) => {
-            const style = { ...AREA_STYLE_BY_TYPE[area.type], weight: 2, interactive: false };
+            const baseStyle = String(area.group ?? '').toUpperCase() === 'FOO'
+              ? FOO_AREA_STYLE
+              : AREA_STYLE_BY_TYPE[area.type];
+            const style = { ...baseStyle, weight: 2, interactive: false };
             let layer;
             if (area.variant === 'CIRCLE') {
               layer = L.circle(area.center, { ...style, radius: area.radius }).addTo(this.layers.mission).bindTooltip(`${area.name} (${area.type}/${area.group})`);
@@ -1430,7 +1434,9 @@
               }),
               areas: mission.areas.map((a) => ({
                 id: a.id,
-                style: cloneData(AREA_STYLE_BY_TYPE[a.type] || AREA_STYLE_BY_TYPE.AREA)
+                style: cloneData(String(a.group ?? '').toUpperCase() === 'FOO'
+                  ? FOO_AREA_STYLE
+                  : (AREA_STYLE_BY_TYPE[a.type] || AREA_STYLE_BY_TYPE.AREA))
               }))
             }
           };
@@ -1922,6 +1928,7 @@
           display: none;
           font-family: Arial, sans-serif;
           box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+          max-height: 85vh;
         }
         .geofs-missionPlanner-panel.geofs-visible {
           display: block;
@@ -2271,7 +2278,7 @@
 
       clearInterval(timer);
       window.GeoFSMissionPlanner = {
-        version: '0.1.0',
+        version: '1.0.0',
         app,
         start: () => app.startDrawing(),
         stop: () => app.stopDrawing(),
