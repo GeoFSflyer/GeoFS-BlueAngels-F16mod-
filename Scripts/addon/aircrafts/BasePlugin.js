@@ -73,6 +73,10 @@
       return BasePlugin.getRuntime().activePlugin;
     }
 
+    static getActiveAddon() {
+      return BasePlugin.getActivePlugin()?.addon ?? null;
+    }
+
     static isAircraftActive() {
       const activePlugin = BasePlugin.getActivePlugin();
       if (!activePlugin) return false;

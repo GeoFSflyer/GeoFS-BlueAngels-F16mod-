@@ -12,7 +12,7 @@
         helperModule: dependencies.helperModule ?? HelperModule,
         cameraModule: dependencies.cameraModule ?? CameraModule,
         mfdModule: dependencies.mfdModule ?? MfdModule,
-        getAddon: dependencies.getAddon ?? (() => window.F18Addon ?? null)
+        getAddon: dependencies.getAddon ?? (() => window.BasePlugin?.getActiveAddon?.() ?? null)
       };
       this.originalRenderer = null;
       this.installed = false;
@@ -538,7 +538,7 @@
     const gPrefixWidth = ctx.measureText(gPrefix).width;
 
     ctx.fillText(`M ${mach.toFixed(2)}`, x, y1);
-    ctx.fillText(`Î± ${aoa.toFixed(1)}`, x, y2);
+    ctx.fillText(`α ${aoa.toFixed(1)}`, x, y2);
     ctx.fillText(gPrefix, x, y3);
     ctx.fillText(gValue.toFixed(1), x + gPrefixWidth, y3);
     // Max G zonder prefix, uitgelijnd op het G-getal.
@@ -982,137 +982,132 @@
     }
 
     renderF18Hud(renderer) {
-    const o = renderer.canvasAPI.context;
-    const canvas = renderer.canvasAPI.canvas ?? o.canvas;
-    const w = canvas?.width || 512;
-    const h = canvas?.height || 512;
+      const o = renderer.canvasAPI.context;
+      const canvas = renderer.canvasAPI.canvas ?? o.canvas;
+      const w = canvas?.width || 512;
+      const h = canvas?.height || 512;
 
-    const ac = window.geofs?.aircraft?.instance;
-    const anim = window.geofs?.animation?.values ?? {};
-    const camera = window.geofs?.api?.viewer?.camera;
+      const ac = window.geofs?.aircraft?.instance;
+      const anim = window.geofs?.animation?.values ?? {};
+      const camera = window.geofs?.api?.viewer?.camera;
 
-    const kias = window.exponentialSmoothing
-      ? window.exponentialSmoothing('smoothKias', anim.kias ?? 0, 0.1)
-      : (anim.kias ?? 0);
-    const alt = anim.altitude ?? 0;
-    const hdg = anim.heading360 ?? anim.heading ?? 0;
-    const aoa = anim.aoa ?? 0;
-    const mach = Math.round(((window.geofs?.animation?.values?.mach ?? 0) * 100)) / 100;
-    const vsi = Math.round((window.geofs?.animation?.values?.climbrate ?? 0) / 10) * 10;
-    const radioAlt = window.geofs?.animation?.values?.haglFeet ?? 0;
-    const trimScaled = Math.round((window.geofs?.animation?.values?.trim ?? 0) * 100);
-    const trimDisplay = trimScaled === 0 ? 'T T/O' : `T ${trimScaled}`;
-    const currentG = Number.isFinite(anim.loadFactor) ? anim.loadFactor : 1;
-    const navUnit = window.geofs?.nav?.currentNAVUnit ?? null;
-    const autopilot = window.geofs?.autopilot ?? null;
-    const wpnMaster = this.getOption('WPN', 'MASTER', 'OFF');
-    const wpnMode = this.getWpnModeFromOptions();
-    const wpnModeLoadout = this.getWpnModeLoadout(wpnMode);
-    const wpnHudStatus = wpnMaster !== 'OFF'
-      ? {
-          line1: `${wpnMaster === 'SIM' ? 'SIM' : 'ARM'} ${wpnMode}`,
-          line2: this.getSelectedWpnQuantityLine(wpnMode, wpnModeLoadout)
-        }
-      : null;
-    const hudBaseColor = this.getOptionValue('HUD', 'COLOR', F18HudModule.DEFAULT_COLOR);
-    const hudColor = this.applyBrightnessToHexColor(hudBaseColor, this.getMfdBrightnessFactor());
-    const hudLevel = this.getOption('HUD', 'LEVEL', 'FULL');
-    F18HudModule.DEFAULT_COLOR = hudColor;
+      const kias = window.exponentialSmoothing
+        ? window.exponentialSmoothing('smoothKias', anim.kias ?? 0, 0.1)
+        : (anim.kias ?? 0);
+      const alt = anim.altitude ?? 0;
+      const hdg = anim.heading360 ?? anim.heading ?? 0;
+      const aoa = anim.aoa ?? 0;
+      const mach = Math.round(((window.geofs?.animation?.values?.mach ?? 0) * 100)) / 100;
+      const vsi = Math.round((window.geofs?.animation?.values?.climbrate ?? 0) / 10) * 10;
+      const radioAlt = window.geofs?.animation?.values?.haglFeet ?? 0;
+      const trimScaled = Math.round((window.geofs?.animation?.values?.trim ?? 0) * 100);
+      const trimDisplay = trimScaled === 0 ? 'T T/O' : `T ${trimScaled}`;
+      const currentG = Number.isFinite(anim.loadFactor) ? anim.loadFactor : 1;
+      const navUnit = window.geofs?.nav?.currentNAVUnit ?? null;
+      const autopilot = window.geofs?.autopilot ?? null;
+      const wpnMaster = this.getOption('WPN', 'MASTER', 'OFF');
+      const wpnMode = this.getWpnModeFromOptions();
+      const wpnModeLoadout = this.getWpnModeLoadout(wpnMode);
+      const wpnHudStatus = wpnMaster !== 'OFF'
+        ? {
+            line1: `${wpnMaster === 'SIM' ? 'SIM' : 'ARM'} ${wpnMode}`,
+            line2: this.getSelectedWpnQuantityLine(wpnMode, wpnModeLoadout)
+          }
+        : null;
+      const hudBaseColor = this.getOptionValue('HUD', 'COLOR', F18HudModule.DEFAULT_COLOR);
+      const hudColor = this.applyBrightnessToHexColor(hudBaseColor, this.getMfdBrightnessFactor());
+      const hudLevel = this.getOption('HUD', 'LEVEL', 'FULL');
+      F18HudModule.DEFAULT_COLOR = hudColor;
 
-    this.updateWpnRearmState();
+      this.updateWpnRearmState();
 
-    if (currentG > this.maxG) {
-      this.maxG = currentG;
-    }
+      if (currentG > this.maxG) {
+        this.maxG = currentG;
+      }
 
-    const helperModule = this.dependencies.helperModule;
-    const navModule = this.getNavModule();
+      const helperModule = this.dependencies.helperModule;
+      const navModule = this.getNavModule();
 
-    // Canvas leeg maken met echte transparantie (voorkomt volle groene plaat).
-    o.save();
-    o.setTransform(1, 0, 0, 1, 0, 0);
-    o.clearRect(0, 0, w, h);
-    o.restore();
+      // Canvas leeg maken met echte transparantie (voorkomt volle groene plaat).
+      o.save();
+      o.setTransform(1, 0, 0, 1, 0, 0);
+      o.clearRect(0, 0, w, h);
+      o.restore();
 
-    // Achtergrond overlay (GeoFS origineel gebruikt e.images.background; hier weglaten
-    // want we willen een glazen HUD zonder achtergrond-sprite).
+      // Achtergrond overlay (GeoFS origineel gebruikt e.images.background; hier weglaten
+      // want we willen een glazen HUD zonder achtergrond-sprite).
 
-    o.fillStyle = hudColor;
-    o.strokeStyle = hudColor;
-    o.lineWidth = 2;
-    o.font = `20px sans-serif`;
+      o.fillStyle = hudColor;
+      o.strokeStyle = hudColor;
+      o.lineWidth = 2;
+      o.font = `20px sans-serif`;
 
-    // --- Kompasband bovenaan ---
-    if (hudLevel == 'FULL') {
-      F18HudModule.drawTopHeadingScale(o, renderer, hdg, navUnit, helperModule, w, h);
-    }
-
-    // --- Speed + Altitude boxed readouts (meer naar binnen) ---
-    F18HudModule.drawSpeedBox(o, kias, w, h);
-    F18HudModule.drawAltitudeBox(o, alt, w, h);
-
-    // --- Readouts links/rechts rond de boxes ---
-    if (hudLevel !== 'MIN') {
-        F18HudModule.drawLeftReadouts(o, mach, currentG, aoa, this.maxG, autopilot, w, h);
-      F18HudModule.drawRightReadouts(o, vsi, radioAlt, trimDisplay, navUnit, navModule, w, h, wpnHudStatus);
-    }
-
-    // --- Attitude-symbologie (pitch ladder, boresight, FPV, AoA) ---
-    if (camera && ac?.htr) {
-      const cx = w / 2;
-      const cy = h / 2;
-      const clipCy = cy;
-
-      const { pixelsPerDeg, pixelsPerDegX, cameraOffsetPx } = this.computeHudGeometry(w, h);
-      const symbolCy = cy - cameraOffsetPx;
-
-      this.updateFpvState(ac.llaLocation, ac);
+      // --- Kompasband bovenaan ---
       if (hudLevel == 'FULL') {
-         F18HudModule.drawBoresight(o, cx, symbolCy, pixelsPerDeg, w, h);
+        F18HudModule.drawTopHeadingScale(o, renderer, hdg, navUnit, helperModule, w, h);
       }
-      F18HudModule.drawPitchLadder(o, camera, ac, cx, clipCy, symbolCy, pixelsPerDeg, w, h);
 
-      const fpvPos = this.computeFpvScreenPosition(camera, cx, symbolCy, pixelsPerDeg, pixelsPerDegX);
-      const fpvDrawn = F18HudModule.drawFpv(o, fpvPos, cx, clipCy, w, h);
+      // --- Speed + Altitude boxed readouts (meer naar binnen) ---
+      F18HudModule.drawSpeedBox(o, kias, w, h);
+      F18HudModule.drawAltitudeBox(o, alt, w, h);
+
+      // --- Readouts links/rechts rond de boxes ---
       if (hudLevel !== 'MIN') {
-        F18HudModule.drawIlsDeviationCues(o, fpvDrawn, helperModule, w, h);
+          F18HudModule.drawLeftReadouts(o, mach, currentG, aoa, this.maxG, autopilot, w, h);
+        F18HudModule.drawRightReadouts(o, vsi, radioAlt, trimDisplay, navUnit, navModule, w, h, wpnHudStatus);
       }
-      const isGearDown = window.controls?.gear?.position < 0.5;
-      F18HudModule.drawAoaBracket(o, fpvDrawn, cx, clipCy, pixelsPerDeg, w, h, aoa, isGearDown);
-    }
 
-    if (this.isWpnFireFlashVisible()) {
-      o.save();
-      o.setTransform(1, 0, 0, 1, 0, 0);
-      o.fillStyle = F18HudModule.DEFAULT_COLOR;
-      o.textAlign = 'center';
-      o.textBaseline = 'middle';
-      o.font = `${Math.round(h * 0.15)}px monospace`;
-      o.fillText(this.getWpnActionFlashLabel(), w * 0.5, h * 0.52);
-      o.restore();
-    }
+      // --- Attitude-symbologie (pitch ladder, boresight, FPV, AoA) ---
+      if (camera && ac?.htr) {
+        const cx = w / 2;
+        const cy = h / 2;
+        const clipCy = cy;
 
-    const communicationModule = this.getCommunicationModule();
-    const commHudText = communicationModule?.getHudOverlayText?.();
-    if (commHudText) {
-      o.save();
-      o.setTransform(1, 0, 0, 1, 0, 0);
-      o.fillStyle = F18HudModule.DEFAULT_COLOR;
-      o.textAlign = 'center';
-      o.textBaseline = 'bottom';
-      o.font = `bold ${Math.round(h * 0.038)}px monospace`;
-      const lines = String(commHudText ?? '').split('\n').map((line) => line.trim()).filter(Boolean);
-      const lineHeight = h * 0.045;
-      const startY = h * 0.96 - ((lines.length - 1) * lineHeight);
-      for (let i = 0; i < lines.length; i++) {
-        o.fillText(lines[i], w * 0.5, startY + i * lineHeight);
+        const { pixelsPerDeg, pixelsPerDegX, cameraOffsetPx } = this.computeHudGeometry(w, h);
+        const symbolCy = cy - cameraOffsetPx;
+
+        this.updateFpvState(ac.llaLocation, ac);
+        if (hudLevel == 'FULL') {
+          F18HudModule.drawBoresight(o, cx, symbolCy, pixelsPerDeg, w, h);
+        }
+        F18HudModule.drawPitchLadder(o, camera, ac, cx, clipCy, symbolCy, pixelsPerDeg, w, h);
+
+        const fpvPos = this.computeFpvScreenPosition(camera, cx, symbolCy, pixelsPerDeg, pixelsPerDegX);
+        const fpvDrawn = F18HudModule.drawFpv(o, fpvPos, cx, clipCy, w, h);
+        if (hudLevel !== 'MIN') {
+          F18HudModule.drawIlsDeviationCues(o, fpvDrawn, helperModule, w, h);
+        }
+        const isGearDown = window.controls?.gear?.position < 0.5;
+        F18HudModule.drawAoaBracket(o, fpvDrawn, cx, clipCy, pixelsPerDeg, w, h, aoa, isGearDown);
       }
-      o.restore();
-    }
-  
-    }
 
+      if (this.isWpnFireFlashVisible()) {
+        o.save();
+        o.setTransform(1, 0, 0, 1, 0, 0);
+        o.fillStyle = F18HudModule.DEFAULT_COLOR;
+        o.textAlign = 'center';
+        o.textBaseline = 'middle';
+        o.font = `${Math.round(h * 0.15)}px monospace`;
+        o.fillText(this.getWpnActionFlashLabel(), w * 0.5, h * 0.52);
+        o.restore();
+      }
+
+      const communicationModule = this.getCommunicationModule();
+      const commHudText = communicationModule?.getHudOverlayText?.();
+      if (commHudText) {
+        o.save();
+        o.setTransform(1, 0, 0, 1, 0, 0);
+        o.fillStyle = F18HudModule.DEFAULT_COLOR;
+        o.textAlign = 'center';
+        o.textBaseline = 'bottom';
+        o.font = `bold ${Math.round(h * 0.038)}px monospace`;
+        const lines = String(commHudText ?? '').split('\n').map((line) => line.trim()).filter(Boolean);
+        const lineHeight = h * 0.045;
+        const startY = h * 0.96 - ((lines.length - 1) * lineHeight);
+        for (let i = 0; i < lines.length; i++) {
+          o.fillText(lines[i], w * 0.5, startY + i * lineHeight);
+        }
+        o.restore();
+      }
+    }
   }
-
-
-

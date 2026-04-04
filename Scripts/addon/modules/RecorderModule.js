@@ -67,7 +67,7 @@
           const color = renderContext?.color ?? '#00ff66';
           if (!ctx) return;
 
-          const status = window.F18Addon?.recorder?.getFlightRecorderMfdStatus?.() ?? { installed: false, compatible: false, recordingState: 'OFF', playbackState: 'STOPPED' };
+          const status = window.BasePlugin?.getActiveAddon?.()?.recorder?.getFlightRecorderMfdStatus?.() ?? { installed: false, compatible: false, recordingState: 'OFF', playbackState: 'STOPPED' };
           const cx = w * 0.5;
 
           ctx.save();

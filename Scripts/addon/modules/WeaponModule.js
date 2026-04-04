@@ -72,7 +72,7 @@ class WeaponModule {
             label: 'CFG',
             states: ['A/A', 'L/R A/A', 'A/G', 'L/R A/G', 'L/R', 'MIN', 'CLEAN'],
             stateIndex: 0,
-            show: () => window.controls?.gear?.position === 0 && !window.geofs?.animation?.values?.enginesOn
+            show: () => HelperModule.isAircraftParkedAndCold()
             }
         ],
         rightButtons: [
@@ -110,7 +110,7 @@ class WeaponModule {
                 const config = OptionModule.getOption('WPN', 'CONFIG', 'A/A');
                 this.startRearm(config);
             },
-            show: () => window.controls?.gear?.position === 0 && !window.geofs?.animation?.values?.enginesOn && OptionModule.getOption('WPN', 'MASTER', 'OFF') === 'OFF'
+            show: () => HelperModule.isAircraftParkedAndCold() && OptionModule.getOption('WPN', 'MASTER', 'OFF') === 'OFF'
             }
         ],
         lines: [],
@@ -263,21 +263,21 @@ class WeaponModule {
 
             const wpnRearmState = this.rearmState;
             if (wpnRearmState.active) {
-            const progress = Math.max(0, Math.min(1, wpnRearmState.progress ?? 0));
-            const pct = Math.round(progress * 100);
-            const barW = w * 0.50;
-            const barH = h * 0.03;
-            const barX = cx - barW * 0.5;
-            const barY = h * 0.875;
+                const progress = Math.max(0, Math.min(1, wpnRearmState.progress ?? 0));
+                const pct = Math.round(progress * 100);
+                const barW = w * 0.50;
+                const barH = h * 0.03;
+                const barX = cx - barW * 0.5;
+                const barY = h * 0.875;
 
-            ctx.font = `bold ${Math.round(h * 0.034)}px monospace`;
-            ctx.fillText(`REARMING ${wpnRearmState.config} ${pct}%`, cx, rearmTextY);
+                ctx.font = `bold ${Math.round(h * 0.034)}px monospace`;
+                ctx.fillText(`REARMING ${wpnRearmState.config} ${pct}%`, cx, rearmTextY);
 
-            ctx.strokeRect(barX, barY, barW, barH);
-            ctx.fillRect(barX, barY, barW * progress, barH);
+                ctx.strokeRect(barX, barY, barW, barH);
+                ctx.fillRect(barX, barY, barW * progress, barH);
             } else {
-            ctx.font = `bold ${Math.round(h * 0.03)}px monospace`;
-            ctx.fillText('Rearm with Engine OFF, Master OFF on ground.', cx, rearmTextY);
+                ctx.font = `bold ${Math.round(h * 0.03)}px monospace`;
+                ctx.fillText('Rearm with Engine OFF, Master OFF on ground.', cx, rearmTextY);
             }
 
             ctx.restore();

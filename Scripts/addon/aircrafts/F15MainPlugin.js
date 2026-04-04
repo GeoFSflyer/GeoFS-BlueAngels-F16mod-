@@ -35,11 +35,11 @@
     constructor(config = {}) {
       super({ id: 'F15', version: config.version ?? '2.0.0' });
       OptionModule.initializeStorageKey(this.id, 'F15Options');
+      this.addonGlobalKey = `${this.id}Addon`;
 
       console.log(`[F15MainPlugin] Initializing plugin version ${this.version}...`);
 
-      // Initialize window.F15Addon with all modules
-      window.F15Addon = {
+      this.addon = {
         version: this.version,
         options: {
           buildKey: OptionModule.buildOptionKey,
@@ -49,7 +49,7 @@
           set: OptionModule.setOption,
           getValue: OptionModule.getOptionValue
         },
-        // Instantiate all modules directly under F15Addon
+        // Instantiate all modules under this plugin addon instance
         weapons: new WeaponModule({
           ...window.WeaponModuleDefaults?.fighter,
           storageKey: 'F15WpnState'
@@ -61,7 +61,7 @@
         nav: null,
         communication: new CommunicationModule(),
         system: new SystemModule(),
-        adi: new AdiModule(),
+        flight: null,
         radar: null,
         targetingPod: null,
         hud: new F18HudModule(),
@@ -77,42 +77,46 @@
           isRunning: () => this.isRunning()
         }
       };
+      window[this.addonGlobalKey] = this.addon;
+
+      const addon = this.addon;
 
       // Initialize modules that need helper reference
-      window.F15Addon.camera = new CameraModule(window.F15Addon.helper, F15MainPlugin.CAMERA_CONFIG);
-      window.F15Addon.controls = new ControlModule(window.F15Addon.helper);
-      window.F15Addon.dataCartridge = new DataCartridgeModule();
-      window.F15Addon.nav = new NavModule();
-      window.F15Addon.map = new MapModule();
-      window.F15Addon.radar = new RadarModule({ navModule: window.F15Addon.nav });
-      window.F15Addon.targetingPod = new TargetingPodModule(() => window.F15Addon);
-      window.F15Addon.nav.setMapModule(window.F15Addon.map);
-      window.F15Addon.nav.setDataCartridgeModule(window.F15Addon.dataCartridge);
-      window.F15Addon.map.setNavModule(window.F15Addon.nav);
+      addon.camera = new CameraModule(addon.helper, F15MainPlugin.CAMERA_CONFIG);
+      addon.controls = new ControlModule(addon.helper);
+      addon.dataCartridge = new DataCartridgeModule();
+      addon.nav = new NavModule();
+      addon.map = new MapModule();
+      addon.radar = new RadarModule({ navModule: addon.nav });
+      addon.targetingPod = new TargetingPodModule(() => this.addon);
+      addon.flight = new FlightModule(() => this.addon);
+      addon.nav.setMapModule(addon.map);
+      addon.nav.setDataCartridgeModule(addon.dataCartridge);
+      addon.map.setNavModule(addon.nav);
 
       // Create MFD module BEFORE page registration
-      window.F15Addon.mfd = new MfdModule(
-        window.F15Addon.helper,
-        window.F15Addon.map,
-        window.F15Addon.camera,
-        window.F15Addon.weapons,
-        window.F15Addon.recorder
+      addon.mfd = new MfdModule(
+        addon.helper,
+        addon.map,
+        addon.camera,
+        addon.weapons,
+        addon.recorder
       );
 
       // Register MFD pages from each module
-      window.F15Addon.recorder.registerMfdPages(window.F15Addon.mfd);
-      window.F15Addon.hud.registerMfdPages(window.F15Addon.mfd);
-      window.F15Addon.system.registerMfdPages(window.F15Addon.mfd);
-      window.F15Addon.checklists.registerMfdPages(window.F15Addon.mfd);
-      window.F15Addon.weapons.registerMfdPages(window.F15Addon.mfd);
-      window.F15Addon.nav.registerMfdPages(window.F15Addon.mfd);
-      window.F15Addon.radar.registerMfdPages(window.F15Addon.mfd);
-      window.F15Addon.communication.registerMfdPages(window.F15Addon.mfd);
-      window.F15Addon.adi.registerMfdPages(window.F15Addon.mfd);
-      window.F15Addon.targetingPod.registerMfdPages(window.F15Addon.mfd);
+      addon.recorder.registerMfdPages(addon.mfd);
+      addon.hud.registerMfdPages(addon.mfd);
+      addon.system.registerMfdPages(addon.mfd);
+      addon.checklists.registerMfdPages(addon.mfd);
+      addon.weapons.registerMfdPages(addon.mfd);
+      addon.nav.registerMfdPages(addon.mfd);
+      addon.radar.registerMfdPages(addon.mfd);
+      addon.communication.registerMfdPages(addon.mfd);
+      addon.flight.registerMfdPages(addon.mfd);
+      addon.targetingPod.registerMfdPages(addon.mfd);
 
       this.setManagedModules([
-        window.F15Addon.controls
+        addon.controls
       ]);
     }
 
@@ -121,19 +125,19 @@
     }
 
     getMfdPages() {
-      return window.F15Addon.mfd.pageRegistry;
+      return this.addon.mfd.pageRegistry;
     }
 
     tryInstall() {
       // Core modules
-      const hudReady = window.F15Addon?.hud?.ensureLoaded();
-      const cameraReady = window.F15Addon?.camera?.ensureLoaded();
-      const fmcReady = window.F15Addon?.fmc?.ensureLoaded();
-      const controlsReady = window.F15Addon?.controls?.ensureLoaded();
-      const communicationReady = window.F15Addon?.communication?.ensureLoaded();
+      const hudReady = this.addon?.hud?.ensureLoaded();
+      const cameraReady = this.addon?.camera?.ensureLoaded();
+      const fmcReady = this.addon?.fmc?.ensureLoaded();
+      const controlsReady = this.addon?.controls?.ensureLoaded();
+      const communicationReady = this.addon?.communication?.ensureLoaded();
       
       // MFD module handles its own loading
-      const mfdReady = window.F15Addon?.mfd?.ensureLoaded();
+      const mfdReady = this.addon?.mfd?.ensureLoaded();
       
       // Return true if core systems are ready
       return hudReady
@@ -148,8 +152,8 @@
       if (!this.startLifecycle()) return;
 
       // Initialize MFDs first before starting install loop
-      window.F15Addon.mfd.initializeDefaultMfds(F15MainPlugin.DEFAULT_MFD_LAYOUT);
-      window.F15Addon.mfd.startCameraWatch();
+      this.addon.mfd.initializeDefaultMfds(F15MainPlugin.DEFAULT_MFD_LAYOUT);
+      this.addon.mfd.startCameraWatch();
 
       this.tickActive();
     }
@@ -161,13 +165,13 @@
     stop() {
       if (!this.stopLifecycle()) return;
 
-      window.F15Addon?.weapons?.stopGunFireTimer();
-      window.F15Addon?.mfd?.restore();
+      this.addon?.weapons?.stopGunFireTimer();
+      this.addon?.mfd?.restore();
       
-      window.F15Addon?.communication?.restore();
-      window.F15Addon?.fmc?.restore();
-      window.F15Addon?.camera?.restore();
-      window.F15Addon?.hud?.restore();
+      this.addon?.communication?.restore();
+      this.addon?.fmc?.restore();
+      this.addon?.camera?.restore();
+      this.addon?.hud?.restore();
     }
 
     restart() {

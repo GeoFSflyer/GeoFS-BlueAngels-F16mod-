@@ -111,6 +111,12 @@ var addonRuntime = window.addonRuntime;
       return Math.max(min, Math.min(max, value));
     }
 
+    static isAircraftParkedAndCold() {
+      return window.controls?.gear?.position === 0
+        && !window.geofs?.animation?.values?.enginesOn
+        && window.geofs?.aircraft?.instance?.groundContact;
+    }
+
     // Creates helper state for runtime UI controls.
     constructor() {
       this.padControls = new Map();
@@ -418,7 +424,7 @@ class WeaponModule {
             label: 'CFG',
             states: ['A/A', 'L/R A/A', 'A/G', 'L/R A/G', 'L/R', 'MIN', 'CLEAN'],
             stateIndex: 0,
-            show: () => window.controls?.gear?.position === 0 && !window.geofs?.animation?.values?.enginesOn
+            show: () => HelperModule.isAircraftParkedAndCold()
             }
         ],
         rightButtons: [
@@ -456,7 +462,7 @@ class WeaponModule {
                 const config = OptionModule.getOption('WPN', 'CONFIG', 'A/A');
                 this.startRearm(config);
             },
-            show: () => window.controls?.gear?.position === 0 && !window.geofs?.animation?.values?.enginesOn && OptionModule.getOption('WPN', 'MASTER', 'OFF') === 'OFF'
+            show: () => HelperModule.isAircraftParkedAndCold() && OptionModule.getOption('WPN', 'MASTER', 'OFF') === 'OFF'
             }
         ],
         lines: [],
@@ -609,21 +615,21 @@ class WeaponModule {
 
             const wpnRearmState = this.rearmState;
             if (wpnRearmState.active) {
-            const progress = Math.max(0, Math.min(1, wpnRearmState.progress ?? 0));
-            const pct = Math.round(progress * 100);
-            const barW = w * 0.50;
-            const barH = h * 0.03;
-            const barX = cx - barW * 0.5;
-            const barY = h * 0.875;
+                const progress = Math.max(0, Math.min(1, wpnRearmState.progress ?? 0));
+                const pct = Math.round(progress * 100);
+                const barW = w * 0.50;
+                const barH = h * 0.03;
+                const barX = cx - barW * 0.5;
+                const barY = h * 0.875;
 
-            ctx.font = `bold ${Math.round(h * 0.034)}px monospace`;
-            ctx.fillText(`REARMING ${wpnRearmState.config} ${pct}%`, cx, rearmTextY);
+                ctx.font = `bold ${Math.round(h * 0.034)}px monospace`;
+                ctx.fillText(`REARMING ${wpnRearmState.config} ${pct}%`, cx, rearmTextY);
 
-            ctx.strokeRect(barX, barY, barW, barH);
-            ctx.fillRect(barX, barY, barW * progress, barH);
+                ctx.strokeRect(barX, barY, barW, barH);
+                ctx.fillRect(barX, barY, barW * progress, barH);
             } else {
-            ctx.font = `bold ${Math.round(h * 0.03)}px monospace`;
-            ctx.fillText('Rearm with Engine OFF, Master OFF on ground.', cx, rearmTextY);
+                ctx.font = `bold ${Math.round(h * 0.03)}px monospace`;
+                ctx.fillText('Rearm with Engine OFF, Master OFF on ground.', cx, rearmTextY);
             }
 
             ctx.restore();
@@ -1465,6 +1471,33 @@ class DataCartridgeModule {
       version: 1,
       source: 'empty',
       missionName: 'Untitled Mission',
+      group: '',
+      flight: '',
+      wingman: '',
+      flightData: {
+        startTimeZ: '',
+        startTaxiZ: '',
+        startToZ: '',
+        timeOverTargetZ: '',
+        endTimeZ: ''
+      },
+      positions: [],
+      cruise: {
+        altitude: '',
+        speed: ''
+      },
+      notes: '',
+      landing: {
+        airportIcao: '',
+        runway: '',
+        nav1: '',
+        pattern: '',
+        formation: '',
+        altEntryAgl: '',
+        speedEntryKn: '',
+        pitchIntervalS: '',
+        speedDownwindKn: ''
+      },
       loadedAt: null,
       flightPlan: [],
       navaids: [],
@@ -1503,6 +1536,14 @@ class DataCartridgeModule {
     const normalized = this._newData();
     normalized.source = options.source ?? 'mission-planner';
     normalized.missionName = src.name ?? src.missionName ?? 'Untitled Mission';
+    normalized.group = src.group ?? '';
+    normalized.flight = src.flight ?? '';
+    normalized.wingman = src.wingman ?? '';
+    normalized.flightData = this._clone(src.flightData ?? normalized.flightData);
+    normalized.positions = this._clone(src.positions ?? []);
+    normalized.cruise = this._clone(src.cruise ?? normalized.cruise);
+    normalized.notes = src.notes ?? src.cruise?.notes ?? '';
+    normalized.landing = this._clone(src.landing ?? normalized.landing);
     normalized.loadedAt = loadedAt;
     normalized.flightPlan = this._clone(src.flightPlan ?? []);
     normalized.checklists = this._clone(src.checklists ?? []);
@@ -1534,8 +1575,97 @@ class DataCartridgeModule {
     return this._clone(markpoint);
   }
 
+  setMarkpointType(index, type) {
+    const markpoint = this.data.markpoints[index];
+    if (!markpoint) return false;
+    markpoint.type = type;
+    this._emitUpdate();
+    return true;
+  }
+
+  setActiveMarkpoint(index) {
+    if (!this.data.markpoints[index]) return false;
+    for (let i = 0; i < this.data.markpoints.length; i++) {
+      this.data.markpoints[i].active = i === index;
+    }
+    this._emitUpdate();
+    return true;
+  }
+
+  getActiveMarkpoint() {
+    const active = this.data.markpoints.find((markpoint) => markpoint?.active);
+    return active ? this._clone(active) : null;
+  }
+
+  deleteMarkpoint(index) {
+    if (!this.data.markpoints[index]) return false;
+    this.data.markpoints.splice(index, 1);
+    this._emitUpdate();
+    return true;
+  }
+
   getMissionData() {
     return this._clone(this.data);
+  }
+
+  getMissionName() {
+    return this.data.missionName;
+  }
+
+  getGroup() {
+    return this.data.group;
+  }
+
+  getFlight() {
+    return this.data.flight;
+  }
+
+  getWingman() {
+    return this.data.wingman;
+  }
+
+  getFlightData() {
+    return this._clone(this.data.flightData);
+  }
+
+  getPositions() {
+    return this._clone(this.data.positions);
+  }
+
+  getCruise() {
+    return this._clone(this.data.cruise);
+  }
+
+  getNotes() {
+    return this.data.notes ?? '';
+  }
+
+  getLanding() {
+    return this._clone(this.data.landing);
+  }
+
+  getFlightPlan() {
+    return this._clone(this.data.flightPlan);
+  }
+
+  getNavaids() {
+    return this._clone(this.data.navaids);
+  }
+
+  getMarkpoints() {
+    return this._clone(this.data.markpoints);
+  }
+
+  getAreas() {
+    return this._clone(this.data.areas);
+  }
+
+  getChecklists() {
+    return this._clone(this.data.checklists);
+  }
+
+  getIffCodes() {
+    return this._clone(this.data.iffCodes);
   }
 
   getRenderableData() {
@@ -2554,14 +2684,7 @@ window.DataCartridgeModule = DataCartridgeModule;
 
     getDataCartridgeModule() {
       if (this.dataCartridgeModule) return this.dataCartridgeModule;
-
-      const aircraftId = String(window.geofs?.aircraft?.instance?.id ?? '');
-      if (aircraftId === '27' && window.F18Addon?.dataCartridge) return window.F18Addon.dataCartridge;
-      if (aircraftId === '3591' && window.F15Addon?.dataCartridge) return window.F15Addon.dataCartridge;
-      if (window.F18Addon?.dataCartridge) return window.F18Addon.dataCartridge;
-      if (window.F15Addon?.dataCartridge) return window.F15Addon.dataCartridge;
-
-      return null;
+      return window.BasePlugin?.getActiveAddon?.()?.dataCartridge ?? null;
     }
 
     getDataCartridgeScene() {
@@ -4018,7 +4141,7 @@ class RadarModule {
           const color = renderContext?.color ?? '#00ff66';
           if (!ctx) return;
 
-          const status = window.F18Addon?.recorder?.getFlightRecorderMfdStatus?.() ?? { installed: false, compatible: false, recordingState: 'OFF', playbackState: 'STOPPED' };
+          const status = window.BasePlugin?.getActiveAddon?.()?.recorder?.getFlightRecorderMfdStatus?.() ?? { installed: false, compatible: false, recordingState: 'OFF', playbackState: 'STOPPED' };
           const cx = w * 0.5;
 
           ctx.save();
@@ -4762,143 +4885,735 @@ class RadarModule {
     }
   }
 
-class AdiModule {
+class FlightModule {
+  static DISPLAY_MODES = ['ADI', 'FLP', 'MRK', 'MSS', 'IFF'];
+  static MARKPOINT_TYPES = ['TARGET', 'FRIENDLY', 'RESQUE', 'CIVILIAN'];
+  static MISSION_PAGE_STATES = ['P1', 'P2', 'P3', 'P4', 'P5', 'P6'];
+
+  constructor(getAddon = () => null) {
+    this.getAddon = getAddon;
+    this.selectedFlpIndex = 0;
+    this.selectedMarkpointIndex = 0;
+    this.missionPageIndex = 0;
+  }
+
+  getDisplayMode() {
+    return OptionModule.getOption('FLT', 'DISPLAY', OptionModule.getOption('ADI', 'DISPLAY', 'ADI'));
+  }
+
+  getDataCartridge() {
+    return this.getAddon()?.dataCartridge ?? null;
+  }
+
+  getFlightPlanItems() {
+    return window.geofs?.flightPlan?.waypointArray ?? [];
+  }
+
+  getMarkpointItems() {
+    const cartridge = this.getDataCartridge();
+    return cartridge?.getMarkpoints?.() ?? [];
+  }
+
+  getSelectedFlpIndex(items) {
+    if (!items.length) {
+      this.selectedFlpIndex = 0;
+      return 0;
+    }
+    this.selectedFlpIndex = Math.max(0, Math.min(this.selectedFlpIndex, items.length - 1));
+    return this.selectedFlpIndex;
+  }
+
+  getSelectedMarkpointIndex(items) {
+    if (!items.length) {
+      this.selectedMarkpointIndex = 0;
+      return 0;
+    }
+    this.selectedMarkpointIndex = Math.max(0, Math.min(this.selectedMarkpointIndex, items.length - 1));
+    return this.selectedMarkpointIndex;
+  }
+
+  stepSelectedFlightPlan(step) {
+    const items = this.getFlightPlanItems();
+    if (!items.length) return false;
+
+    const current = this.getSelectedFlpIndex(items);
+    const next = (current + step + items.length) % items.length;
+    this.selectedFlpIndex = next;
+    return true;
+  }
+
+  stepSelectedMarkpoint(step) {
+    const items = this.getMarkpointItems();
+    if (!items.length) return false;
+
+    const current = this.getSelectedMarkpointIndex(items);
+    const next = (current + step + items.length) % items.length;
+    this.selectedMarkpointIndex = next;
+    return true;
+  }
+
+  activateSelectedFlightPlan() {
+    const items = this.getFlightPlanItems();
+    if (!items.length) return false;
+
+    const index = this.getSelectedFlpIndex(items);
+    window.geofs.flightPlan.selectWaypoint(index);
+    return true;
+  }
+
+  activateSelectedMarkpoint() {
+    const items = this.getMarkpointItems();
+    if (!items.length) return false;
+
+    const index = this.getSelectedMarkpointIndex(items);
+    const markpoint = items[index];
+    const cartridge = this.getDataCartridge();
+    cartridge?.setActiveMarkpoint?.(index);
+    const targetingPod = this.getAddon()?.targetingPod;
+    if (targetingPod?.trackMarkpoint) {
+      targetingPod.trackMarkpoint(markpoint);
+    }
+    return true;
+  }
+
+  deleteSelectedFlightPlan() {
+    const items = this.getFlightPlanItems();
+    if (!items.length) return false;
+
+    const index = this.getSelectedFlpIndex(items);
+    window.geofs.flightPlan.deleteWaypoint(index);
+    const nextItems = this.getFlightPlanItems();
+    this.selectedFlpIndex = Math.max(0, Math.min(index, Math.max(0, nextItems.length - 1)));
+    return true;
+  }
+
+  deleteSelectedMarkpoint() {
+    const items = this.getMarkpointItems();
+    if (!items.length) return false;
+
+    const index = this.getSelectedMarkpointIndex(items);
+    const cartridge = this.getDataCartridge();
+    cartridge.deleteMarkpoint(index);
+    const nextItems = this.getMarkpointItems();
+    this.selectedMarkpointIndex = Math.max(0, Math.min(index, Math.max(0, nextItems.length - 1)));
+    return true;
+  }
+
+  setSelectedMarkpointType(type) {
+    const items = this.getMarkpointItems();
+    if (!items.length) return false;
+
+    const index = this.getSelectedMarkpointIndex(items);
+    const cartridge = this.getDataCartridge();
+    return cartridge.setMarkpointType(index, type);
+  }
+
+  cycleSelectedMarkpointType() {
+    const items = this.getMarkpointItems();
+    if (!items.length) return false;
+
+    const index = this.getSelectedMarkpointIndex(items);
+    const current = items[index]?.type;
+    const states = FlightModule.MARKPOINT_TYPES;
+    const currentIndex = states.findIndex((type) => type === current);
+    const nextIndex = (currentIndex + 1 + states.length) % states.length;
+    return this.setSelectedMarkpointType(states[nextIndex]);
+  }
+
+  getMissionSections() {
+    const data = this.getDataCartridge()?.getMissionData?.() ?? {};
+    const rawNotes = String(data.notes ?? data.cruise?.notes ?? '').replace(/\r?\n/g, ' ');
+    const noteLines = rawNotes.match(/.{1,38}/g) ?? [''];
+    const positions = Array.isArray(data.positions) ? data.positions : [];
+    const positionRows = positions.length
+      ? positions.map((position, index) => [
+        `#${index + 1}`,
+        position?.callsign ?? position?.name ?? position?.pilot ?? ''
+      ])
+      : [['#1', '']];
+
+    return {
+      mission: {
+        title: 'MISSION',
+        rows: [
+          ['Name', data.missionName ?? data.name ?? 'Untitled Mission'],
+          ['Group', data.group ?? ''],
+          ['Flight', data.flight ?? ''],
+          ['Wingman', data.wingman ?? '']
+        ]
+      },
+      times: {
+        title: 'TIMES',
+        rows: [
+          ['Start', data.flightData?.startTimeZ ?? ''],
+          ['Taxi', data.flightData?.startTaxiZ ?? ''],
+          ['T/O', data.flightData?.startToZ ?? ''],
+          ['TOT', data.flightData?.timeOverTargetZ ?? ''],
+          ['End', data.flightData?.endTimeZ ?? '']
+        ]
+      },
+      cruise: {
+        title: 'CRUISE',
+        rows: [
+          ['Altitude', data.cruise?.altitude ?? ''],
+          ['Speed', data.cruise?.speed ?? '']
+        ]
+      },
+      notes: {
+        title: 'NOTES',
+        rows: noteLines.map((line) => ['', line])
+      },
+      positions: {
+        title: 'POSITIONS',
+        rows: positionRows
+      },
+      landing: {
+        title: 'LANDING',
+        rows: [
+          ['Airport', data.landing?.airportIcao ?? ''],
+          ['Runway', data.landing?.runway ?? ''],
+          ['NAV1', data.landing?.nav1 ?? ''],
+          ['Pattern', data.landing?.pattern ?? ''],
+          ['Form', data.landing?.formation ?? '']
+        ]
+      },
+      landingPerf: {
+        title: 'LANDING PERF',
+        rows: [
+          ['Entry AGL', data.landing?.altEntryAgl ?? ''],
+          ['Entry SPD', data.landing?.speedEntryKn ?? ''],
+          ['Pitch Int', data.landing?.pitchIntervalS ?? ''],
+          ['Downwind', data.landing?.speedDownwindKn ?? '']
+        ]
+      }
+    };
+  }
+
+  getMissionPages() {
+    const sections = this.getMissionSections();
+    return [
+      {
+        rowHeights: [0.38, 0.16, 0.46],
+        blocks: [
+          { section: sections.mission, col: 0, row: 0, colSpan: 1 },
+          { section: sections.times, col: 1, row: 0, colSpan: 1 },
+          { section: sections.cruise, col: 0, row: 1, colSpan: 2 },
+          { section: sections.notes, col: 0, row: 2, colSpan: 2 }
+        ]
+      },
+      {
+        rowHeights: [0.333, 0.333, 0.334],
+        blocks: [
+          { section: sections.landing, col: 0, row: 0, colSpan: 2 },
+          { section: sections.landingPerf, col: 0, row: 1, colSpan: 2 },
+          { section: sections.positions, col: 0, row: 2, colSpan: 2 }
+        ]
+      }
+    ];
+  }
+
+  getMissionPageCount() {
+    return this.getMissionPages().length;
+  }
+
+  renderAdi(ctx, w, h, color, layout) {
+    const pitch = Number(window.geofs?.animation?.values?.atilt) || 0;
+    const roll = Number(window.geofs?.animation?.values?.aroll) || 0;
+    const kias = Math.round(Number(window.geofs?.animation?.values?.kias) || 0);
+    const alt = Math.round(Number(window.geofs?.animation?.values?.altitude) || 0);
+    const vsi = Math.round(Number(window.geofs?.animation?.values?.climbrate) || 0);
+
+    const frame = layout?.frame ?? { left: 0, top: 0, width: w, height: h };
+
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+    const cx = frame.left + frame.width * 0.5;
+    const cy = frame.top + frame.height * 0.54;
+    const radius = frame.width * 0.31;
+    const pScale = 8;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.clip();
+
+    ctx.translate(cx, cy);
+    ctx.rotate((roll * Math.PI) / 180);
+    ctx.translate(0, -pitch * pScale);
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 4; i < radius * 4; i += 8) {
+      ctx.moveTo(-radius * 3, i);
+      ctx.lineTo(radius * 3, i);
+    }
+    ctx.stroke();
+
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(-radius * 3, 0);
+    ctx.lineTo(radius * 3, 0);
+    ctx.stroke();
+
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, -radius * 5);
+    ctx.lineTo(0, radius * 5);
+    ctx.stroke();
+
+    ctx.font = 'bold 20px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    for (let p = -90; p <= 90; p += 10) {
+      if (p === 0) continue;
+      const py = -p * pScale;
+      const lineW = (p % 20 === 0) ? 50 : 25;
+      ctx.beginPath();
+      ctx.moveTo(-lineW, py);
+      ctx.lineTo(lineW, py);
+      ctx.stroke();
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(-18, py - 9, 36, 18);
+      ctx.fillStyle = color;
+      ctx.fillText(Math.abs(p), 0, py + 1);
+    }
+    ctx.restore();
+
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    const wx = cx;
+    const wy = cy;
+    const ww = w * 0.027;
+    const wh = h * 0.016;
+    const stub = w * 0.010;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(wx - ww, wy);
+    ctx.lineTo(wx - ww * 0.55, wy + wh);
+    ctx.lineTo(wx, wy - wh * 0.15);
+    ctx.lineTo(wx + ww * 0.55, wy + wh);
+    ctx.lineTo(wx + ww, wy);
+    ctx.moveTo(wx - ww - stub, wy);
+    ctx.lineTo(wx - ww, wy);
+    ctx.moveTo(wx + ww, wy);
+    ctx.lineTo(wx + ww + stub, wy);
+    ctx.stroke();
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const boxY = cy - radius - h * 0.012;
+    const spdX = w * 0.25;
+    const altX = w * 0.82;
+
+    ctx.lineWidth = 2;
+    ctx.strokeRect(spdX - 42, boxY - 20, 84, 40);
+    ctx.font = 'bold 26px monospace';
+    ctx.fillText(kias, spdX, boxY + 2);
+
+    ctx.strokeRect(altX - 52, boxY - 22, 104, 44);
+    const altRounded = Math.max(0, Math.round(alt));
+    const thousands = Math.floor(altRounded / 1000);
+    const hundredsText = String(altRounded % 1000).padStart(3, '0');
+    const rightX = altX + 52 - w * 0.014;
+    const altCenterY = boxY + 1;
+
+    ctx.textAlign = 'right';
+    ctx.font = 'bold 22px monospace';
+    const hundredsWidth = ctx.measureText(hundredsText).width;
+    ctx.fillText(hundredsText, rightX, altCenterY);
+    ctx.font = 'bold 30px monospace';
+    ctx.fillText(String(thousands), rightX - hundredsWidth - w * 0.006, altCenterY);
+
+    const vsiText = `${vsi >= 0 ? ' ' : ''}${vsi}`;
+    ctx.font = 'bold 24px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(vsiText, altX - w * 0.07, boxY - h * 0.08);
+
+    ctx.restore();
+  }
+
+  renderSelectableList(ctx, w, h, items, selectedIndex, title, rowBuilder, color, options = {}) {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = color;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.font = `bold ${Math.round(h * 0.045)}px monospace`;
+    ctx.fillText(title, w * 0.22, h * 0.16);
+
+    if (!items.length) {
+      ctx.fillText('NO ITEMS', w * 0.22, h * 0.26);
+      ctx.restore();
+      return;
+    }
+
+    const keyX = w * (options.keyXRatio ?? 0.24);
+    const valueX = w * (options.valueXRatio ?? 0.62);
+    const prefixOffset = w * (options.prefixOffsetRatio ?? 0.018);
+    let y = h * 0.25;
+    for (let i = 0; i < items.length; i++) {
+      if (y > h * 0.88) break;
+      const item = items[i];
+      const prefix = i === selectedIndex ? '>' : ' ';
+      const row = rowBuilder(item, i) ?? {};
+      ctx.fillText(prefix, keyX - prefixOffset, y);
+      ctx.fillText(String(row.key ?? ''), keyX, y);
+      ctx.fillText(String(row.value ?? ''), valueX, y);
+      y += h * 0.055;
+    }
+
+    ctx.restore();
+  }
+
+  renderMissionGroup(ctx, group, x, y, width, height, color) {
+    const rows = group?.rows ?? [];
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, width, height);
+
+    ctx.fillStyle = color;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 18px monospace';
+    ctx.fillText(String(group?.title ?? ''), x + 10, y + 16);
+
+    if (group?.title === 'NOTES') {
+      let lineY = y + 40;
+      ctx.font = 'bold 16px monospace';
+      for (const [, value] of rows) {
+        if (lineY > y + height - 12) break;
+        ctx.fillText(String(value ?? ''), x + 10, lineY);
+        lineY += 20;
+      }
+      return;
+    }
+
+    if (group?.title === 'POSITIONS') {
+      const shown = rows.slice(0, 8);
+      const twoColumns = shown.length > 4;
+      const colWidth = twoColumns ? width * 0.5 : width;
+      const leftPad = 10;
+      const valueOffset = twoColumns ? colWidth * 0.36 : width * 0.28;
+      ctx.font = 'bold 16px monospace';
+
+      for (let i = 0; i < shown.length; i++) {
+        const column = twoColumns ? Math.floor(i / 4) : 0;
+        const rowIndex = twoColumns ? (i % 4) : i;
+        const rowY = y + 40 + rowIndex * 20;
+        if (rowY > y + height - 12) break;
+        const colX = x + column * colWidth;
+        const keyX = colX + leftPad;
+        const valueX = colX + leftPad + valueOffset;
+        ctx.fillText(String(shown[i][0] ?? ''), keyX, rowY);
+        ctx.fillText(String(shown[i][1] ?? ''), valueX, rowY);
+      }
+      return;
+    }
+
+    const keyX = x + 10;
+    const valueX = x + width * 0.46;
+    let rowY = y + 40;
+    ctx.font = 'bold 16px monospace';
+    for (const [key, value] of rows) {
+      if (rowY > y + height - 12) break;
+      ctx.fillText(String(key ?? ''), keyX, rowY);
+      ctx.fillText(String(value ?? ''), valueX, rowY);
+      rowY += 20;
+    }
+  }
+
+  renderMissionData(ctx, w, h, color, renderContext) {
+    const pages = this.getMissionPages();
+    const pageCount = Math.max(1, pages.length);
+    const pageButton = renderContext?.page?.leftButtons?.find((button) => button?.key === 'PAGE');
+
+    this.missionPageIndex = Math.max(0, Math.min(this.missionPageIndex, pageCount - 1));
+    if (pageButton) {
+      pageButton.stateIndex = this.missionPageIndex;
+    }
+
+    const activePage = pages[this.missionPageIndex] ?? { rowHeights: [0.333, 0.333, 0.334], blocks: [] };
+    const pageBlocks = activePage.blocks ?? [];
+
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = color;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.font = `bold ${Math.round(h * 0.043)}px monospace`;
+    ctx.fillText(`MISSION DATA ${this.missionPageIndex + 1}/${pageCount}`, w * 0.22, h * 0.12);
+
+    const gridLeft = w * 0.22;
+    const gridTop = h * 0.17;
+    const gapX = w * 0.02;
+    const gapY = h * 0.03;
+    const gridW = w * 0.70;
+    const gridH = h * 0.74;
+    const boxW = (gridW - gapX) / 2;
+    const availableH = gridH - gapY * 2;
+    const rowHeights = activePage.rowHeights ?? [0.333, 0.333, 0.334];
+    const rowSizes = [
+      availableH * (rowHeights[0] ?? 0.333),
+      availableH * (rowHeights[1] ?? 0.333),
+      availableH * (rowHeights[2] ?? 0.334)
+    ];
+    const rowOffsets = [
+      0,
+      rowSizes[0] + gapY,
+      rowSizes[0] + gapY + rowSizes[1] + gapY
+    ];
+
+    for (const block of pageBlocks) {
+      const column = block.col ?? 0;
+      const row = block.row ?? 0;
+      const colSpan = block.colSpan ?? 1;
+      const x = gridLeft + column * (boxW + gapX);
+      const y = gridTop + (rowOffsets[row] ?? rowOffsets[0]);
+      const width = colSpan === 2 ? (boxW * 2 + gapX) : boxW;
+      const height = rowSizes[row] ?? rowSizes[0];
+      this.renderMissionGroup(ctx, block.section, x, y, width, height, color);
+    }
+
+    ctx.restore();
+  }
+
+  renderIff(ctx, w, h, color) {
+    const codes = this.getDataCartridge()?.getIffCodes?.() ?? [];
+
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = color;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.font = `bold ${Math.round(h * 0.045)}px monospace`;
+    ctx.fillText('IFF CODES', w * 0.22, h * 0.16);
+
+    if (!codes.length) {
+      ctx.fillText('NO IFF CODES', w * 0.22, h * 0.26);
+      ctx.restore();
+      return;
+    }
+
+    const firstColumnLimit = 7;
+    const shown = codes.slice(0, firstColumnLimit * 2);
+    const baseX = w * 0.27;
+    const columnGap = w * 0.31;
+    const responseOffset = w * 0.12;
+    const lineHeight = h * 0.053;
+
+    for (let i = 0; i < shown.length; i++) {
+      const column = i >= firstColumnLimit ? 1 : 0;
+      const row = i % firstColumnLimit;
+      const y = h * 0.25 + row * lineHeight;
+      if (y > h * 0.88) break;
+      const code = shown[i];
+      const keyX = baseX + column * columnGap;
+      const valueX = keyX + responseOffset;
+      ctx.fillText(String(code.key ?? ''), keyX, y);
+      ctx.fillText(String(code.response ?? ''), valueX, y);
+    }
+
+    ctx.restore();
+  }
+
   registerMfdPages(mfdModule) {
     mfdModule.registerPage({
-      title: 'ADI',
-      leftButtons: [],
-      rightButtons: [],
+      title: 'FLT',
+      leftButtons: [
+        {
+          key: 'DISPLAY',
+          label: 'DISP',
+          states: FlightModule.DISPLAY_MODES,
+          stateIndex: 0
+        },
+        {
+          key: 'PAGE',
+          label: 'PAGE',
+          states: FlightModule.MISSION_PAGE_STATES,
+          stateIndex: 0,
+          managedExternally: true,
+          show: () => this.getDisplayMode() === 'MSS' && this.getMissionPageCount() > 1,
+          onClick: ({ button }) => {
+            const pageCount = this.getMissionPageCount();
+            if (pageCount <= 1) {
+              this.missionPageIndex = 0;
+              if (button) button.stateIndex = 0;
+              return;
+            }
+            this.missionPageIndex = (this.missionPageIndex + 1) % pageCount;
+            if (button) button.stateIndex = this.missionPageIndex;
+          }
+        },
+        {
+          key: 'PREV',
+          label: '↑',
+          states: [''],
+          stateIndex: 0,
+          managedExternally: true,
+          show: () => {
+            const mode = this.getDisplayMode();
+            return mode === 'FLP' || mode === 'MRK';
+          },
+          onClick: () => {
+            if (this.getDisplayMode() === 'FLP') {
+              this.stepSelectedFlightPlan(-1);
+              return;
+            }
+            this.stepSelectedMarkpoint(-1);
+          }
+        },
+        {
+          key: 'NEXT',
+          label: '↓',
+          states: [''],
+          stateIndex: 0,
+          managedExternally: true,
+          show: () => {
+            const mode = this.getDisplayMode();
+            return mode === 'FLP' || mode === 'MRK';
+          },
+          onClick: () => {
+            if (this.getDisplayMode() === 'FLP') {
+              this.stepSelectedFlightPlan(1);
+              return;
+            }
+            this.stepSelectedMarkpoint(1);
+          }
+        },
+        {
+          key: 'TYPE',
+          label: 'TYPE',
+          states: FlightModule.MARKPOINT_TYPES,
+          stateIndex: 0,
+          managedExternally: true,
+          show: () => this.getDisplayMode() === 'MRK',
+          onClick: () => {
+            this.cycleSelectedMarkpointType();
+          }
+        }
+      ],
+      rightButtons: [
+        {
+          key: 'ACTIVATE',
+          label: 'ACT',
+          states: [''],
+          stateIndex: 0,
+          managedExternally: true,
+          show: () => {
+            const mode = this.getDisplayMode();
+            return mode === 'FLP' || mode === 'MRK';
+          },
+          onClick: () => {
+            if (this.getDisplayMode() === 'FLP') {
+              this.activateSelectedFlightPlan();
+              return;
+            }
+            this.activateSelectedMarkpoint();
+          }
+        },
+        {
+          key: 'DELETE',
+          label: 'DEL',
+          states: [''],
+          stateIndex: 0,
+          managedExternally: true,
+          show: () => {
+            const mode = this.getDisplayMode();
+            return mode === 'FLP' || mode === 'MRK';
+          },
+          onClick: () => {
+            if (this.getDisplayMode() === 'FLP') {
+              this.deleteSelectedFlightPlan();
+              return;
+            }
+            this.deleteSelectedMarkpoint();
+          }
+        }
+      ],
       lines: [],
       render: (renderer, renderContext) => {
         const ctx = renderContext?.ctx ?? renderer?.canvasAPI?.context;
         const w = renderContext?.w ?? renderer?.canvasAPI?.canvas?.width ?? 512;
         const h = renderContext?.h ?? renderer?.canvasAPI?.canvas?.height ?? 512;
-        const layout = renderContext?.layout;
         const color = renderContext?.color ?? '#00ff66';
+        const layout = renderContext?.layout;
         if (!ctx) return;
 
-        const pitch = Number(window.geofs?.animation?.values?.atilt) || 0;
-        const roll = Number(window.geofs?.animation?.values?.aroll) || 0;
-        const kias = Math.round(Number(window.geofs?.animation?.values?.kias) || 0);
-        const alt = Math.round((Number(window.geofs?.animation?.values?.altitude) || 0));
-        const vsi = Math.round(Number(window.geofs?.animation?.values?.climbrate) || 0);
+        const displayMode = this.getDisplayMode();
 
-        const frame = layout?.frame ?? { left: 0, top: 0, width: w, height: h };
-
-        ctx.save();
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-
-        const cx = frame.left + frame.width * 0.5;
-        const cy = frame.top + frame.height * 0.54;
-        const radius = frame.width * 0.31;
-        const pScale = 8;
-
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-        ctx.clip();
-
-        ctx.translate(cx, cy);
-        ctx.rotate((roll * Math.PI) / 180);
-        ctx.translate(0, -pitch * pScale);
-
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        for (let i = 4; i < radius * 4; i += 8) {
-          ctx.moveTo(-radius * 3, i);
-          ctx.lineTo(radius * 3, i);
+        if (displayMode === 'ADI') {
+          this.renderAdi(ctx, w, h, color, layout);
+          return;
         }
-        ctx.stroke();
 
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(-radius * 3, 0);
-        ctx.lineTo(radius * 3, 0);
-        ctx.stroke();
-
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(0, -radius * 5);
-        ctx.lineTo(0, radius * 5);
-        ctx.stroke();
-
-        ctx.font = 'bold 20px monospace';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-
-        for (let p = -90; p <= 90; p += 10) {
-          if (p === 0) continue;
-          const py = -p * pScale;
-          const lineW = (p % 20 === 0) ? 50 : 25;
-          ctx.beginPath();
-          ctx.moveTo(-lineW, py);
-          ctx.lineTo(lineW, py);
-          ctx.stroke();
-          ctx.fillStyle = '#000000';
-          ctx.fillRect(-18, py - 9, 36, 18);
-          ctx.fillStyle = color;
-          ctx.fillText(Math.abs(p), 0, py + 1);
+        if (displayMode === 'FLP') {
+          const items = this.getFlightPlanItems();
+          const selectedIndex = this.getSelectedFlpIndex(items);
+          this.renderSelectableList(
+            ctx,
+            w,
+            h,
+            items,
+            selectedIndex,
+            'FLIGHTPLAN',
+            (item, index) => ({
+              key: `WP${index + 1} ${item.ident ?? ''}`.trim(),
+              value: `${item.type ?? ''}${item?.selected ? ' (ACTIVE)' : ''}`
+            }),
+            color,
+            {
+              keyXRatio: 0.23,
+              valueXRatio: 0.60,
+              prefixOffsetRatio: 0.028
+            }
+          );
+          return;
         }
-        ctx.restore();
 
-        ctx.strokeStyle = color;
-        ctx.fillStyle = color;
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-        ctx.stroke();
+        if (displayMode === 'MRK') {
+          const items = this.getMarkpointItems();
+          const selectedIndex = this.getSelectedMarkpointIndex(items);
+          const typeButton = renderContext?.page?.leftButtons?.find((button) => button?.key === 'TYPE');
+          const type = items[selectedIndex]?.type ?? FlightModule.MARKPOINT_TYPES[0];
+          if (typeButton) {
+            typeButton.stateIndex = Math.max(0, FlightModule.MARKPOINT_TYPES.findIndex((item) => item === type));
+          }
+          this.renderSelectableList(
+            ctx,
+            w,
+            h,
+            items,
+            selectedIndex,
+            'MARKPOINTS',
+            (item, index) => ({
+              key: `MRK${index + 1} ${item.abbreviation ?? item.name ?? ''}`.trim(),
+              value: `${item.type ?? ''}${item?.active ? ' (ACTIVE)' : ''}`
+            }),
+            color,
+            {
+              keyXRatio: 0.23,
+              valueXRatio: 0.56,
+              prefixOffsetRatio: 0.028
+            }
+          );
+          return;
+        }
 
-        const wx = cx;
-        const wy = cy;
-        const ww = w * 0.027;
-        const wh = h * 0.016;
-        const stub = w * 0.010;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(wx - ww, wy);
-        ctx.lineTo(wx - ww * 0.55, wy + wh);
-        ctx.lineTo(wx, wy - wh * 0.15);
-        ctx.lineTo(wx + ww * 0.55, wy + wh);
-        ctx.lineTo(wx + ww, wy);
-        ctx.moveTo(wx - ww - stub, wy);
-        ctx.lineTo(wx - ww, wy);
-        ctx.moveTo(wx + ww, wy);
-        ctx.lineTo(wx + ww + stub, wy);
-        ctx.stroke();
+        if (displayMode === 'MSS') {
+          this.renderMissionData(ctx, w, h, color, renderContext);
+          return;
+        }
 
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-
-        const boxY = cy - radius - h * 0.012;
-        const spdX = w * 0.18;
-        const altX = w * 0.82;
-
-        ctx.lineWidth = 2;
-        ctx.strokeRect(spdX - 42, boxY - 20, 84, 40);
-        ctx.font = 'bold 26px monospace';
-        ctx.fillText(kias, spdX, boxY + 2);
-
-        ctx.strokeRect(altX - 52, boxY - 22, 104, 44);
-        const altRounded = Math.max(0, Math.round(alt));
-        const thousands = Math.floor(altRounded / 1000);
-        const hundredsText = String(altRounded % 1000).padStart(3, '0');
-        const rightX = altX + 52 - w * 0.014;
-        const altCenterY = boxY + 1;
-
-        ctx.textAlign = 'right';
-        ctx.font = 'bold 22px monospace';
-        const hundredsWidth = ctx.measureText(hundredsText).width;
-        ctx.fillText(hundredsText, rightX, altCenterY);
-        ctx.font = 'bold 30px monospace';
-        ctx.fillText(String(thousands), rightX - hundredsWidth - w * 0.006, altCenterY);
-
-        const vsiText = `${vsi >= 0 ? ' ' : ''}${vsi}`;
-        ctx.font = 'bold 24px monospace';
-        ctx.textAlign = 'left';
-        ctx.fillText(vsiText, altX - w * 0.07, boxY - h * 0.08);
-
-        ctx.restore();
+        this.renderIff(ctx, w, h, color);
       }
     });
 
@@ -4906,13 +5621,64 @@ class AdiModule {
   }
 }
 
+window.FlightModule = FlightModule;
+
 class TargetingPodModule {
   // TGP module implementation.
   constructor(getAddon = () => null) {
     this.getAddon = getAddon;
+    this.activePage = null;
+    this.pendingMarkpoint = null;
+  }
+
+  _resolveMarkpointTarget(markpoint) {
+    const lat = Number(markpoint?.lat);
+    const lon = Number(markpoint?.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      return null;
+    }
+
+    let altM = Number(markpoint?.altM);
+    if (!Number.isFinite(altM) && typeof Cesium !== 'undefined') {
+      const viewer = window.geofs?.api?.viewer;
+      const globe = viewer?.scene?.globe;
+      const cartographic = Cesium.Cartographic.fromDegrees(lon, lat);
+      altM = Number(globe?.getHeight(cartographic));
+    }
+
+    if (!Number.isFinite(altM)) {
+      altM = 0;
+    }
+
+    return {
+      lat,
+      lon,
+      altM,
+      createdAt: Date.now()
+    };
+  }
+
+  trackMarkpoint(markpoint) {
+    const page = this.activePage;
+    const target = this._resolveMarkpointTarget(markpoint);
+
+    if (!target) {
+      return false;
+    }
+
+    if (page?._applyLockedPoint && page?._setLockState) {
+      page._markPoint = target;
+      page._applyLockedPoint(target, 'MRK', 'MRK');
+      page._setLockState('MRK');
+      return true;
+    }
+
+    this.pendingMarkpoint = target;
+    return true;
   }
 
   registerMfdPages(mfdModule) {
+    const owner = this;
     const getMapModule = () => this.getAddon()?.map ?? null;
     const getOption = (page, key, fallback) => OptionModule.getOption(page, key, fallback);
     const getMode = () => OptionModule.getOption('TGP', 'MODE', 'CAPTURE');
@@ -4943,7 +5709,7 @@ class TargetingPodModule {
               page._relPitch = 0;
             } else if (nextState === 'CAPTURE') {
               const lockState = OptionModule.getOption('TGP', 'LOCK', 'FREE');
-              if (lockState === 'FIX' || lockState === 'MARK') {
+              if (lockState === 'FIX' || lockState === 'MARK' || lockState === 'MRK') {
                 page._setLockState('FREE');
               }
             }
@@ -4974,7 +5740,7 @@ class TargetingPodModule {
         {
           key: 'LOCK',
           label: 'LOCK',
-          states: ['FREE', 'TRK', 'WPT', 'FIX', 'MARK'],
+          states: ['FREE', 'TRK', 'WPT', 'MRK', 'FIX', 'MARK'],
           stateIndex: 0,
           managedExternally: true,
           show() { return isCaptureOrMarkMode(); },
@@ -4983,7 +5749,7 @@ class TargetingPodModule {
 
             if (isMarkMode()) {
               const lockState = OptionModule.getOption('TGP', 'LOCK', 'FREE');
-              if (lockState === 'FIX' || lockState === 'MARK') {
+              if (lockState === 'FIX' || lockState === 'MARK' || lockState === 'MRK') {
                 page._setLockState('FREE');
                 page._resetLockData();
                 page._lockedCallsign = 'N/A';
@@ -4999,10 +5765,20 @@ class TargetingPodModule {
               return;
             }
 
-            const cycle = ['FREE', 'TRK', 'WPT'];
+            const cycle = ['FREE', 'TRK', 'WPT', 'MRK'];
             const current = OptionModule.getOption('TGP', 'LOCK', 'FREE');
             const currentIndex = Math.max(0, cycle.findIndex((state) => state === current));
             const next = cycle[(currentIndex + 1) % cycle.length];
+
+            if (next === 'MRK') {
+              if (!page._lockActiveMarkpointFromCartridge()) {
+                page._setLockState('FREE');
+                page._resetLockData();
+                page._lockedCallsign = 'N/A';
+              }
+              return;
+            }
+
             page._setLockState(next);
 
             if (next === 'FREE') {
@@ -5028,6 +5804,7 @@ class TargetingPodModule {
           show() { return isMarkMode(); },
           onClick: ({ page }) => {
             if (!page) return;
+            owner.activePage = page;
             const lookPoint = page._resolveCurrentAimGroundPoint();
             if (!lookPoint) return;
 
@@ -5472,6 +6249,22 @@ class TargetingPodModule {
         return true;
       },
 
+      _lockActiveMarkpointFromCartridge: function() {
+        const cartridge = owner.getAddon?.()?.dataCartridge;
+        let markpoint = cartridge?.getActiveMarkpoint?.();
+        if (!markpoint) {
+          const markpoints = cartridge?.getMarkpoints?.() ?? [];
+          if (markpoints.length) {
+            markpoint = markpoints[0];
+            cartridge?.setActiveMarkpoint?.(0);
+          }
+        }
+        if (!markpoint) return false;
+        const target = owner._resolveMarkpointTarget(markpoint);
+        if (!target) return false;
+        return this._applyLockedPoint(target, 'MRK', 'MRK');
+      },
+
       _updateSlew: function(x, y) {
         const stepBtn = this.rightButtons.find((b) => b.key === 'SLEW_STEP');
         const step = Number(stepBtn.states[stepBtn.stateIndex]);
@@ -5565,11 +6358,11 @@ class TargetingPodModule {
             targetKey = `WPT:${cs}`;
             this._targetAltFt = Math.round(tAltM * 3.28084);
           }
-        } else if (this._lockMode === 'FIX' || this._lockMode === 'MARK') {
+        } else if (this._lockMode === 'FIX' || this._lockMode === 'MARK' || this._lockMode === 'MRK') {
           tLat = Number(this._targetLat);
           tLon = Number(this._targetLon);
           tAltM = Number(this._targetAltM) || 0;
-          cs = this._lockMode === 'MARK' ? 'MRK' : 'FIX';
+          cs = this._lockMode === 'FIX' ? 'FIX' : 'MRK';
           targetKey = String(this._lockTargetKey ?? `${this._lockMode}:POINT`);
           this._targetAltFt = Math.round(tAltM * 3.28084);
         }
@@ -5807,7 +6600,7 @@ class TargetingPodModule {
         ctx.fillText(`FOV ${fovDeg}°`, w - 50, 60);
 
         ctx.textAlign = 'center';
-        ctx.fillText(isLocked ? `${this._lockMode} ◆ ${this._lockedCallsign}` : 'SLEW', cx, 48);
+        ctx.fillText(isLocked ? `${this._lockMode} ◆ ${this._lockedCallsign}` : 'SLEW', cx, 60);
 
         if (isLocked && this._targetLat !== null) {
           ctx.font = 'bold 17px monospace';
@@ -5824,7 +6617,7 @@ class TargetingPodModule {
         } else {
           ctx.textAlign = 'center';
           ctx.font = 'bold 16px monospace';
-          ctx.fillText('NO TGT', cx, h - 40);
+          ctx.fillText('NO TGT', cx, h - 70);
         }
       },
 
@@ -5924,6 +6717,14 @@ class TargetingPodModule {
 
         const page = renderContext?.page;
         if (!page) return;
+        owner.activePage = this;
+
+        if (owner.pendingMarkpoint) {
+          this._markPoint = owner.pendingMarkpoint;
+          this._applyLockedPoint(owner.pendingMarkpoint, 'MRK', 'MRK');
+          this._setLockState('MRK');
+          owner.pendingMarkpoint = null;
+        }
 
         const imgMode = getOption('TGP', 'STYLE', 'DAY');
         const fovDeg = Number(getOption('TGP', 'RANGE', 30));
@@ -6013,7 +6814,7 @@ window.TargetingPodModule = TargetingPodModule;
         helperModule: dependencies.helperModule ?? HelperModule,
         cameraModule: dependencies.cameraModule ?? CameraModule,
         mfdModule: dependencies.mfdModule ?? MfdModule,
-        getAddon: dependencies.getAddon ?? (() => window.F18Addon ?? null)
+        getAddon: dependencies.getAddon ?? (() => window.BasePlugin?.getActiveAddon?.() ?? null)
       };
       this.originalRenderer = null;
       this.installed = false;
@@ -6539,7 +7340,7 @@ window.TargetingPodModule = TargetingPodModule;
     const gPrefixWidth = ctx.measureText(gPrefix).width;
 
     ctx.fillText(`M ${mach.toFixed(2)}`, x, y1);
-    ctx.fillText(`Î± ${aoa.toFixed(1)}`, x, y2);
+    ctx.fillText(`α ${aoa.toFixed(1)}`, x, y2);
     ctx.fillText(gPrefix, x, y3);
     ctx.fillText(gValue.toFixed(1), x + gPrefixWidth, y3);
     // Max G zonder prefix, uitgelijnd op het G-getal.
@@ -6983,140 +7784,135 @@ window.TargetingPodModule = TargetingPodModule;
     }
 
     renderF18Hud(renderer) {
-    const o = renderer.canvasAPI.context;
-    const canvas = renderer.canvasAPI.canvas ?? o.canvas;
-    const w = canvas?.width || 512;
-    const h = canvas?.height || 512;
+      const o = renderer.canvasAPI.context;
+      const canvas = renderer.canvasAPI.canvas ?? o.canvas;
+      const w = canvas?.width || 512;
+      const h = canvas?.height || 512;
 
-    const ac = window.geofs?.aircraft?.instance;
-    const anim = window.geofs?.animation?.values ?? {};
-    const camera = window.geofs?.api?.viewer?.camera;
+      const ac = window.geofs?.aircraft?.instance;
+      const anim = window.geofs?.animation?.values ?? {};
+      const camera = window.geofs?.api?.viewer?.camera;
 
-    const kias = window.exponentialSmoothing
-      ? window.exponentialSmoothing('smoothKias', anim.kias ?? 0, 0.1)
-      : (anim.kias ?? 0);
-    const alt = anim.altitude ?? 0;
-    const hdg = anim.heading360 ?? anim.heading ?? 0;
-    const aoa = anim.aoa ?? 0;
-    const mach = Math.round(((window.geofs?.animation?.values?.mach ?? 0) * 100)) / 100;
-    const vsi = Math.round((window.geofs?.animation?.values?.climbrate ?? 0) / 10) * 10;
-    const radioAlt = window.geofs?.animation?.values?.haglFeet ?? 0;
-    const trimScaled = Math.round((window.geofs?.animation?.values?.trim ?? 0) * 100);
-    const trimDisplay = trimScaled === 0 ? 'T T/O' : `T ${trimScaled}`;
-    const currentG = Number.isFinite(anim.loadFactor) ? anim.loadFactor : 1;
-    const navUnit = window.geofs?.nav?.currentNAVUnit ?? null;
-    const autopilot = window.geofs?.autopilot ?? null;
-    const wpnMaster = this.getOption('WPN', 'MASTER', 'OFF');
-    const wpnMode = this.getWpnModeFromOptions();
-    const wpnModeLoadout = this.getWpnModeLoadout(wpnMode);
-    const wpnHudStatus = wpnMaster !== 'OFF'
-      ? {
-          line1: `${wpnMaster === 'SIM' ? 'SIM' : 'ARM'} ${wpnMode}`,
-          line2: this.getSelectedWpnQuantityLine(wpnMode, wpnModeLoadout)
-        }
-      : null;
-    const hudBaseColor = this.getOptionValue('HUD', 'COLOR', F18HudModule.DEFAULT_COLOR);
-    const hudColor = this.applyBrightnessToHexColor(hudBaseColor, this.getMfdBrightnessFactor());
-    const hudLevel = this.getOption('HUD', 'LEVEL', 'FULL');
-    F18HudModule.DEFAULT_COLOR = hudColor;
+      const kias = window.exponentialSmoothing
+        ? window.exponentialSmoothing('smoothKias', anim.kias ?? 0, 0.1)
+        : (anim.kias ?? 0);
+      const alt = anim.altitude ?? 0;
+      const hdg = anim.heading360 ?? anim.heading ?? 0;
+      const aoa = anim.aoa ?? 0;
+      const mach = Math.round(((window.geofs?.animation?.values?.mach ?? 0) * 100)) / 100;
+      const vsi = Math.round((window.geofs?.animation?.values?.climbrate ?? 0) / 10) * 10;
+      const radioAlt = window.geofs?.animation?.values?.haglFeet ?? 0;
+      const trimScaled = Math.round((window.geofs?.animation?.values?.trim ?? 0) * 100);
+      const trimDisplay = trimScaled === 0 ? 'T T/O' : `T ${trimScaled}`;
+      const currentG = Number.isFinite(anim.loadFactor) ? anim.loadFactor : 1;
+      const navUnit = window.geofs?.nav?.currentNAVUnit ?? null;
+      const autopilot = window.geofs?.autopilot ?? null;
+      const wpnMaster = this.getOption('WPN', 'MASTER', 'OFF');
+      const wpnMode = this.getWpnModeFromOptions();
+      const wpnModeLoadout = this.getWpnModeLoadout(wpnMode);
+      const wpnHudStatus = wpnMaster !== 'OFF'
+        ? {
+            line1: `${wpnMaster === 'SIM' ? 'SIM' : 'ARM'} ${wpnMode}`,
+            line2: this.getSelectedWpnQuantityLine(wpnMode, wpnModeLoadout)
+          }
+        : null;
+      const hudBaseColor = this.getOptionValue('HUD', 'COLOR', F18HudModule.DEFAULT_COLOR);
+      const hudColor = this.applyBrightnessToHexColor(hudBaseColor, this.getMfdBrightnessFactor());
+      const hudLevel = this.getOption('HUD', 'LEVEL', 'FULL');
+      F18HudModule.DEFAULT_COLOR = hudColor;
 
-    this.updateWpnRearmState();
+      this.updateWpnRearmState();
 
-    if (currentG > this.maxG) {
-      this.maxG = currentG;
-    }
+      if (currentG > this.maxG) {
+        this.maxG = currentG;
+      }
 
-    const helperModule = this.dependencies.helperModule;
-    const navModule = this.getNavModule();
+      const helperModule = this.dependencies.helperModule;
+      const navModule = this.getNavModule();
 
-    // Canvas leeg maken met echte transparantie (voorkomt volle groene plaat).
-    o.save();
-    o.setTransform(1, 0, 0, 1, 0, 0);
-    o.clearRect(0, 0, w, h);
-    o.restore();
+      // Canvas leeg maken met echte transparantie (voorkomt volle groene plaat).
+      o.save();
+      o.setTransform(1, 0, 0, 1, 0, 0);
+      o.clearRect(0, 0, w, h);
+      o.restore();
 
-    // Achtergrond overlay (GeoFS origineel gebruikt e.images.background; hier weglaten
-    // want we willen een glazen HUD zonder achtergrond-sprite).
+      // Achtergrond overlay (GeoFS origineel gebruikt e.images.background; hier weglaten
+      // want we willen een glazen HUD zonder achtergrond-sprite).
 
-    o.fillStyle = hudColor;
-    o.strokeStyle = hudColor;
-    o.lineWidth = 2;
-    o.font = `20px sans-serif`;
+      o.fillStyle = hudColor;
+      o.strokeStyle = hudColor;
+      o.lineWidth = 2;
+      o.font = `20px sans-serif`;
 
-    // --- Kompasband bovenaan ---
-    if (hudLevel == 'FULL') {
-      F18HudModule.drawTopHeadingScale(o, renderer, hdg, navUnit, helperModule, w, h);
-    }
-
-    // --- Speed + Altitude boxed readouts (meer naar binnen) ---
-    F18HudModule.drawSpeedBox(o, kias, w, h);
-    F18HudModule.drawAltitudeBox(o, alt, w, h);
-
-    // --- Readouts links/rechts rond de boxes ---
-    if (hudLevel !== 'MIN') {
-        F18HudModule.drawLeftReadouts(o, mach, currentG, aoa, this.maxG, autopilot, w, h);
-      F18HudModule.drawRightReadouts(o, vsi, radioAlt, trimDisplay, navUnit, navModule, w, h, wpnHudStatus);
-    }
-
-    // --- Attitude-symbologie (pitch ladder, boresight, FPV, AoA) ---
-    if (camera && ac?.htr) {
-      const cx = w / 2;
-      const cy = h / 2;
-      const clipCy = cy;
-
-      const { pixelsPerDeg, pixelsPerDegX, cameraOffsetPx } = this.computeHudGeometry(w, h);
-      const symbolCy = cy - cameraOffsetPx;
-
-      this.updateFpvState(ac.llaLocation, ac);
+      // --- Kompasband bovenaan ---
       if (hudLevel == 'FULL') {
-         F18HudModule.drawBoresight(o, cx, symbolCy, pixelsPerDeg, w, h);
+        F18HudModule.drawTopHeadingScale(o, renderer, hdg, navUnit, helperModule, w, h);
       }
-      F18HudModule.drawPitchLadder(o, camera, ac, cx, clipCy, symbolCy, pixelsPerDeg, w, h);
 
-      const fpvPos = this.computeFpvScreenPosition(camera, cx, symbolCy, pixelsPerDeg, pixelsPerDegX);
-      const fpvDrawn = F18HudModule.drawFpv(o, fpvPos, cx, clipCy, w, h);
+      // --- Speed + Altitude boxed readouts (meer naar binnen) ---
+      F18HudModule.drawSpeedBox(o, kias, w, h);
+      F18HudModule.drawAltitudeBox(o, alt, w, h);
+
+      // --- Readouts links/rechts rond de boxes ---
       if (hudLevel !== 'MIN') {
-        F18HudModule.drawIlsDeviationCues(o, fpvDrawn, helperModule, w, h);
+          F18HudModule.drawLeftReadouts(o, mach, currentG, aoa, this.maxG, autopilot, w, h);
+        F18HudModule.drawRightReadouts(o, vsi, radioAlt, trimDisplay, navUnit, navModule, w, h, wpnHudStatus);
       }
-      const isGearDown = window.controls?.gear?.position < 0.5;
-      F18HudModule.drawAoaBracket(o, fpvDrawn, cx, clipCy, pixelsPerDeg, w, h, aoa, isGearDown);
-    }
 
-    if (this.isWpnFireFlashVisible()) {
-      o.save();
-      o.setTransform(1, 0, 0, 1, 0, 0);
-      o.fillStyle = F18HudModule.DEFAULT_COLOR;
-      o.textAlign = 'center';
-      o.textBaseline = 'middle';
-      o.font = `${Math.round(h * 0.15)}px monospace`;
-      o.fillText(this.getWpnActionFlashLabel(), w * 0.5, h * 0.52);
-      o.restore();
-    }
+      // --- Attitude-symbologie (pitch ladder, boresight, FPV, AoA) ---
+      if (camera && ac?.htr) {
+        const cx = w / 2;
+        const cy = h / 2;
+        const clipCy = cy;
 
-    const communicationModule = this.getCommunicationModule();
-    const commHudText = communicationModule?.getHudOverlayText?.();
-    if (commHudText) {
-      o.save();
-      o.setTransform(1, 0, 0, 1, 0, 0);
-      o.fillStyle = F18HudModule.DEFAULT_COLOR;
-      o.textAlign = 'center';
-      o.textBaseline = 'bottom';
-      o.font = `bold ${Math.round(h * 0.038)}px monospace`;
-      const lines = String(commHudText ?? '').split('\n').map((line) => line.trim()).filter(Boolean);
-      const lineHeight = h * 0.045;
-      const startY = h * 0.96 - ((lines.length - 1) * lineHeight);
-      for (let i = 0; i < lines.length; i++) {
-        o.fillText(lines[i], w * 0.5, startY + i * lineHeight);
+        const { pixelsPerDeg, pixelsPerDegX, cameraOffsetPx } = this.computeHudGeometry(w, h);
+        const symbolCy = cy - cameraOffsetPx;
+
+        this.updateFpvState(ac.llaLocation, ac);
+        if (hudLevel == 'FULL') {
+          F18HudModule.drawBoresight(o, cx, symbolCy, pixelsPerDeg, w, h);
+        }
+        F18HudModule.drawPitchLadder(o, camera, ac, cx, clipCy, symbolCy, pixelsPerDeg, w, h);
+
+        const fpvPos = this.computeFpvScreenPosition(camera, cx, symbolCy, pixelsPerDeg, pixelsPerDegX);
+        const fpvDrawn = F18HudModule.drawFpv(o, fpvPos, cx, clipCy, w, h);
+        if (hudLevel !== 'MIN') {
+          F18HudModule.drawIlsDeviationCues(o, fpvDrawn, helperModule, w, h);
+        }
+        const isGearDown = window.controls?.gear?.position < 0.5;
+        F18HudModule.drawAoaBracket(o, fpvDrawn, cx, clipCy, pixelsPerDeg, w, h, aoa, isGearDown);
       }
-      o.restore();
-    }
-  
-    }
 
+      if (this.isWpnFireFlashVisible()) {
+        o.save();
+        o.setTransform(1, 0, 0, 1, 0, 0);
+        o.fillStyle = F18HudModule.DEFAULT_COLOR;
+        o.textAlign = 'center';
+        o.textBaseline = 'middle';
+        o.font = `${Math.round(h * 0.15)}px monospace`;
+        o.fillText(this.getWpnActionFlashLabel(), w * 0.5, h * 0.52);
+        o.restore();
+      }
+
+      const communicationModule = this.getCommunicationModule();
+      const commHudText = communicationModule?.getHudOverlayText?.();
+      if (commHudText) {
+        o.save();
+        o.setTransform(1, 0, 0, 1, 0, 0);
+        o.fillStyle = F18HudModule.DEFAULT_COLOR;
+        o.textAlign = 'center';
+        o.textBaseline = 'bottom';
+        o.font = `bold ${Math.round(h * 0.038)}px monospace`;
+        const lines = String(commHudText ?? '').split('\n').map((line) => line.trim()).filter(Boolean);
+        const lineHeight = h * 0.045;
+        const startY = h * 0.96 - ((lines.length - 1) * lineHeight);
+        for (let i = 0; i < lines.length; i++) {
+          o.fillText(lines[i], w * 0.5, startY + i * lineHeight);
+        }
+        o.restore();
+      }
+    }
   }
-
-
-
 
 
   class CameraModule {
@@ -9564,6 +10360,10 @@ class MfdModule {
       return BasePlugin.getRuntime().activePlugin;
     }
 
+    static getActiveAddon() {
+      return BasePlugin.getActivePlugin()?.addon ?? null;
+    }
+
     static isAircraftActive() {
       const activePlugin = BasePlugin.getActivePlugin();
       if (!activePlugin) return false;
@@ -9730,11 +10530,11 @@ class MfdModule {
     constructor(config = {}) {
       super({ id: 'F15', version: config.version ?? '2.0.0' });
       OptionModule.initializeStorageKey(this.id, 'F15Options');
+      this.addonGlobalKey = `${this.id}Addon`;
 
       console.log(`[F15MainPlugin] Initializing plugin version ${this.version}...`);
 
-      // Initialize window.F15Addon with all modules
-      window.F15Addon = {
+      this.addon = {
         version: this.version,
         options: {
           buildKey: OptionModule.buildOptionKey,
@@ -9744,7 +10544,7 @@ class MfdModule {
           set: OptionModule.setOption,
           getValue: OptionModule.getOptionValue
         },
-        // Instantiate all modules directly under F15Addon
+        // Instantiate all modules under this plugin addon instance
         weapons: new WeaponModule({
           ...window.WeaponModuleDefaults?.fighter,
           storageKey: 'F15WpnState'
@@ -9756,7 +10556,7 @@ class MfdModule {
         nav: null,
         communication: new CommunicationModule(),
         system: new SystemModule(),
-        adi: new AdiModule(),
+        flight: null,
         radar: null,
         targetingPod: null,
         hud: new F18HudModule(),
@@ -9772,42 +10572,46 @@ class MfdModule {
           isRunning: () => this.isRunning()
         }
       };
+      window[this.addonGlobalKey] = this.addon;
+
+      const addon = this.addon;
 
       // Initialize modules that need helper reference
-      window.F15Addon.camera = new CameraModule(window.F15Addon.helper, F15MainPlugin.CAMERA_CONFIG);
-      window.F15Addon.controls = new ControlModule(window.F15Addon.helper);
-      window.F15Addon.dataCartridge = new DataCartridgeModule();
-      window.F15Addon.nav = new NavModule();
-      window.F15Addon.map = new MapModule();
-      window.F15Addon.radar = new RadarModule({ navModule: window.F15Addon.nav });
-      window.F15Addon.targetingPod = new TargetingPodModule(() => window.F15Addon);
-      window.F15Addon.nav.setMapModule(window.F15Addon.map);
-      window.F15Addon.nav.setDataCartridgeModule(window.F15Addon.dataCartridge);
-      window.F15Addon.map.setNavModule(window.F15Addon.nav);
+      addon.camera = new CameraModule(addon.helper, F15MainPlugin.CAMERA_CONFIG);
+      addon.controls = new ControlModule(addon.helper);
+      addon.dataCartridge = new DataCartridgeModule();
+      addon.nav = new NavModule();
+      addon.map = new MapModule();
+      addon.radar = new RadarModule({ navModule: addon.nav });
+      addon.targetingPod = new TargetingPodModule(() => this.addon);
+      addon.flight = new FlightModule(() => this.addon);
+      addon.nav.setMapModule(addon.map);
+      addon.nav.setDataCartridgeModule(addon.dataCartridge);
+      addon.map.setNavModule(addon.nav);
 
       // Create MFD module BEFORE page registration
-      window.F15Addon.mfd = new MfdModule(
-        window.F15Addon.helper,
-        window.F15Addon.map,
-        window.F15Addon.camera,
-        window.F15Addon.weapons,
-        window.F15Addon.recorder
+      addon.mfd = new MfdModule(
+        addon.helper,
+        addon.map,
+        addon.camera,
+        addon.weapons,
+        addon.recorder
       );
 
       // Register MFD pages from each module
-      window.F15Addon.recorder.registerMfdPages(window.F15Addon.mfd);
-      window.F15Addon.hud.registerMfdPages(window.F15Addon.mfd);
-      window.F15Addon.system.registerMfdPages(window.F15Addon.mfd);
-      window.F15Addon.checklists.registerMfdPages(window.F15Addon.mfd);
-      window.F15Addon.weapons.registerMfdPages(window.F15Addon.mfd);
-      window.F15Addon.nav.registerMfdPages(window.F15Addon.mfd);
-      window.F15Addon.radar.registerMfdPages(window.F15Addon.mfd);
-      window.F15Addon.communication.registerMfdPages(window.F15Addon.mfd);
-      window.F15Addon.adi.registerMfdPages(window.F15Addon.mfd);
-      window.F15Addon.targetingPod.registerMfdPages(window.F15Addon.mfd);
+      addon.recorder.registerMfdPages(addon.mfd);
+      addon.hud.registerMfdPages(addon.mfd);
+      addon.system.registerMfdPages(addon.mfd);
+      addon.checklists.registerMfdPages(addon.mfd);
+      addon.weapons.registerMfdPages(addon.mfd);
+      addon.nav.registerMfdPages(addon.mfd);
+      addon.radar.registerMfdPages(addon.mfd);
+      addon.communication.registerMfdPages(addon.mfd);
+      addon.flight.registerMfdPages(addon.mfd);
+      addon.targetingPod.registerMfdPages(addon.mfd);
 
       this.setManagedModules([
-        window.F15Addon.controls
+        addon.controls
       ]);
     }
 
@@ -9816,19 +10620,19 @@ class MfdModule {
     }
 
     getMfdPages() {
-      return window.F15Addon.mfd.pageRegistry;
+      return this.addon.mfd.pageRegistry;
     }
 
     tryInstall() {
       // Core modules
-      const hudReady = window.F15Addon?.hud?.ensureLoaded();
-      const cameraReady = window.F15Addon?.camera?.ensureLoaded();
-      const fmcReady = window.F15Addon?.fmc?.ensureLoaded();
-      const controlsReady = window.F15Addon?.controls?.ensureLoaded();
-      const communicationReady = window.F15Addon?.communication?.ensureLoaded();
+      const hudReady = this.addon?.hud?.ensureLoaded();
+      const cameraReady = this.addon?.camera?.ensureLoaded();
+      const fmcReady = this.addon?.fmc?.ensureLoaded();
+      const controlsReady = this.addon?.controls?.ensureLoaded();
+      const communicationReady = this.addon?.communication?.ensureLoaded();
       
       // MFD module handles its own loading
-      const mfdReady = window.F15Addon?.mfd?.ensureLoaded();
+      const mfdReady = this.addon?.mfd?.ensureLoaded();
       
       // Return true if core systems are ready
       return hudReady
@@ -9843,8 +10647,8 @@ class MfdModule {
       if (!this.startLifecycle()) return;
 
       // Initialize MFDs first before starting install loop
-      window.F15Addon.mfd.initializeDefaultMfds(F15MainPlugin.DEFAULT_MFD_LAYOUT);
-      window.F15Addon.mfd.startCameraWatch();
+      this.addon.mfd.initializeDefaultMfds(F15MainPlugin.DEFAULT_MFD_LAYOUT);
+      this.addon.mfd.startCameraWatch();
 
       this.tickActive();
     }
@@ -9856,13 +10660,13 @@ class MfdModule {
     stop() {
       if (!this.stopLifecycle()) return;
 
-      window.F15Addon?.weapons?.stopGunFireTimer();
-      window.F15Addon?.mfd?.restore();
+      this.addon?.weapons?.stopGunFireTimer();
+      this.addon?.mfd?.restore();
       
-      window.F15Addon?.communication?.restore();
-      window.F15Addon?.fmc?.restore();
-      window.F15Addon?.camera?.restore();
-      window.F15Addon?.hud?.restore();
+      this.addon?.communication?.restore();
+      this.addon?.fmc?.restore();
+      this.addon?.camera?.restore();
+      this.addon?.hud?.restore();
     }
 
     restart() {

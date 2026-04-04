@@ -193,11 +193,11 @@
     constructor(config = {}) {
       super({ id: 'F18', version: config.version ?? '2.0.0' });
       OptionModule.initializeStorageKey(this.id, 'F18Options');
+      this.addonGlobalKey = `${this.id}Addon`;
 
       console.log(`[F18MainPlugin] Initializing plugin version ${this.version}...`);
 
-      // Initialize window.F18Addon with all modules
-      window.F18Addon = {
+      this.addon = {
         version: this.version,
         options: {
           buildKey: OptionModule.buildOptionKey,
@@ -207,7 +207,7 @@
           set: OptionModule.setOption,
           getValue: OptionModule.getOptionValue
         },
-        // Instantiate all modules directly under F18Addon
+        // Instantiate all modules under this plugin addon instance
         weapons: new WeaponModule({
           ...window.WeaponModuleDefaults?.fighter,
           storageKey: 'F18WpnState'
@@ -219,7 +219,7 @@
         nav: null,
         communication: new CommunicationModule(),
         system: new SystemModule(),
-        adi: new AdiModule(),
+        flight: null,
         radar: null,
         targetingPod: null,
         hud: new F18HudModule(),
@@ -235,42 +235,46 @@
           isRunning: () => this.isRunning()
         }
       };
+      window[this.addonGlobalKey] = this.addon;
+
+      const addon = this.addon;
 
       // Initialize modules that need helper reference
-      window.F18Addon.camera = new CameraModule(window.F18Addon.helper, F18MainPlugin.CAMERA_CONFIG);
-      window.F18Addon.controls = new ControlModule(window.F18Addon.helper);
-      window.F18Addon.dataCartridge = new DataCartridgeModule();
-      window.F18Addon.nav = new NavModule();
-      window.F18Addon.map = new MapModule();
-      window.F18Addon.radar = new RadarModule({ navModule: window.F18Addon.nav });
-      window.F18Addon.targetingPod = new TargetingPodModule(() => window.F18Addon);
-      window.F18Addon.nav.setMapModule(window.F18Addon.map);
-      window.F18Addon.nav.setDataCartridgeModule(window.F18Addon.dataCartridge);
-      window.F18Addon.map.setNavModule(window.F18Addon.nav);
+      addon.camera = new CameraModule(addon.helper, F18MainPlugin.CAMERA_CONFIG);
+      addon.controls = new ControlModule(addon.helper);
+      addon.dataCartridge = new DataCartridgeModule();
+      addon.nav = new NavModule();
+      addon.map = new MapModule();
+      addon.radar = new RadarModule({ navModule: addon.nav });
+      addon.targetingPod = new TargetingPodModule(() => this.addon);
+      addon.flight = new FlightModule(() => this.addon);
+      addon.nav.setMapModule(addon.map);
+      addon.nav.setDataCartridgeModule(addon.dataCartridge);
+      addon.map.setNavModule(addon.nav);
 
       // Create MFD module
-      window.F18Addon.mfd = new MfdModule(
-        window.F18Addon.helper,
-        window.F18Addon.map,
-        window.F18Addon.camera,
-        window.F18Addon.weapons,
-        window.F18Addon.recorder
+      addon.mfd = new MfdModule(
+        addon.helper,
+        addon.map,
+        addon.camera,
+        addon.weapons,
+        addon.recorder
       );
 
       // Register MFD pages from each module
-      window.F18Addon.recorder.registerMfdPages(window.F18Addon.mfd);
-      window.F18Addon.hud.registerMfdPages(window.F18Addon.mfd);
-      window.F18Addon.system.registerMfdPages(window.F18Addon.mfd);
-      window.F18Addon.checklists.registerMfdPages(window.F18Addon.mfd);
-      window.F18Addon.weapons.registerMfdPages(window.F18Addon.mfd);
-      window.F18Addon.nav.registerMfdPages(window.F18Addon.mfd);
-      window.F18Addon.radar.registerMfdPages(window.F18Addon.mfd);
-      window.F18Addon.communication.registerMfdPages(window.F18Addon.mfd);
-      window.F18Addon.adi.registerMfdPages(window.F18Addon.mfd);
-      window.F18Addon.targetingPod.registerMfdPages(window.F18Addon.mfd);
+      addon.recorder.registerMfdPages(addon.mfd);
+      addon.hud.registerMfdPages(addon.mfd);
+      addon.system.registerMfdPages(addon.mfd);
+      addon.checklists.registerMfdPages(addon.mfd);
+      addon.weapons.registerMfdPages(addon.mfd);
+      addon.nav.registerMfdPages(addon.mfd);
+      addon.radar.registerMfdPages(addon.mfd);
+      addon.communication.registerMfdPages(addon.mfd);
+      addon.flight.registerMfdPages(addon.mfd);
+      addon.targetingPod.registerMfdPages(addon.mfd);
 
       this.setManagedModules([
-        window.F18Addon.controls
+        addon.controls
       ]);
     }
 
@@ -278,7 +282,7 @@
       if (!this.isAircraftActive()) return false;
 
       return this.runOnce('F18ControlsRegistered', () => {
-        window.F18Addon.controls.registerControl({
+        this.addon.controls.registerControl({
           key: 'SYS.CANOPY',
           padLabel: 'CANOPY',
           defaultState: 'CLOSED',
@@ -323,7 +327,7 @@
           ]
         });
 
-        window.F18Addon.controls.registerControl({
+        this.addon.controls.registerControl({
         key: 'SYS.REFUELING',
         padLabel: 'PROBE',
         defaultState: 'CLOSED',
@@ -375,23 +379,23 @@
     }
 
     getMfdPages() {
-      return window.F18Addon.mfd.pageRegistry;
+      return this.addon.mfd.pageRegistry;
     }
 
     tryInstall() {
       // Core modules
-      const hudReady = window.F18Addon?.hud?.ensureLoaded();
-      const cameraReady = window.F18Addon?.camera?.ensureLoaded();
-      const fmcReady = window.F18Addon?.fmc?.ensureLoaded();
-      const controlsReady = window.F18Addon?.controls?.ensureLoaded();
-      const communicationReady = window.F18Addon?.communication?.ensureLoaded();
+      const hudReady = this.addon?.hud?.ensureLoaded();
+      const cameraReady = this.addon?.camera?.ensureLoaded();
+      const fmcReady = this.addon?.fmc?.ensureLoaded();
+      const controlsReady = this.addon?.controls?.ensureLoaded();
+      const communicationReady = this.addon?.communication?.ensureLoaded();
 
       if (this.isAircraftActive()) {
         this.registerF18Controls();
       }
       
       // MFD system
-      const mfdReady = window.F18Addon.mfd.ensureLoaded();
+      const mfdReady = this.addon.mfd.ensureLoaded();
       
       // Return true if core systems are ready
       return hudReady
@@ -406,8 +410,8 @@
       if (!this.startLifecycle()) return;
 
       // Initialize MFDs
-      window.F18Addon.mfd.initializeDefaultMfds(F18MainPlugin.DEFAULT_MFD_LAYOUT);
-      window.F18Addon.mfd.startCameraWatch();
+      this.addon.mfd.initializeDefaultMfds(F18MainPlugin.DEFAULT_MFD_LAYOUT);
+      this.addon.mfd.startCameraWatch();
 
       this.tickActive();
     }
@@ -419,13 +423,13 @@
     stop() {
       if (!this.stopLifecycle()) return;
 
-      window.F18Addon?.weapons?.stopGunFireTimer();
-      window.F18Addon?.mfd?.restore();
+      this.addon?.weapons?.stopGunFireTimer();
+      this.addon?.mfd?.restore();
       
-      window.F18Addon?.communication?.restore();
-      window.F18Addon?.fmc?.restore();
-      window.F18Addon?.camera?.restore();
-      window.F18Addon?.hud?.restore();
+      this.addon?.communication?.restore();
+      this.addon?.fmc?.restore();
+      this.addon?.camera?.restore();
+      this.addon?.hud?.restore();
     }
 
     restart() {

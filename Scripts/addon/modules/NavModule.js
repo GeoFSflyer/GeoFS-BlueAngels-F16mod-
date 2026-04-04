@@ -988,14 +988,7 @@
 
     getDataCartridgeModule() {
       if (this.dataCartridgeModule) return this.dataCartridgeModule;
-
-      const aircraftId = String(window.geofs?.aircraft?.instance?.id ?? '');
-      if (aircraftId === '27' && window.F18Addon?.dataCartridge) return window.F18Addon.dataCartridge;
-      if (aircraftId === '3591' && window.F15Addon?.dataCartridge) return window.F15Addon.dataCartridge;
-      if (window.F18Addon?.dataCartridge) return window.F18Addon.dataCartridge;
-      if (window.F15Addon?.dataCartridge) return window.F15Addon.dataCartridge;
-
-      return null;
+      return window.BasePlugin?.getActiveAddon?.()?.dataCartridge ?? null;
     }
 
     getDataCartridgeScene() {

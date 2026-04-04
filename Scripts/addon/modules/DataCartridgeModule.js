@@ -30,6 +30,33 @@ class DataCartridgeModule {
       version: 1,
       source: 'empty',
       missionName: 'Untitled Mission',
+      group: '',
+      flight: '',
+      wingman: '',
+      flightData: {
+        startTimeZ: '',
+        startTaxiZ: '',
+        startToZ: '',
+        timeOverTargetZ: '',
+        endTimeZ: ''
+      },
+      positions: [],
+      cruise: {
+        altitude: '',
+        speed: ''
+      },
+      notes: '',
+      landing: {
+        airportIcao: '',
+        runway: '',
+        nav1: '',
+        pattern: '',
+        formation: '',
+        altEntryAgl: '',
+        speedEntryKn: '',
+        pitchIntervalS: '',
+        speedDownwindKn: ''
+      },
       loadedAt: null,
       flightPlan: [],
       navaids: [],
@@ -68,6 +95,14 @@ class DataCartridgeModule {
     const normalized = this._newData();
     normalized.source = options.source ?? 'mission-planner';
     normalized.missionName = src.name ?? src.missionName ?? 'Untitled Mission';
+    normalized.group = src.group ?? '';
+    normalized.flight = src.flight ?? '';
+    normalized.wingman = src.wingman ?? '';
+    normalized.flightData = this._clone(src.flightData ?? normalized.flightData);
+    normalized.positions = this._clone(src.positions ?? []);
+    normalized.cruise = this._clone(src.cruise ?? normalized.cruise);
+    normalized.notes = src.notes ?? src.cruise?.notes ?? '';
+    normalized.landing = this._clone(src.landing ?? normalized.landing);
     normalized.loadedAt = loadedAt;
     normalized.flightPlan = this._clone(src.flightPlan ?? []);
     normalized.checklists = this._clone(src.checklists ?? []);
@@ -99,8 +134,97 @@ class DataCartridgeModule {
     return this._clone(markpoint);
   }
 
+  setMarkpointType(index, type) {
+    const markpoint = this.data.markpoints[index];
+    if (!markpoint) return false;
+    markpoint.type = type;
+    this._emitUpdate();
+    return true;
+  }
+
+  setActiveMarkpoint(index) {
+    if (!this.data.markpoints[index]) return false;
+    for (let i = 0; i < this.data.markpoints.length; i++) {
+      this.data.markpoints[i].active = i === index;
+    }
+    this._emitUpdate();
+    return true;
+  }
+
+  getActiveMarkpoint() {
+    const active = this.data.markpoints.find((markpoint) => markpoint?.active);
+    return active ? this._clone(active) : null;
+  }
+
+  deleteMarkpoint(index) {
+    if (!this.data.markpoints[index]) return false;
+    this.data.markpoints.splice(index, 1);
+    this._emitUpdate();
+    return true;
+  }
+
   getMissionData() {
     return this._clone(this.data);
+  }
+
+  getMissionName() {
+    return this.data.missionName;
+  }
+
+  getGroup() {
+    return this.data.group;
+  }
+
+  getFlight() {
+    return this.data.flight;
+  }
+
+  getWingman() {
+    return this.data.wingman;
+  }
+
+  getFlightData() {
+    return this._clone(this.data.flightData);
+  }
+
+  getPositions() {
+    return this._clone(this.data.positions);
+  }
+
+  getCruise() {
+    return this._clone(this.data.cruise);
+  }
+
+  getNotes() {
+    return this.data.notes ?? '';
+  }
+
+  getLanding() {
+    return this._clone(this.data.landing);
+  }
+
+  getFlightPlan() {
+    return this._clone(this.data.flightPlan);
+  }
+
+  getNavaids() {
+    return this._clone(this.data.navaids);
+  }
+
+  getMarkpoints() {
+    return this._clone(this.data.markpoints);
+  }
+
+  getAreas() {
+    return this._clone(this.data.areas);
+  }
+
+  getChecklists() {
+    return this._clone(this.data.checklists);
+  }
+
+  getIffCodes() {
+    return this._clone(this.data.iffCodes);
   }
 
   getRenderableData() {

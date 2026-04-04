@@ -69,6 +69,35 @@
         return {
           version: 1,
           name,
+          group: '',
+          flight: '',
+          wingman: '',
+          flightData: {
+            startTimeZ: '',
+            startTaxiZ: '',
+            startToZ: '',
+            timeOverTargetZ: '',
+            endTimeZ: ''
+          },
+          positions: [
+            { callsign: '' }
+          ],
+          cruise: {
+            altitude: '',
+            speed: ''
+          },
+          notes: '',
+          landing: {
+            airportIcao: '',
+            runway: '',
+            nav1: '',
+            pattern: '',
+            formation: '',
+            altEntryAgl: '',
+            speedEntryKn: '',
+            pitchIntervalS: '',
+            speedDownwindKn: ''
+          },
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           flightPlan: [],
@@ -96,6 +125,30 @@
           return false;
         }
         this.mission = JSON.parse(raw);
+        this.mission.flightData = this.mission.flightData ?? {
+          startTimeZ: '',
+          startTaxiZ: '',
+          startToZ: '',
+          timeOverTargetZ: '',
+          endTimeZ: ''
+        };
+        this.mission.positions = this.mission.positions ?? [{ callsign: '' }];
+        this.mission.cruise = this.mission.cruise ?? { altitude: '', speed: '' };
+        this.mission.notes = this.mission.notes ?? this.mission.cruise?.notes ?? '';
+        this.mission.landing = this.mission.landing ?? {
+          airportIcao: '',
+          runway: '',
+          nav1: '',
+          pattern: '',
+          formation: '',
+          altEntryAgl: '',
+          speedEntryKn: '',
+          pitchIntervalS: '',
+          speedDownwindKn: ''
+        };
+        this.mission.group = this.mission.group ?? '';
+        this.mission.flight = this.mission.flight ?? '';
+        this.mission.wingman = this.mission.wingman ?? '';
         this.touch();
         return true;
       }
@@ -213,19 +266,12 @@
           .slice()
           .sort((a, b) => a.order - b.order)
           .forEach((area) => {
-            const style = { ...AREA_STYLE_BY_TYPE[area.type], weight: 2 };
+            const style = { ...AREA_STYLE_BY_TYPE[area.type], weight: 2, interactive: false };
             let layer;
             if (area.variant === 'CIRCLE') {
               layer = L.circle(area.center, { ...style, radius: area.radius }).addTo(this.layers.mission).bindTooltip(`${area.name} (${area.type}/${area.group})`);
             } else {
               layer = L.polygon(area.points, style).addTo(this.layers.mission).bindTooltip(`${area.name} (${area.type}/${area.group})`);
-            }
-            if (layer) {
-              layer.on('click', () => {
-                if (this.areaSelectCallback) {
-                  this.areaSelectCallback(area.id);
-                }
-              });
             }
           });
 
@@ -480,12 +526,43 @@
         this.createPanel();
         this.startFlightPlanSync();
         this.startButtonVisibilitySync();
+        this.startDataCartridgeButtonSync();
         this.render();
       }
 
       startButtonVisibilitySync() {
         this.syncButtonVisibilityToFlightPlan();
         setInterval(() => this.syncButtonVisibilityToFlightPlan(), 300);
+      }
+
+      startDataCartridgeButtonSync() {
+        this.syncDataCartridgeButtonState();
+        setInterval(() => this.syncDataCartridgeButtonState(), 300);
+      }
+
+      syncDataCartridgeButtonState() {
+        if (!this.panel) {
+          return;
+        }
+
+        const button = this.panel.querySelector('[data-action="loadDataCartridge"]');
+        if (!button) {
+          return;
+        }
+
+        const addon = this.getActiveAddonForDataCartridge();
+        const hasCompatibleAddon = Boolean(addon);
+        const isParkedForLoad = this.isAircraftParkedForDataCartridgeLoad();
+        const canLoadDataCartridge = hasCompatibleAddon && isParkedForLoad;
+        const loadDataCartridgeHint = !hasCompatibleAddon
+          ? 'No compatible aircraft with addon found'
+          : (isParkedForLoad ? 'Send to aircraft' : 'Park your aircraft with engine off to load');
+
+        button.disabled = !canLoadDataCartridge;
+        const hint = button.querySelector('small');
+        if (hint) {
+          hint.textContent = loadDataCartridgeHint;
+        }
       }
 
       syncButtonVisibilityToFlightPlan() {
@@ -557,6 +634,9 @@
           .geofs-missionPlanner-panel.geofs-visible{display:block}
           .geofs-mp-title{font-size:14px;font-weight:700;margin-bottom:8px}
           .geofs-mp-row{display:flex;gap:6px;margin-bottom:6px}.geofs-mp-row>*{flex:1 1 0;min-width:0}
+          .geofs-mp-field{display:flex;flex-direction:column;gap:3px;flex:1 1 0;min-width:0}
+          .geofs-mp-field label{font-size:10px;opacity:.82}
+          .geofs-mp-group-title{font-size:11px;font-weight:700;color:#9fc2df;margin:8px 0 4px}
           .geofs-mp-section{margin-top:10px;border-top:1px solid rgba(255,255,255,.2);padding-top:8px}
           .geofs-mp-section h4{margin:0 0 6px 0;font-size:12px;color:#b8ccde;display:flex;justify-content:space-between;cursor:pointer}
           .geofs-mp-list{display:flex;flex-direction:column;gap:4px;font-size:11px}
@@ -580,8 +660,15 @@
           .geofs-mp-cartridge-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;min-height:56px;background:linear-gradient(180deg,#1ccf5c,#17a84a) !important;color:#f3fff6 !important;border:1px solid rgba(0,0,0,.28) !important;border-radius:6px !important;font-weight:700 !important;letter-spacing:.4px !important;cursor:pointer}
           .geofs-mp-cartridge-btn small{font-size:10px;font-weight:400;opacity:.9;letter-spacing:0}
           .geofs-mp-cartridge-btn:hover{filter:brightness(1.04)}
+          .geofs-mp-cartridge-btn:disabled{background:linear-gradient(180deg,#7d8790,#636c74) !important;color:#dce1e5 !important;cursor:not-allowed;filter:none}
         `;
         document.head.appendChild(style);
+      }
+
+      isAircraftParkedForDataCartridgeLoad() {
+        return window.controls?.gear?.position === 0
+          && !window.geofs?.animation?.values?.enginesOn
+          && window.geofs?.aircraft?.instance?.groundContact;
       }
 
       createButton() {
@@ -698,29 +785,25 @@
       }
 
       getActiveAddonForDataCartridge() {
-        const aircraftId = String(window.geofs?.aircraft?.instance?.id ?? '');
-        if (aircraftId === '27' && window.F18Addon?.dataCartridge) {
-          return window.F18Addon;
+        const addon = window.BasePlugin?.getActiveAddon?.();
+        if (!addon?.dataCartridge?.loadMissionData) {
+          return null;
         }
-        if (aircraftId === '3591' && window.F15Addon?.dataCartridge) {
-          return window.F15Addon;
+        if (!addon?.communication?.setGroup || !addon?.communication?.setFlight || !addon?.communication?.setWingman) {
+          return null;
         }
-        if (window.F18Addon?.dataCartridge) {
-          return window.F18Addon;
-        }
-        if (window.F15Addon?.dataCartridge) {
-          return window.F15Addon;
-        }
-        return null;
+        return addon;
       }
 
-      loadDataCartridgeToAircraft() {
-        const addon = this.getActiveAddonForDataCartridge();
+      loadDataCartridgeToAircraft(addon = this.getActiveAddonForDataCartridge()) {
         const cartridge = addon?.dataCartridge;
         if (!cartridge?.loadMissionData) {
           return false;
         }
         cartridge.loadMissionData(cloneData(this.store.mission), { source: 'mission-planner' });
+        addon.communication.setGroup(this.store.mission.group);
+        addon.communication.setFlight(this.store.mission.flight);
+        addon.communication.setWingman(this.store.mission.wingman);
         return true;
       }
 
@@ -743,6 +826,13 @@
 
       render() {
         const mission = this.store.mission;
+        const addon = this.getActiveAddonForDataCartridge();
+        const hasCompatibleAddon = Boolean(addon);
+        const isParkedForLoad = this.isAircraftParkedForDataCartridgeLoad();
+        const canLoadDataCartridge = hasCompatibleAddon && isParkedForLoad;
+        const loadDataCartridgeHint = !hasCompatibleAddon
+          ? 'No compatible aircraft with addon found'
+          : (isParkedForLoad ? 'Send to aircraft' : 'Park your aircraft with engine off to load');
         this.map.renderMission(mission);
 
         this.panel.innerHTML = `
@@ -751,8 +841,53 @@
           <div class="geofs-mp-section">
             ${this.sectionHeader('mission', 'Mission')}
             ${this.sectionBody('mission', `
-              <div class="geofs-mp-row"><input id="mp-mission-name" value="${mission.name}"><button data-action="newMission">New</button></div>
-              <div class="geofs-mp-row"><button data-action="exportJson">Export to File</button><button data-action="importJson">Import from File</button><input type="file" id="mp-import-file" accept="application/json" style="display:none"></div>
+              <div class="geofs-mp-row">
+                <div class="geofs-mp-field"><label for="mp-mission-name">Mission Name</label><input id="mp-mission-name" value="${mission.name}"></div>
+                <div class="geofs-mp-field"><label for="mp-mission-group">Group</label><input id="mp-mission-group" value="${mission.group}"></div>
+                <div class="geofs-mp-field"><label for="mp-mission-flight">Flight</label><input id="mp-mission-flight" value="${mission.flight}"></div>
+                <div class="geofs-mp-field"><label for="mp-mission-wingman">Wingman</label><input id="mp-mission-wingman" value="${mission.wingman}"></div>
+              </div>
+
+              <div class="geofs-mp-group-title">Flight</div>
+              <div class="geofs-mp-row">
+                <div class="geofs-mp-field"><label for="mp-flight-start-time-z">Start Time (Z)</label><input id="mp-flight-start-time-z" value="${mission.flightData.startTimeZ}"></div>
+                <div class="geofs-mp-field"><label for="mp-flight-start-taxi-z">Start Taxi (Z)</label><input id="mp-flight-start-taxi-z" value="${mission.flightData.startTaxiZ}"></div>
+              </div>
+              <div class="geofs-mp-row">
+                <div class="geofs-mp-field"><label for="mp-flight-start-to-z">Start T/O (Z)</label><input id="mp-flight-start-to-z" value="${mission.flightData.startToZ}"></div>
+                <div class="geofs-mp-field"><label for="mp-flight-tot-z">Time over Target (Z)</label><input id="mp-flight-tot-z" value="${mission.flightData.timeOverTargetZ}"></div>
+                <div class="geofs-mp-field"><label for="mp-flight-end-time-z">End Time (Z)</label><input id="mp-flight-end-time-z" value="${mission.flightData.endTimeZ}"></div>
+              </div>
+
+              <div class="geofs-mp-group-title">Positions</div>
+              <div class="geofs-mp-list">${mission.positions.map((position, index) => `<div class="geofs-mp-item"><div class="geofs-mp-line"><span class="geofs-mp-label" style="flex:0 0 28px">#${index + 1}</span><input id="mp-position-${index}" data-position-index="${index}" value="${position.callsign}" placeholder="Callsign (without [] tags)" style="flex:1"><button class="geofs-mp-remove" data-action="removePosition" data-index="${index}">X</button></div></div>`).join('')}</div>
+              <div class="geofs-mp-row"><button data-action="addPosition">Add Position</button></div>
+
+              <div class="geofs-mp-group-title">Cruise</div>
+              <div class="geofs-mp-row">
+                <div class="geofs-mp-field"><label for="mp-cruise-altitude">Altitude</label><input id="mp-cruise-altitude" value="${mission.cruise.altitude}"></div>
+                <div class="geofs-mp-field"><label for="mp-cruise-speed">Speed</label><input id="mp-cruise-speed" value="${mission.cruise.speed}"></div>
+              </div>
+
+              <div class="geofs-mp-group-title">Notes</div>
+              <div class="geofs-mp-row"><div class="geofs-mp-field"><textarea id="mp-notes">${mission.notes ?? ''}</textarea></div></div>
+
+              <div class="geofs-mp-group-title">Landing</div>
+              <div class="geofs-mp-row">
+                <div class="geofs-mp-field"><label for="mp-landing-airport-icao">Airport (ICAO)</label><input id="mp-landing-airport-icao" value="${mission.landing.airportIcao}"></div>
+                <div class="geofs-mp-field"><label for="mp-landing-runway">Runway</label><input id="mp-landing-runway" value="${mission.landing.runway}"></div>
+                <div class="geofs-mp-field"><label for="mp-landing-nav1">NAV1</label><input id="mp-landing-nav1" value="${mission.landing.nav1}"></div>
+              </div>
+              <div class="geofs-mp-row">
+                <div class="geofs-mp-field"><label for="mp-landing-pattern">Pattern</label><input id="mp-landing-pattern" value="${mission.landing.pattern}"></div>
+                <div class="geofs-mp-field"><label for="mp-landing-formation">Formation</label><input id="mp-landing-formation" value="${mission.landing.formation}"></div>
+              </div>
+              <div class="geofs-mp-row">
+                <div class="geofs-mp-field"><label for="mp-landing-alt-entry-agl">ALT Entry (AGL)</label><input id="mp-landing-alt-entry-agl" value="${mission.landing.altEntryAgl}"></div>
+                <div class="geofs-mp-field"><label for="mp-landing-speed-entry-kn">SPD Entry (kn)</label><input id="mp-landing-speed-entry-kn" value="${mission.landing.speedEntryKn}"></div>
+                <div class="geofs-mp-field"><label for="mp-landing-pitch-interval-s">Pitch int. (s)</label><input id="mp-landing-pitch-interval-s" value="${mission.landing.pitchIntervalS}"></div>
+                <div class="geofs-mp-field"><label for="mp-landing-speed-downwind-kn">SPD Downw. (kn)</label><input id="mp-landing-speed-downwind-kn" value="${mission.landing.speedDownwindKn}"></div>
+              </div>
             `)}
           </div>
 
@@ -799,7 +934,8 @@
           </div>
 
           <div class="geofs-mp-cartridge">
-            <button class="geofs-mp-cartridge-btn" data-action="loadDataCartridge"><span>LOAD DATACARTRIDGE</span><small>Send to aircraft</small></button>
+            <div class="geofs-mp-row"><button data-action="newMission">New</button><button data-action="exportJson">Export to File</button><button data-action="importJson">Import from File</button><input type="file" id="mp-import-file" accept="application/json" style="display:none"></div>
+            <button class="geofs-mp-cartridge-btn" data-action="loadDataCartridge" ${canLoadDataCartridge ? '' : 'disabled'}><span>LOAD DATACARTRIDGE</span><small>${loadDataCartridgeHint}</small></button>
           </div>
         `;
 
@@ -810,6 +946,30 @@
             const reader = new FileReader();
             reader.onload = () => {
               this.store.mission = JSON.parse(reader.result);
+              this.store.mission.flightData = this.store.mission.flightData ?? {
+                startTimeZ: '',
+                startTaxiZ: '',
+                startToZ: '',
+                timeOverTargetZ: '',
+                endTimeZ: ''
+              };
+              this.store.mission.positions = this.store.mission.positions ?? [{ callsign: '' }];
+              this.store.mission.cruise = this.store.mission.cruise ?? { altitude: '', speed: '' };
+              this.store.mission.notes = this.store.mission.notes ?? this.store.mission.cruise?.notes ?? '';
+              this.store.mission.landing = this.store.mission.landing ?? {
+                airportIcao: '',
+                runway: '',
+                nav1: '',
+                pattern: '',
+                formation: '',
+                altEntryAgl: '',
+                speedEntryKn: '',
+                pitchIntervalS: '',
+                speedDownwindKn: ''
+              };
+              this.store.mission.group = this.store.mission.group ?? '';
+              this.store.mission.flight = this.store.mission.flight ?? '';
+              this.store.mission.wingman = this.store.mission.wingman ?? '';
               this.resetAreaNameAndOrder();
               this.store.touch();
               this.applyMissionFlightPlanToGeoFS();
@@ -820,12 +980,120 @@
             reader.readAsText(file);
           };
         }
+
+        this.syncDataCartridgeButtonState();
       }
 
       onChange(event) {
         const target = event.target;
         if (target.id === 'mp-mission-name') {
           this.store.mission.name = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-mission-group') {
+          this.store.mission.group = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-mission-flight') {
+          this.store.mission.flight = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-mission-wingman') {
+          this.store.mission.wingman = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-flight-start-time-z') {
+          this.store.mission.flightData.startTimeZ = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-flight-start-taxi-z') {
+          this.store.mission.flightData.startTaxiZ = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-flight-start-to-z') {
+          this.store.mission.flightData.startToZ = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-flight-tot-z') {
+          this.store.mission.flightData.timeOverTargetZ = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-flight-end-time-z') {
+          this.store.mission.flightData.endTimeZ = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.dataset.positionIndex !== undefined) {
+          const index = Number(target.dataset.positionIndex);
+          this.store.mission.positions[index].callsign = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-cruise-altitude') {
+          this.store.mission.cruise.altitude = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-cruise-speed') {
+          this.store.mission.cruise.speed = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-notes') {
+          this.store.mission.notes = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-landing-airport-icao') {
+          this.store.mission.landing.airportIcao = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-landing-runway') {
+          this.store.mission.landing.runway = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-landing-nav1') {
+          this.store.mission.landing.nav1 = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-landing-pattern') {
+          this.store.mission.landing.pattern = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-landing-formation') {
+          this.store.mission.landing.formation = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-landing-alt-entry-agl') {
+          this.store.mission.landing.altEntryAgl = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-landing-speed-entry-kn') {
+          this.store.mission.landing.speedEntryKn = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-landing-pitch-interval-s') {
+          this.store.mission.landing.pitchIntervalS = target.value;
+          this.store.touch();
+          return;
+        }
+        if (target.id === 'mp-landing-speed-downwind-kn') {
+          this.store.mission.landing.speedDownwindKn = target.value;
           this.store.touch();
           return;
         }
@@ -974,6 +1242,15 @@
           this.store.mission.markpoints.push(markpoint);
           this.store.touch();
         }
+        if (action === 'addPosition') {
+          this.store.mission.positions.push({ callsign: '' });
+          this.store.touch();
+        }
+        if (action === 'removePosition') {
+          const index = Number(button.dataset.index);
+          this.store.mission.positions.splice(index, 1);
+          this.store.touch();
+        }
         if (action === 'removeMarkpoint') {
           this.store.mission.markpoints = this.store.mission.markpoints.filter((m) => m.id !== id);
           this.store.mission.markpoints.forEach((m, index) => { m.id = index + 1; });
@@ -1023,7 +1300,12 @@
           this.store.touch();
         }
         if (action === 'loadDataCartridge') {
-          const ok = this.loadDataCartridgeToAircraft();
+          const addon = this.getActiveAddonForDataCartridge();
+          if (!addon || !this.isAircraftParkedForDataCartridgeLoad()) {
+            this.render();
+            return;
+          }
+          const ok = this.loadDataCartridgeToAircraft(addon);
           if (ok) {
             button.querySelector('small').textContent = 'Sent to aircraft';
             setTimeout(() => {
@@ -1059,7 +1341,7 @@
           return {
             mission: {
               version: 1,
-              fields: ['version', 'name', 'createdAt', 'updatedAt', 'flightPlan', 'markpoints', 'areas', 'navaids', 'checklists', 'iffCodes']
+              fields: ['version', 'name', 'group', 'flight', 'wingman', 'flightData', 'positions', 'cruise', 'notes', 'landing', 'createdAt', 'updatedAt', 'flightPlan', 'markpoints', 'areas', 'navaids', 'checklists', 'iffCodes']
             },
             enums: {
               areaTypes: [...AREA_TYPES],

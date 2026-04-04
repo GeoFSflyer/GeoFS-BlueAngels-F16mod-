@@ -2,9 +2,58 @@ class TargetingPodModule {
   // TGP module implementation.
   constructor(getAddon = () => null) {
     this.getAddon = getAddon;
+    this.activePage = null;
+    this.pendingMarkpoint = null;
+  }
+
+  _resolveMarkpointTarget(markpoint) {
+    const lat = Number(markpoint?.lat);
+    const lon = Number(markpoint?.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      return null;
+    }
+
+    let altM = Number(markpoint?.altM);
+    if (!Number.isFinite(altM) && typeof Cesium !== 'undefined') {
+      const viewer = window.geofs?.api?.viewer;
+      const globe = viewer?.scene?.globe;
+      const cartographic = Cesium.Cartographic.fromDegrees(lon, lat);
+      altM = Number(globe?.getHeight(cartographic));
+    }
+
+    if (!Number.isFinite(altM)) {
+      altM = 0;
+    }
+
+    return {
+      lat,
+      lon,
+      altM,
+      createdAt: Date.now()
+    };
+  }
+
+  trackMarkpoint(markpoint) {
+    const page = this.activePage;
+    const target = this._resolveMarkpointTarget(markpoint);
+
+    if (!target) {
+      return false;
+    }
+
+    if (page?._applyLockedPoint && page?._setLockState) {
+      page._markPoint = target;
+      page._applyLockedPoint(target, 'MRK', 'MRK');
+      page._setLockState('MRK');
+      return true;
+    }
+
+    this.pendingMarkpoint = target;
+    return true;
   }
 
   registerMfdPages(mfdModule) {
+    const owner = this;
     const getMapModule = () => this.getAddon()?.map ?? null;
     const getOption = (page, key, fallback) => OptionModule.getOption(page, key, fallback);
     const getMode = () => OptionModule.getOption('TGP', 'MODE', 'CAPTURE');
@@ -35,7 +84,7 @@ class TargetingPodModule {
               page._relPitch = 0;
             } else if (nextState === 'CAPTURE') {
               const lockState = OptionModule.getOption('TGP', 'LOCK', 'FREE');
-              if (lockState === 'FIX' || lockState === 'MARK') {
+              if (lockState === 'FIX' || lockState === 'MARK' || lockState === 'MRK') {
                 page._setLockState('FREE');
               }
             }
@@ -66,7 +115,7 @@ class TargetingPodModule {
         {
           key: 'LOCK',
           label: 'LOCK',
-          states: ['FREE', 'TRK', 'WPT', 'FIX', 'MARK'],
+          states: ['FREE', 'TRK', 'WPT', 'MRK', 'FIX', 'MARK'],
           stateIndex: 0,
           managedExternally: true,
           show() { return isCaptureOrMarkMode(); },
@@ -75,7 +124,7 @@ class TargetingPodModule {
 
             if (isMarkMode()) {
               const lockState = OptionModule.getOption('TGP', 'LOCK', 'FREE');
-              if (lockState === 'FIX' || lockState === 'MARK') {
+              if (lockState === 'FIX' || lockState === 'MARK' || lockState === 'MRK') {
                 page._setLockState('FREE');
                 page._resetLockData();
                 page._lockedCallsign = 'N/A';
@@ -91,10 +140,20 @@ class TargetingPodModule {
               return;
             }
 
-            const cycle = ['FREE', 'TRK', 'WPT'];
+            const cycle = ['FREE', 'TRK', 'WPT', 'MRK'];
             const current = OptionModule.getOption('TGP', 'LOCK', 'FREE');
             const currentIndex = Math.max(0, cycle.findIndex((state) => state === current));
             const next = cycle[(currentIndex + 1) % cycle.length];
+
+            if (next === 'MRK') {
+              if (!page._lockActiveMarkpointFromCartridge()) {
+                page._setLockState('FREE');
+                page._resetLockData();
+                page._lockedCallsign = 'N/A';
+              }
+              return;
+            }
+
             page._setLockState(next);
 
             if (next === 'FREE') {
@@ -120,6 +179,7 @@ class TargetingPodModule {
           show() { return isMarkMode(); },
           onClick: ({ page }) => {
             if (!page) return;
+            owner.activePage = page;
             const lookPoint = page._resolveCurrentAimGroundPoint();
             if (!lookPoint) return;
 
@@ -564,6 +624,22 @@ class TargetingPodModule {
         return true;
       },
 
+      _lockActiveMarkpointFromCartridge: function() {
+        const cartridge = owner.getAddon?.()?.dataCartridge;
+        let markpoint = cartridge?.getActiveMarkpoint?.();
+        if (!markpoint) {
+          const markpoints = cartridge?.getMarkpoints?.() ?? [];
+          if (markpoints.length) {
+            markpoint = markpoints[0];
+            cartridge?.setActiveMarkpoint?.(0);
+          }
+        }
+        if (!markpoint) return false;
+        const target = owner._resolveMarkpointTarget(markpoint);
+        if (!target) return false;
+        return this._applyLockedPoint(target, 'MRK', 'MRK');
+      },
+
       _updateSlew: function(x, y) {
         const stepBtn = this.rightButtons.find((b) => b.key === 'SLEW_STEP');
         const step = Number(stepBtn.states[stepBtn.stateIndex]);
@@ -657,11 +733,11 @@ class TargetingPodModule {
             targetKey = `WPT:${cs}`;
             this._targetAltFt = Math.round(tAltM * 3.28084);
           }
-        } else if (this._lockMode === 'FIX' || this._lockMode === 'MARK') {
+        } else if (this._lockMode === 'FIX' || this._lockMode === 'MARK' || this._lockMode === 'MRK') {
           tLat = Number(this._targetLat);
           tLon = Number(this._targetLon);
           tAltM = Number(this._targetAltM) || 0;
-          cs = this._lockMode === 'MARK' ? 'MRK' : 'FIX';
+          cs = this._lockMode === 'FIX' ? 'FIX' : 'MRK';
           targetKey = String(this._lockTargetKey ?? `${this._lockMode}:POINT`);
           this._targetAltFt = Math.round(tAltM * 3.28084);
         }
@@ -899,7 +975,7 @@ class TargetingPodModule {
         ctx.fillText(`FOV ${fovDeg}°`, w - 50, 60);
 
         ctx.textAlign = 'center';
-        ctx.fillText(isLocked ? `${this._lockMode} ◆ ${this._lockedCallsign}` : 'SLEW', cx, 48);
+        ctx.fillText(isLocked ? `${this._lockMode} ◆ ${this._lockedCallsign}` : 'SLEW', cx, 60);
 
         if (isLocked && this._targetLat !== null) {
           ctx.font = 'bold 17px monospace';
@@ -916,7 +992,7 @@ class TargetingPodModule {
         } else {
           ctx.textAlign = 'center';
           ctx.font = 'bold 16px monospace';
-          ctx.fillText('NO TGT', cx, h - 40);
+          ctx.fillText('NO TGT', cx, h - 70);
         }
       },
 
@@ -1016,6 +1092,14 @@ class TargetingPodModule {
 
         const page = renderContext?.page;
         if (!page) return;
+        owner.activePage = this;
+
+        if (owner.pendingMarkpoint) {
+          this._markPoint = owner.pendingMarkpoint;
+          this._applyLockedPoint(owner.pendingMarkpoint, 'MRK', 'MRK');
+          this._setLockState('MRK');
+          owner.pendingMarkpoint = null;
+        }
 
         const imgMode = getOption('TGP', 'STYLE', 'DAY');
         const fovDeg = Number(getOption('TGP', 'RANGE', 30));

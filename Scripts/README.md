@@ -30,6 +30,10 @@ This keeps installation simple for external plugin developers: they can publish 
 - Shared core version is exposed as `window.GeoFSAddonCore.version`.
 - Aircraft modules declare their own plugin version and required core version.
 
+### Active addon resolution
+- Use `window.BasePlugin.getActiveAddon()` to access the active aircraft addon at runtime.
+- This replaces aircraft-specific addon globals in shared scripts and integrations.
+
 ## Aircraft Builder (Tampermonkey)
 Use [geo-fs-aircraft-builder.js](geo-fs-aircraft-builder.js) as a standalone builder plugin.
 
@@ -39,7 +43,7 @@ It supports:
 - Add/select MFD slots
 - Adjust `position`, `rotation`, `scale` with +/- buttons
 - Configure step sizes for position/rotation/scale
-- Live apply transform updates to the active addon (`window.F18Addon.mfd` / `window.F15Addon.mfd`)
+- Live apply transform updates to the active addon (`window.BasePlugin.getActiveAddon().mfd`)
 - Generate and download a `MainPlugin.js` and entrypoint userscript
 
 ## F-18 Addon
@@ -69,32 +73,41 @@ The app contains these domain modules:
 - `app.map` (map rendering + navaid popup integration)
 - `app.tools` (drawing tools: polygon, square, circle)
 
+Mission section supports these grouped fields:
+- `Mission`: name, `group`, `flight`, `wingman`
+- `Flight`: `startTimeZ`, `startTaxiZ`, `startToZ`, `timeOverTargetZ`, `endTimeZ`
+- `Positions`: dynamic list of callsigns (`#1`, `#2`, ...)
+- `Cruise`: `altitude`, `speed`, `notes`
+- `Landing`: `airportIcao`, `runway`, `nav1`, `pattern`, `formation`, `altEntryAgl`, `speedEntryKn`, `pitchIntervalS`, `speedDownwindKn`
+
+When clicking **LOAD DATACARTRIDGE**, the full mission payload (including the groups above) is loaded into the active addon DataCartridge.
+
 ### Stored option / local storage key
 - `GeoFSMissionPlanner.v2`: complete mission JSON snapshot
 
-## F18Addon API (public)
-The addon now exposes a single global namespace:
+## Active Addon API (public)
+The addon runtime exposes the active addon via BasePlugin:
 
 ```js
-window.F18Addon
+window.BasePlugin.getActiveAddon()
 ```
 
 ### Modules overview
 
-#### `window.F18Addon.lifecycle`
+#### `window.BasePlugin.getActiveAddon().lifecycle`
 - `start()`
 - `stop()`
 - `restart()`
 - `isRunning()`
 
-#### `window.F18Addon.options`
+#### `window.BasePlugin.getActiveAddon().options`
 - `buildKey(pageTitle, buttonKey)`
 - `read()`
 - `get(pageTitle, buttonKey, fallback?)`
 - `set(pageTitle, buttonKey, value)`
 - `getValue(pageTitle, buttonKey, fallback?)`
 
-#### `window.F18Addon.checklists`
+#### `window.BasePlugin.getActiveAddon().checklists`
 - `getModule()`
 - `addChecklist(definition)`
 - `getChecklists(type)`
@@ -110,7 +123,7 @@ window.F18Addon
 - `resetCurrent(type)`
 - `resetType(type)`
 
-#### `window.F18Addon.weapons`
+#### `window.BasePlugin.getActiveAddon().weapons`
 - `getMode()`
 - `getLoadout()`
 - `getSelectedWeapon()`
@@ -120,25 +133,57 @@ window.F18Addon
 - `startRearm(config)`
 - `getRearmState()`
 
-#### `window.F18Addon.controls`
+#### `window.BasePlugin.getActiveAddon().controls`
 - `setProbeState(state)` // `OPEN` or `CLOSED`
 - `getProbeState()`
 
-#### `window.F18Addon.nav`
+#### `window.BasePlugin.getActiveAddon().dataCartridge`
+- `clear()`
+- `loadMissionData(missionData, options?)`
+- `getMissionData()`
+- `getMissionName()`
+- `getGroup()`
+- `getFlight()`
+- `getWingman()`
+- `getFlightData()`
+- `getPositions()`
+- `getCruise()`
+- `getLanding()`
+- `getFlightPlan()`
+- `getNavaids()`
+- `getMarkpoints()`
+- `getAreas()`
+- `getChecklists()`
+- `getIffCodes()`
+- `getRenderableData()`
+- `addTgpMarkpoint(point, options?)`
+- `setMarkpointType(index, type)`
+- `deleteMarkpoint(index)`
+
+#### `window.BasePlugin.getActiveAddon().flight`
+- Replaces the old standalone ADI module on the `ADI` MFD page.
+- `DISP` modes: `ADI`, `FLP`, `MRK`, `MISSION`, `IFF`.
+- `FLP` and `MRK` use shared list navigation:
+  - left: `↑` / `↓`
+  - right: `ACT` / `DEL`
+- In `MRK` mode, `TYPE` cycles: `TARGET`, `FRIENDLY`, `RESQUE`, `CIVILIAN`.
+- `ACT` in `MRK` mode sends the selected markpoint to the targeting pod.
+
+#### `window.BasePlugin.getActiveAddon().nav`
 - `getModule()`
 - `getCurrentNavUnit()`
 - `getReadouts()`
 - `getNavaidLabel()`
 - `getAutopilotHeading()`
 
-`window.F18Addon.nav.getModule()` also exposes shared traffic filter helpers used by NAV and RDR:
+`window.BasePlugin.getActiveAddon().nav.getModule()` also exposes shared traffic filter helpers used by NAV and RDR:
 - `getFooVisibilityMode()` // reads `RDR.FOO` (`SHOW`/`HIDE`)
 - `shouldHideFooContacts()`
 - `isFooCallsign(callsign)`
 - `isTrafficContactVisible(callsign)`
 - `filterMultiplayerContacts(users)`
 
-#### `window.F18Addon.map`
+#### `window.BasePlugin.getActiveAddon().map`
 - `getModule()`
 - `getRangeNm()`
 - `setRangeNm(rangeNm)`
@@ -152,7 +197,7 @@ window.F18Addon
 - `cycleShowFilter()`
 - `getSceneData()`
 
-`window.F18Addon.map.getModule()` additionally provides advanced helpers:
+`window.BasePlugin.getActiveAddon().map.getModule()` additionally provides advanced helpers:
 - `isRadarEnabled()`
 - `getViewMode()` / `setViewMode(mode)` / `cycleViewMode()`
 - `getTrafficInRange(contacts, rangeNm)`
@@ -171,7 +216,7 @@ window.F18Addon
 >
 > Traffic marks (`MARK`) are kept in memory during the flight, so if a contact reappears later it keeps its previous mark state.
 
-#### `window.F18Addon.communication`
+#### `window.BasePlugin.getActiveAddon().communication`
 - `getModule()`
 - `getProfile()`
 - `setProfile({ group, flight, wingman })`
@@ -188,13 +233,13 @@ window.F18Addon
 - `getMessages(mode?, limit?)` // mode: `ALL`, `GROUP`, `FLIGHT`, `WINGMAN`, `NONE`
 - `getHudMessage()`
 
-#### `window.F18Addon.hud`
+#### `window.BasePlugin.getActiveAddon().hud`
 - `getModule()`
 - `getMode()` // `F-18` or `DEFAULT`
 - `setMode(mode)` // accepts `F-18` or `DEFAULT`
 - `isCustomEnabled()`
 
-`window.F18Addon.nav.getReadouts()` returns a shared snapshot used by both HUD and MFD NAV rendering:
+`window.BasePlugin.getActiveAddon().nav.getReadouts()` returns a shared snapshot used by both HUD and MFD NAV rendering:
 
 ```js
 {
@@ -208,7 +253,7 @@ window.F18Addon
 }
 ```
 
-`window.F18Addon.map.getSceneData()` returns shared geometric data used by NAV `HSI` and `MAP` rendering:
+`window.BasePlugin.getActiveAddon().map.getSceneData()` returns shared geometric data used by NAV `HSI` and `MAP` rendering:
 
 ```js
 {
@@ -223,7 +268,7 @@ window.F18Addon
 }
 ```
 
-#### `window.F18Addon.mfd`
+#### `window.BasePlugin.getActiveAddon().mfd`
 - `getSlots()`
 - `getDisplay(slotName?)`
 - `addPage(pageDefinition, insertIndex?)`
@@ -239,16 +284,16 @@ window.F18Addon
 Console examples:
 
 ```js
-window.F18Addon.mfd.getDisplay('LEFT');
-window.F18Addon.mfd.getDisplayTransform('LEFT');
-window.F18Addon.mfd.updateDisplayTransform('LEFT', {
+window.BasePlugin.getActiveAddon().mfd.getDisplay('LEFT');
+window.BasePlugin.getActiveAddon().mfd.getDisplayTransform('LEFT');
+window.BasePlugin.getActiveAddon().mfd.updateDisplayTransform('LEFT', {
   position: [-0.2160, 6.158, 0.584],
   rotation: [8, 0, 0],
   scale: [0.29, 0.29, 0.285]
 });
 ```
 
-The same methods are available on `window.F15Addon.mfd`.
+The same methods are available on the active addon MFD returned by `window.BasePlugin.getActiveAddon()`.
 
 ### MFD page/button definition options
 When you add or overwrite an MFD page, use this structure:
@@ -293,8 +338,8 @@ Each button object can use:
   label: 'FIRE',
   states: ['N/A'],
   stateIndex: 0,
-  show: () => window.F18Addon.options.get('WPN', 'MASTER', 'OFF') !== 'OFF',
-  onClick: () => window.F18Addon.weapons.fireSelected()
+  show: () => window.BasePlugin.getActiveAddon().options.get('WPN', 'MASTER', 'OFF') !== 'OFF',
+  onClick: () => window.BasePlugin.getActiveAddon().weapons.fireSelected()
 }
 ```
 
@@ -383,7 +428,7 @@ Weapon runtime state is stored separately in `F18WpnState`.
 
 ```js
 const poll = setInterval(() => {
-  const api = window.F18Addon?.checklists;
+  const api = window.BasePlugin.getActiveAddon()?.checklists;
   if (!api) return;
   clearInterval(poll);
 
@@ -399,8 +444,8 @@ const poll = setInterval(() => {
 ### Example: shared options
 
 ```js
-const addon = window.F18Addon;
-if (!addon) throw new Error('F18Addon not ready');
+const addon = window.BasePlugin.getActiveAddon();
+if (!addon) throw new Error('Active addon not ready');
 
 // Set the WPN.MASTER (Master arm switch) to ON.
 addon.options.set('WPN', 'MASTER', 'ON');
@@ -412,8 +457,8 @@ console.log(addon.options.get('WPN', 'MASTER', 'OFF')); // Returns ON
 ### Example: per-display MFD state
 
 ```js
-const addon = window.F18Addon;
-if (!addon) throw new Error('F18Addon not ready');
+const addon = window.BasePlugin.getActiveAddon();
+if (!addon) throw new Error('Active addon not ready');
 
 addon.mfd.setPage('LEFT', 3);  // only LEFT display changes page
 addon.mfd.setPage('RIGHT', 1); // only RIGHT display changes page
@@ -422,8 +467,8 @@ addon.mfd.setPage('RIGHT', 1); // only RIGHT display changes page
 ### Example: add an extra MFD via API
 
 ```js
-const addon = window.F18Addon;
-if (!addon) throw new Error('F18Addon not ready');
+const addon = window.BasePlugin.getActiveAddon();
+if (!addon) throw new Error('Active addon not ready');
 
 const extra = addon.mfd.addDisplay({
   name: 'CENTER',
@@ -439,8 +484,8 @@ console.log('Added MFD slot:', extra.slotName, 'part:', extra.partName);
 ### Example: read MFD position/rotation/scale
 
 ```js
-const addon = window.F18Addon;
-if (!addon) throw new Error('F18Addon not ready');
+const addon = window.BasePlugin.getActiveAddon();
+if (!addon) throw new Error('Active addon not ready');
 
 const rightTransform = addon.mfd.getDisplayTransform('RIGHT');
 console.log(rightTransform);
@@ -456,8 +501,8 @@ console.log(rightTransform);
 ### Example: update MFD position/rotation/scale
 
 ```js
-const addon = window.F18Addon;
-if (!addon) throw new Error('F18Addon not ready');
+const addon = window.BasePlugin.getActiveAddon();
+if (!addon) throw new Error('Active addon not ready');
 
 const result = addon.mfd.updateDisplayTransform('CENTER', {
   position: [0.0, 6.02, 0.40],
@@ -484,8 +529,8 @@ addon.mfd.updateDisplayTransform('LEFT', {
 ### Example: add a custom MFD page
 
 ```js
-const addon = window.F18Addon;
-if (!addon) throw new Error('F18Addon not ready');
+const addon = window.BasePlugin.getActiveAddon();
+if (!addon) throw new Error('Active addon not ready');
 
 addon.mfd.addPage({
   title: 'TACT',
@@ -516,8 +561,8 @@ addon.mfd.addPage({
 ### Example: overwrite an existing page
 
 ```js
-const addon = window.F18Addon;
-if (!addon) throw new Error('F18Addon not ready');
+const addon = window.BasePlugin.getActiveAddon();
+if (!addon) throw new Error('Active addon not ready');
 
 addon.mfd.setPageDefinition('AUX1', {
   title: 'MAP',
@@ -548,8 +593,8 @@ addon.mfd.setPageDefinition('AUX1', {
 ### Example: configure communication filters + voice
 
 ```js
-const addon = window.F18Addon;
-if (!addon) throw new Error('F18Addon not ready');
+const addon = window.BasePlugin.getActiveAddon();
+if (!addon) throw new Error('Active addon not ready');
 
 addon.communication.setProfile({
   group: 'BlueAngels',
@@ -666,9 +711,9 @@ F18 MFD mapping:
 
 No migration path is implemented for old storage formats.
 
-### F18 public API return contracts
+### Active addon public API return contracts
 
-#### `window.F18Addon.options`
+#### `window.BasePlugin.getActiveAddon().options`
 - `buildKey(pageTitle, buttonKey): string`
 - `read(): Record<string, string>`
 - `write(options): true`
@@ -676,7 +721,7 @@ No migration path is implemented for old storage formats.
 - `set(pageTitle, buttonKey, value): void`
 - `getValue(pageTitle, buttonKey, fallback?): string | number | null`
 
-#### `window.F18Addon.weapons`
+#### `window.BasePlugin.getActiveAddon().weapons`
 - `getMode(): 'NAV' | 'A/A' | 'A/G' | 'JETTISON'`
 - `getLoadout(): object`
 - `getSelectedWeapon(): { side: string, station: string } | null`
@@ -686,7 +731,7 @@ No migration path is implemented for old storage formats.
 - `startRearm(config): boolean`
 - `getRearmState(): object`
 
-#### `window.F18Addon.mfd`
+#### `window.BasePlugin.getActiveAddon().mfd`
 - `getSlots(): string[]`
 - `addPage(pageDefinition, insertIndex?): { ok: true, index: number, title: string } | { ok: false, reason: string }`
 - `setPageDefinition(target, pageDefinition): { ok: true, index: number, title: string | null } | { ok: false, reason: string }`
@@ -702,18 +747,18 @@ MFD page APIs now use exact values:
 - `setPageDefinition(target, ...)` resolves string `target` by exact page-title match (case-sensitive, no trimming).
 - `addPage(...)` / `setPageDefinition(...)` store the passed `pageDefinition` object as-is; required page fields must already be valid.
 
-#### `window.F18Addon.lifecycle`
+#### `window.BasePlugin.getActiveAddon().lifecycle`
 - `start(): true`
 - `stop(): boolean` (`false` when plugin is not running)
 - `restart(): true`
 - `isRunning(): boolean`
 
-### F18 exception cases (documented)
+### Active addon exception cases (documented)
 
 Only relevant cases are listed:
 
-- `window.F18Addon.options.read()` can throw `SyntaxError` when `F18Options` contains invalid JSON.
-- `window.F18Addon.options.write()` / `set()` can throw `DOMException` on storage write failures.
+- `window.BasePlugin.getActiveAddon().options.read()` can throw `SyntaxError` when addon options contain invalid JSON.
+- `window.BasePlugin.getActiveAddon().options.write()` / `set()` can throw `DOMException` on storage write failures.
 - Weapon state boot (`loadWpnStateFromStorage`) can throw when `F18WpnState` is invalid or incomplete.
 - Flight Recorder bridge calls can throw `TypeError` when `window.FlightRecorder.api` exists but does not match the required contract.
 - Checklist APIs throw `Error` for unsupported checklist types.

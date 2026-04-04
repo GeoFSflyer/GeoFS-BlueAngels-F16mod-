@@ -28,6 +28,12 @@
       return Math.max(min, Math.min(max, value));
     }
 
+    static isAircraftParkedAndCold() {
+      return window.controls?.gear?.position === 0
+        && !window.geofs?.animation?.values?.enginesOn
+        && window.geofs?.aircraft?.instance?.groundContact;
+    }
+
     // Creates helper state for runtime UI controls.
     constructor() {
       this.padControls = new Map();

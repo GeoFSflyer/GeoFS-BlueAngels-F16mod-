@@ -152,7 +152,7 @@
   }
 
   function getLiveMfdModule() {
-    const addon = window[`${state.mainId}Addon`];
+    const addon = window.BasePlugin?.getActiveAddon?.();
     if (addon?.mfd) return addon.mfd;
     return createAircraftBuilderRuntime();
   }
