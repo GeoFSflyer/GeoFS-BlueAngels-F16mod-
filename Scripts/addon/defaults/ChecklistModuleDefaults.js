@@ -5,7 +5,7 @@
     {
       type: 'PROC',
       title: 'Engine Start',
-      items: ['Parking Brake ON', 'Flight Plan LOADED', 'Briefing CHECKED', 'Master Arm OFF', 'Radar OFF', 'Weapon Config SELECTED', 'Rearming FINISHED', 'Area CLEAR', 'Engine ON', 'Instruments CHECK'],
+      items: ['Parking Brake ON', 'Data Cartridge LOADED', 'Briefing CHECKED', 'Master Arm OFF', 'Radar OFF', 'Weapon Config SELECTED', 'Rearming FINISHED', 'Area CLEAR', 'Engine ON', 'Instruments CHECK'],
       completed: false
     },
     {

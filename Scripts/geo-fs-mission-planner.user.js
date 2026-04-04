@@ -19,14 +19,12 @@
     const AREA_TYPES = ['SAM', 'NOFLY', 'UNRESTRICTED', 'DANGER', 'AREA'];
     const AREA_GROUPS = ['FRIENDLY', 'FOO', 'CIVILIAN', 'UNKNOWN'];
     const MARKPOINT_TYPES = ['TARGET', 'FRIENDLY', 'RESQUE', 'CIVILIAN'];
+    const CHECKLIST_TYPES = ['FLP', 'EMER', 'OPS', 'PROC'];
     const NAVAID_MISSION_TYPES = ['CIVILIAN', 'FOO', 'FRIEND', 'ALTERNATE'];
     const AREA_VARIANTS = ['POLYGON', 'SQUARE', 'CIRCLE'];
     const DEFAULT_FLP_CHECKLISTS = [
-      'Briefing - Air Tasking Order',
-      'Briefing - Flight',
-      'Briefing - Positions',
-      'Briefing - Enroute',
-      'Briefing - Landing'
+      'Air Tasking Order',
+      'Briefing'
     ];
     const AREA_STYLE_BY_TYPE = {
       SAM: { color: '#ff5252', fillColor: '#ff5252', fillOpacity: 0.18 },
@@ -62,7 +60,7 @@
 
     class MissionStoreV2 {
       constructor() {
-        this.mission = this.newMission('Untitled Mission');
+        this.mission = this.newMission('Untitled');
       }
 
       newMission(name) {
@@ -801,6 +799,36 @@
           return false;
         }
         cartridge.loadMissionData(cloneData(this.store.mission), { source: 'mission-planner' });
+
+        const checklistModule = addon?.checklists;
+        if (checklistModule?.getChecklists && checklistModule?.addChecklist) {
+          const sourceChecklists = this.store.mission.checklists ?? [];
+          for (const source of sourceChecklists) {
+            const type = source.type || 'FLP';
+            const title = source.title;
+            const items = Array.isArray(source.items) ? source.items : [];
+            const targetList = checklistModule.getChecklists(type);
+            const existingIndex = targetList.findIndex((entry) => entry.title === title);
+
+            const nextChecklist = {
+              id: source.id || `${type}-${targetList.length + 1}`,
+              type,
+              title,
+              items,
+              itemCompleted: Array.isArray(source.itemCompleted)
+                ? source.itemCompleted.slice(0, items.length)
+                : new Array(items.length).fill(false),
+              completed: Boolean(source.completed)
+            };
+
+            if (existingIndex >= 0) {
+              targetList[existingIndex] = nextChecklist;
+            } else {
+              checklistModule.addChecklist(nextChecklist);
+            }
+          }
+        }
+
         addon.communication.setGroup(this.store.mission.group);
         addon.communication.setFlight(this.store.mission.flight);
         addon.communication.setWingman(this.store.mission.wingman);
@@ -923,8 +951,8 @@
           <div class="geofs-mp-section">
             ${this.sectionHeader('checklists', 'Checklists', mission.checklists.length)}
             ${this.sectionBody('checklists', `
-              <div class="geofs-mp-row"><input id="mp-checklist-title" placeholder="New checklist title"><button data-action="addChecklist">Add FLP</button></div>
-              <div class="geofs-mp-list">${mission.checklists.map((c) => `<div class="geofs-mp-item"><div class="geofs-mp-row"><input data-checklist-title="${c.id}" value="${c.title}"><button data-action="saveChecklist" data-id="${c.id}">Save</button><button data-action="removeChecklist" data-id="${c.id}">Remove</button></div><div class="geofs-mp-row"><textarea data-checklist-items="${c.id}">${c.items.join('\n')}</textarea></div></div>`).join('')}</div>
+              <div class="geofs-mp-row"><input id="mp-checklist-title" placeholder="New checklist title"><select id="mp-checklist-type">${CHECKLIST_TYPES.map((type) => `<option ${type === 'FLP' ? 'selected' : ''}>${type}</option>`).join('')}</select><button data-action="addChecklist">ADD</button></div>
+              <div class="geofs-mp-list">${mission.checklists.map((c) => `<div class="geofs-mp-item"><div class="geofs-mp-row"><input data-checklist-title="${c.id}" value="${c.title}"><select data-checklist-type="${c.id}">${CHECKLIST_TYPES.map((type) => `<option ${type === (c.type || 'FLP') ? 'selected' : ''}>${type}</option>`).join('')}</select><button data-action="removeChecklist" data-id="${c.id}">Remove</button></div><div class="geofs-mp-row"><textarea data-checklist-items="${c.id}">${c.items.join('\n')}</textarea></div></div>`).join('')}</div>
             `)}
           </div>
 
@@ -1167,6 +1195,33 @@
           const code = this.store.mission.iffCodes.find((i) => i.key === target.dataset.iffKey);
           code.response = target.value;
           this.store.touch();
+          return;
+        }
+        if (target.dataset.checklistTitle) {
+          const id = Number(target.dataset.checklistTitle);
+          const checklist = this.store.mission.checklists.find((entry) => entry.id === id);
+          if (checklist) {
+            checklist.title = target.value;
+            this.store.touch();
+          }
+          return;
+        }
+        if (target.dataset.checklistType) {
+          const id = Number(target.dataset.checklistType);
+          const checklist = this.store.mission.checklists.find((entry) => entry.id === id);
+          if (checklist) {
+            checklist.type = target.value;
+            this.store.touch();
+          }
+          return;
+        }
+        if (target.dataset.checklistItems) {
+          const id = Number(target.dataset.checklistItems);
+          const checklist = this.store.mission.checklists.find((entry) => entry.id === id);
+          if (checklist) {
+            checklist.items = target.value ? target.value.split('\n') : [];
+            this.store.touch();
+          }
         }
       }
 
@@ -1278,18 +1333,12 @@
         }
         if (action === 'addChecklist') {
           const title = this.panel.querySelector('#mp-checklist-title').value;
+          const type = this.panel.querySelector('#mp-checklist-type').value;
           if (title) {
             const next = (this.store.mission.checklists[this.store.mission.checklists.length - 1]?.id || 0) + 1;
-            this.store.mission.checklists.push({ id: next, type: 'FLP', title, items: [] });
+            this.store.mission.checklists.push({ id: next, type, title, items: [] });
             this.store.touch();
           }
-        }
-        if (action === 'saveChecklist') {
-          const checklist = this.store.mission.checklists.find((c) => c.id === id);
-          checklist.title = this.panel.querySelector(`[data-checklist-title="${id}"]`).value;
-          const itemsRaw = this.panel.querySelector(`[data-checklist-items="${id}"]`).value;
-          checklist.items = itemsRaw ? itemsRaw.split('\n') : [];
-          this.store.touch();
         }
         if (action === 'removeChecklist') {
           this.store.mission.checklists = this.store.mission.checklists.filter((c) => c.id !== id);
@@ -1528,7 +1577,7 @@
   class MissionStore {
     constructor(storageKey) {
       this.storageKey = storageKey;
-      this.mission = this.createNewMission('Untitled Mission');
+      this.mission = this.createNewMission('Untitled');
     }
 
     createDefaultMission() {
@@ -1561,7 +1610,7 @@
       }
       this.mission = {
         version: 1,
-        name: mission.name || 'Untitled Mission',
+        name: mission.name || 'Untitled',
         createdAt: mission.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         polygons: Array.isArray(mission.polygons) ? mission.polygons : []

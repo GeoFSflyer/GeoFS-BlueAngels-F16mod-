@@ -1470,7 +1470,7 @@ class DataCartridgeModule {
     return {
       version: 1,
       source: 'empty',
-      missionName: 'Untitled Mission',
+      missionName: 'Untitled',
       group: '',
       flight: '',
       wingman: '',
@@ -1535,7 +1535,7 @@ class DataCartridgeModule {
 
     const normalized = this._newData();
     normalized.source = options.source ?? 'mission-planner';
-    normalized.missionName = src.name ?? src.missionName ?? 'Untitled Mission';
+    normalized.missionName = src.name ?? src.missionName ?? 'Untitled';
     normalized.group = src.group ?? '';
     normalized.flight = src.flight ?? '';
     normalized.wingman = src.wingman ?? '';
@@ -5036,7 +5036,7 @@ class FlightModule {
       mission: {
         title: 'MISSION',
         rows: [
-          ['Name', data.missionName ?? data.name ?? 'Untitled Mission'],
+          ['Name', data.missionName ?? data.name ?? 'Untitled'],
           ['Group', data.group ?? ''],
           ['Flight', data.flight ?? ''],
           ['Wingman', data.wingman ?? '']
@@ -5265,6 +5265,8 @@ class FlightModule {
       const item = items[i];
       const prefix = i === selectedIndex ? '>' : ' ';
       const row = rowBuilder(item, i) ?? {};
+      const rowColor = options.rowColorBuilder ? options.rowColorBuilder(item, i) : color;
+      ctx.fillStyle = rowColor;
       ctx.fillText(prefix, keyX - prefixOffset, y);
       ctx.fillText(String(row.key ?? ''), keyX, y);
       ctx.fillText(String(row.value ?? ''), valueX, y);
@@ -5276,6 +5278,7 @@ class FlightModule {
 
   renderMissionGroup(ctx, group, x, y, width, height, color) {
     const rows = group?.rows ?? [];
+    const keyValueOffsetRatio = 0.52;
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
     ctx.strokeRect(x, y, width, height);
@@ -5297,12 +5300,30 @@ class FlightModule {
       return;
     }
 
+    if (group?.title === 'CRUISE') {
+      const left = rows[0] ?? ['Altitude', ''];
+      const right = rows[1] ?? ['Speed', ''];
+      const colWidth = width * 0.5;
+      const leftX = x + 10;
+      const rightX = x + colWidth + 10;
+      const leftValueX = leftX + colWidth * keyValueOffsetRatio;
+      const rightValueX = rightX + colWidth * keyValueOffsetRatio;
+      const rowY = y + 44;
+
+      ctx.font = 'bold 16px monospace';
+      ctx.fillText(String(left[0] ?? ''), leftX, rowY);
+      ctx.fillText(String(left[1] ?? ''), leftValueX, rowY);
+      ctx.fillText(String(right[0] ?? ''), rightX, rowY);
+      ctx.fillText(String(right[1] ?? ''), rightValueX, rowY);
+      return;
+    }
+
     if (group?.title === 'POSITIONS') {
       const shown = rows.slice(0, 8);
       const twoColumns = shown.length > 4;
       const colWidth = twoColumns ? width * 0.5 : width;
       const leftPad = 10;
-      const valueOffset = twoColumns ? colWidth * 0.36 : width * 0.28;
+      const valueOffset = twoColumns ? colWidth * keyValueOffsetRatio : width * keyValueOffsetRatio;
       ctx.font = 'bold 16px monospace';
 
       for (let i = 0; i < shown.length; i++) {
@@ -5320,7 +5341,7 @@ class FlightModule {
     }
 
     const keyX = x + 10;
-    const valueX = x + width * 0.46;
+    const valueX = x + width * keyValueOffsetRatio;
     let rowY = y + 40;
     ctx.font = 'bold 16px monospace';
     for (const [key, value] of rows) {
@@ -5395,7 +5416,11 @@ class FlightModule {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.font = `bold ${Math.round(h * 0.045)}px monospace`;
-    ctx.fillText('IFF CODES', w * 0.22, h * 0.16);
+    ctx.fillText('IFF CODEBOOK', w * 0.22, h * 0.16);
+
+    ctx.font = `bold ${Math.round(h * 0.024)}px monospace`;
+    ctx.fillText('Interrogate: Say "IFF [CS] - Code [NO.]"', w * 0.22, h * 0.20);
+    ctx.fillText('Response: "IFF [Code]"', w * 0.22, h * 0.235);
 
     if (!codes.length) {
       ctx.fillText('NO IFF CODES', w * 0.22, h * 0.26);
@@ -5405,15 +5430,16 @@ class FlightModule {
 
     const firstColumnLimit = 7;
     const shown = codes.slice(0, firstColumnLimit * 2);
-    const baseX = w * 0.27;
+    const baseX = w * 0.22;
     const columnGap = w * 0.31;
     const responseOffset = w * 0.12;
     const lineHeight = h * 0.053;
+    ctx.font = `bold ${Math.round(h * 0.043)}px monospace`;
 
     for (let i = 0; i < shown.length; i++) {
       const column = i >= firstColumnLimit ? 1 : 0;
       const row = i % firstColumnLimit;
-      const y = h * 0.25 + row * lineHeight;
+      const y = h * 0.29 + row * lineHeight;
       if (y > h * 0.88) break;
       const code = shown[i];
       const keyX = baseX + column * columnGap;
@@ -5434,6 +5460,13 @@ class FlightModule {
           label: 'DISP',
           states: FlightModule.DISPLAY_MODES,
           stateIndex: 0
+        },
+        {
+          key: 'N/A20',
+          label: '',
+          states: [''],
+          stateIndex: 0,
+          show: () => this.getDisplayMode() === 'MSS' && this.getMissionPageCount() > 1
         },
         {
           key: 'PAGE',
@@ -5492,7 +5525,7 @@ class FlightModule {
         {
           key: 'TYPE',
           label: 'TYPE',
-          states: FlightModule.MARKPOINT_TYPES,
+          states: [''],
           stateIndex: 0,
           managedExternally: true,
           show: () => this.getDisplayMode() === 'MRK',
@@ -5503,8 +5536,18 @@ class FlightModule {
       ],
       rightButtons: [
         {
+          key: 'N/A30',
+          label: '',
+          states: [''],
+          stateIndex: 0,
+          show: () => {
+            const mode = this.getDisplayMode();
+            return mode === 'FLP' || mode === 'MRK';
+          }
+        },
+        {
           key: 'ACTIVATE',
-          label: 'ACT',
+          label: 'ACTIVATE',
           states: [''],
           stateIndex: 0,
           managedExternally: true,
@@ -5518,6 +5561,26 @@ class FlightModule {
               return;
             }
             this.activateSelectedMarkpoint();
+          }
+        },
+        {
+          key: 'N/A31',
+          label: '',
+          states: [''],
+          stateIndex: 0,
+          show: () => {
+            const mode = this.getDisplayMode();
+            return mode === 'FLP' || mode === 'MRK';
+          }
+        },
+        {
+          key: 'N/A32',
+          label: '',
+          states: [''],
+          stateIndex: 0,
+          show: () => {
+            const mode = this.getDisplayMode();
+            return mode === 'FLP' || mode === 'MRK';
           }
         },
         {
@@ -5582,11 +5645,6 @@ class FlightModule {
         if (displayMode === 'MRK') {
           const items = this.getMarkpointItems();
           const selectedIndex = this.getSelectedMarkpointIndex(items);
-          const typeButton = renderContext?.page?.leftButtons?.find((button) => button?.key === 'TYPE');
-          const type = items[selectedIndex]?.type ?? FlightModule.MARKPOINT_TYPES[0];
-          if (typeButton) {
-            typeButton.stateIndex = Math.max(0, FlightModule.MARKPOINT_TYPES.findIndex((item) => item === type));
-          }
           this.renderSelectableList(
             ctx,
             w,
@@ -5602,7 +5660,8 @@ class FlightModule {
             {
               keyXRatio: 0.23,
               valueXRatio: 0.56,
-              prefixOffsetRatio: 0.028
+              prefixOffsetRatio: 0.028,
+              rowColorBuilder: (item) => this.getDataCartridge()?.getMarkpointColor(item?.type) ?? color
             }
           );
           return;
@@ -10137,7 +10196,7 @@ class MfdModule {
     {
       type: 'PROC',
       title: 'Engine Start',
-      items: ['Parking Brake ON', 'Flight Plan LOADED', 'Briefing CHECKED', 'Master Arm OFF', 'Radar OFF', 'Weapon Config SELECTED', 'Rearming FINISHED', 'Area CLEAR', 'Engine ON', 'Instruments CHECK'],
+      items: ['Parking Brake ON', 'Data Cartridge LOADED', 'Briefing CHECKED', 'Master Arm OFF', 'Radar OFF', 'Weapon Config SELECTED', 'Rearming FINISHED', 'Area CLEAR', 'Engine ON', 'Instruments CHECK'],
       completed: false
     },
     {

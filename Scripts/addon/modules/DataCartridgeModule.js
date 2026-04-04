@@ -29,7 +29,7 @@ class DataCartridgeModule {
     return {
       version: 1,
       source: 'empty',
-      missionName: 'Untitled Mission',
+      missionName: 'Untitled',
       group: '',
       flight: '',
       wingman: '',
@@ -94,7 +94,7 @@ class DataCartridgeModule {
 
     const normalized = this._newData();
     normalized.source = options.source ?? 'mission-planner';
-    normalized.missionName = src.name ?? src.missionName ?? 'Untitled Mission';
+    normalized.missionName = src.name ?? src.missionName ?? 'Untitled';
     normalized.group = src.group ?? '';
     normalized.flight = src.flight ?? '';
     normalized.wingman = src.wingman ?? '';
