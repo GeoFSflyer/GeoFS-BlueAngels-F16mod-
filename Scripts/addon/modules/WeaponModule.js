@@ -592,6 +592,10 @@ class WeaponModule {
         return `${quantity}x ${load}`;
     }
 
+    hasRadarHardLock() {
+        return !!window.BasePlugin?.getActiveAddon?.()?.radar?.hardLockedUid;
+    }
+
     selectNextWeapon(mode, modeLoadout, minimumQuantity = 0) {
         if (!modeLoadout) return false;
         const current = this.ensureSelectedWeapon(mode, modeLoadout);
@@ -652,6 +656,7 @@ class WeaponModule {
         }
 
         if (selected.station === 'gun') return this.startGunFire(mode, modeLoadout);
+        if (!this.hasRadarHardLock()) return false;
 
         const station = modeLoadout?.[selected.side]?.[selected.station];
         if (!station || !Number.isFinite(station.quantity)) return false;

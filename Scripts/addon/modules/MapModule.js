@@ -263,15 +263,17 @@
     }
 
     // Returns a deterministic contact number for one aircraft.
+    // Uses last 2 digits of the aircraft ID.
     getContactNumber(contact) {
-      const key = this.getTrafficKey(contact);
-      if (!key) return 0;
+      const aircraftId = String(contact?.id ?? contact?.uid ?? '').trim();
+      if (!aircraftId) return 0;
 
-      let hash = 0;
-      for (let i = 0; i < key.length; i++) {
-        hash = ((hash * 33) + key.charCodeAt(i)) >>> 0;
-      }
-      return (hash % 99) + 1;
+      // Extract last 2 digits from aircraft id
+      const numericPart = aircraftId.replace(/\D/g, ''); // Remove non-digits
+      if (!numericPart) return 0;
+      
+      const lastTwo = numericPart.slice(-2);
+      return Number(lastTwo) || 0;
     }
 
     // Token used to keep traffic ordering stable.

@@ -944,6 +944,10 @@ class WeaponModule {
         return `${quantity}x ${load}`;
     }
 
+    hasRadarHardLock() {
+        return !!window.BasePlugin?.getActiveAddon?.()?.radar?.hardLockedUid;
+    }
+
     selectNextWeapon(mode, modeLoadout, minimumQuantity = 0) {
         if (!modeLoadout) return false;
         const current = this.ensureSelectedWeapon(mode, modeLoadout);
@@ -1004,6 +1008,7 @@ class WeaponModule {
         }
 
         if (selected.station === 'gun') return this.startGunFire(mode, modeLoadout);
+        if (!this.hasRadarHardLock()) return false;
 
         const station = modeLoadout?.[selected.side]?.[selected.station];
         if (!station || !Number.isFinite(station.quantity)) return false;
@@ -2798,17 +2803,17 @@ window.DataCartridgeModule = DataCartridgeModule;
 
     // Returns FOO visibility setting from the RDR page.
     getFooVisibilityMode() {
-      return OptionModule.getOptionValue('RDR', 'FOO', 'SHOW');
+      return OptionModule.getOptionValue('RDR', 'FOO', 'SH');
     }
 
     // Returns true when contacts with callsign FOO should be hidden.
     shouldHideFooContacts() {
-      return this.getFooVisibilityMode() === 'HIDE';
+      return this.getFooVisibilityMode() === 'HD';
     }
 
-    // Returns true when a callsign equals FOO (case-insensitive).
+    // Returns true when a callsign equals Foo.
     isFooCallsign(callsign) {
-      return callsign === 'FOO';
+      return callsign === 'Foo';
     }
 
     // Returns true when one traffic contact is allowed by current FOO filter.
@@ -3140,15 +3145,17 @@ window.DataCartridgeModule = DataCartridgeModule;
     }
 
     // Returns a deterministic contact number for one aircraft.
+    // Uses last 2 digits of the aircraft ID.
     getContactNumber(contact) {
-      const key = this.getTrafficKey(contact);
-      if (!key) return 0;
+      const aircraftId = String(contact?.id ?? contact?.uid ?? '').trim();
+      if (!aircraftId) return 0;
 
-      let hash = 0;
-      for (let i = 0; i < key.length; i++) {
-        hash = ((hash * 33) + key.charCodeAt(i)) >>> 0;
-      }
-      return (hash % 99) + 1;
+      // Extract last 2 digits from aircraft id
+      const numericPart = aircraftId.replace(/\D/g, ''); // Remove non-digits
+      if (!numericPart) return 0;
+      
+      const lastTwo = numericPart.slice(-2);
+      return Number(lastTwo) || 0;
     }
 
     // Token used to keep traffic ordering stable.
@@ -3371,11 +3378,45 @@ window.DataCartridgeModule = DataCartridgeModule;
 class RadarModule {
   constructor(dependencies = {}) {
     this.navModule = dependencies.navModule ?? null;
+    this.weaponModule = dependencies.weaponModule ?? null;
+    this.hardLockedUid = null;
+    this.sweepAngle = 0; // Current sweep position (0-100)
+    this.sweepDirection = 1; // 1 = left to right, -1 = right to left
+    this.lastSweepUpdateTime = 0;
+    this.visibleAircraftInCone = []; // Store currently visible aircraft in cone
+    this.lastContactUpdateTime = 0; // Timestamp of last contact update
+    this.cachedAircraftInCone = []; // Cached aircraft positions
   }
 
   setNavModule(navModule) {
     this.navModule = navModule;
     return this;
+  }
+
+  setWeaponModule(weaponModule) {
+    this.weaponModule = weaponModule;
+    return this;
+  }
+
+  stepSelectedTrafficInCone(direction) {
+    const mapModule = this.navModule?.mapModule;
+    if (!mapModule || !this.visibleAircraftInCone.length) return;
+
+    const currentUid = String(mapModule.selectedTrafficUid ?? '');
+    const uids = [...new Set(this.visibleAircraftInCone
+      .map((a) => String(a?.uid ?? '').trim())
+      .filter(Boolean))];
+    if (!uids.length) return;
+
+    if (!currentUid || !uids.includes(currentUid)) {
+      // Select first aircraft
+      mapModule.selectedTrafficUid = uids[0];
+      return;
+    }
+
+    const currentIndex = uids.indexOf(currentUid);
+    const newIndex = (currentIndex + direction + uids.length) % uids.length;
+    mapModule.selectedTrafficUid = uids[newIndex];
   }
 
   registerMfdPages(mfdModule) {
@@ -3399,17 +3440,133 @@ class RadarModule {
         {
           key: 'FOO',
           label: 'FOO',
-          states: ['SHOW', 'HIDE'],
-          stateIndex: 0
+          states: ['SH', 'HD'],
+          stateIndex: 0,
+          managedExternally: true,
+          onClick: () => {
+            const current = OptionModule.getOptionValue('RDR', 'FOO', 'SH');
+            OptionModule.setOption('RDR', 'FOO', current === 'SH' ? 'HD' : 'SH');
+          }
+        },
+        {
+          key: 'LOCK',
+          label: 'LOCK',
+          states: [''],
+          stateIndex: 0,
+          onClick: () => {
+            const mapModule = radarModule.navModule?.mapModule;
+            if (!mapModule) return;
+            const selectedUid = String(mapModule.selectedTrafficUid ?? '').trim();
+            if (!selectedUid) return;
+
+            // Toggle lock when pressing LOCK on the already locked target.
+            if (String(radarModule.hardLockedUid ?? '') === selectedUid) {
+              radarModule.hardLockedUid = null;
+              return;
+            }
+
+            radarModule.hardLockedUid = selectedUid;
+          }
+        },
+        {
+          key: 'N/A9',
+          label: '',
+          states: [''],
+          stateIndex: 0,
+        },
+        {
+          key: 'FIRE',
+          label: 'FIRE',
+          states: [''],
+          stateIndex: 0,
+          onClick: () => {
+            const mode = OptionModule.getOption('WPN', 'MODE', 'NAV');
+            const modeLoadout = radarModule.weaponModule?.getModeLoadout(mode);
+            if (radarModule.weaponModule && modeLoadout) {
+              radarModule.weaponModule.fireSelectedWeapon(mode, modeLoadout);
+            }
+          },
+          show: () => {
+            return window.controls?.gear?.position === 1 && 
+                   window.geofs?.animation?.values?.haglFeet > 50 && 
+                   OptionModule.getOption('WPN', 'MASTER', 'OFF') !== 'OFF' &&
+                   OptionModule.getOption('WPN', 'MODE', 'NAV') === 'A/A';
+          }
         }
       ],
       rightButtons: [
         {
-          key: 'RNG',
-          label: 'RNG',
-          states: ['20', '40', '80'],
-          values: [20, 40, 80],
-          stateIndex: 1
+          key: 'RANGE',
+          label: '↑',
+          states: ['5', '10', '20', '40', '80', '160'],
+          values: [5, 10, 20, 40, 80, 160],
+          stateIndex: 2,
+          managedExternally: true,
+          minimal: true,
+          combinedGroupLabel: 'RNG',
+          onClick: () => {
+            const currentValues = [5, 10, 20, 40, 80, 160];
+            const currentVal = Number(OptionModule.getOptionValue('RDR', 'RANGE', 20));
+            const currentIndex = currentValues.indexOf(currentVal);
+            const newIndex = Math.min(currentValues.length - 1, currentIndex + 1);
+            OptionModule.setOption('RDR', 'RANGE', String(currentValues[newIndex]));
+          }
+        },
+        {
+          key: 'RANGE',
+          label: '↓',
+          states: ['5', '10', '20', '40', '80', '160'],
+          values: [5, 10, 20, 40, 80, 160],
+          stateIndex: 2,
+          managedExternally: true,
+          minimal: true,
+          combinedGroupLabel: 'RNG',
+          onClick: () => {
+            const currentValues = [5, 10, 20, 40, 80, 160];
+            const currentVal = Number(OptionModule.getOptionValue('RDR', 'RANGE', 20));
+            const currentIndex = currentValues.indexOf(currentVal);
+            const newIndex = Math.max(0, currentIndex - 1);
+            OptionModule.setOption('RDR', 'RANGE', String(currentValues[newIndex]));
+          }
+        },
+        {
+          key: 'ACSEL',
+          label: '→',
+          states: ['A/C'],
+          values: ['A/C'],
+          stateIndex: 0,
+          managedExternally: true,
+          minimal: true,
+          combinedGroupLabel: 'AC',
+          onClick: () => {
+            // Cycle through aircraft visible in cone only
+            radarModule.stepSelectedTrafficInCone(1);
+          }
+        },
+        {
+          key: 'ACSEL',
+          label: '←',
+          states: ['A/C'],
+          values: ['A/C'],
+          stateIndex: 0,
+          managedExternally: true,
+          minimal: true,
+          combinedGroupLabel: 'AC',
+          onClick: () => {
+            // Cycle through aircraft visible in cone only  
+            radarModule.stepSelectedTrafficInCone(-1);
+          }
+        },
+        {
+          key: 'CLEAR',
+          label: 'CLR',
+          states: [''],
+          stateIndex: 0,
+          managedExternally: true,
+          onClick: () => {
+            radarModule.navModule?.mapModule?.clearSelectedTraffic();
+            radarModule.hardLockedUid = null;
+          }
         }
       ],
       lines: [],
@@ -3433,41 +3590,21 @@ class RadarModule {
         const elapsedMs = engOn ? (Date.now() - window.addonRuntime.navRdrRuntime.bootStartMs) : 0;
         const bootReady = engOn && elapsedMs >= 5000;
 
-        const contentX = w * 0.19;
-        const contentY = h * 0.13;
-        const contentW = w * 0.62;
-        const contentH = h * 0.74;
+        const contentX = w * 0.14;
+        const contentY = h * 0.10;
+        const contentW = w * 0.74;
+        const contentH = h * 0.80;
 
-        const rangeNmRaw = Number(OptionModule.getOptionValue('RDR', 'RNG', 40));
-        const rangeNm = Number.isFinite(rangeNmRaw) && rangeNmRaw > 0 ? rangeNmRaw : 40;
+        const rangeNmRaw = Number(OptionModule.getOptionValue('RDR', 'RANGE', 20));
+        const rangeNm = Number.isFinite(rangeNmRaw) && rangeNmRaw > 0 ? rangeNmRaw : 20;
         const radarEnabled = OptionModule.getOptionValue('RDR', 'RADAR', 'OFF') === 'ON';
-
-        const distanceMeters = (a, b) => {
-          const distanceFn = window.geofs?.utils?.distanceInMeters;
-          if (typeof distanceFn === 'function') {
-            return Number(distanceFn(a, b)) || 0;
-          }
-          if (!Array.isArray(a) || !Array.isArray(b)) return 0;
-          const latAvgRad = (((Number(a[0]) || 0) + (Number(b[0]) || 0)) * 0.5) * (Math.PI / 180);
-          const dx = (((Number(b[1]) || 0) - (Number(a[1]) || 0)) * 111320) * Math.cos(latAvgRad);
-          const dy = (((Number(b[0]) || 0) - (Number(a[0]) || 0)) * 110540);
-          const dz = ((Number(b[2]) || 0) - (Number(a[2]) || 0));
-          return Math.sqrt(dx * dx + dy * dy + dz * dz);
-        };
-
-        const bearingDeg = (a, b) => {
-          const bearingFn = window.geofs?.utils?.bearingInDegrees;
-          if (typeof bearingFn === 'function') {
-            return Number(bearingFn(a, b)) || 0;
-          }
-          if (!Array.isArray(a) || !Array.isArray(b)) return 0;
-          const lat1 = (Number(a[0]) || 0) * Math.PI / 180;
-          const lat2 = (Number(b[0]) || 0) * Math.PI / 180;
-          const dLon = ((Number(b[1]) || 0) - (Number(a[1]) || 0)) * Math.PI / 180;
-          const y = Math.sin(dLon) * Math.cos(lat2);
-          const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
-          return ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
-        };
+        const fooMode = OptionModule.getOptionValue('RDR', 'FOO', 'SH');
+        const weaponMasterState = String(OptionModule.getOptionValue('WPN', 'MASTER', 'OFF')).toUpperCase();
+        const weaponMode = String(OptionModule.getOptionValue('WPN', 'MODE', 'NAV')).toUpperCase();
+        const modeLoadout = radarModule.weaponModule?.getModeLoadout(weaponMode);
+        const selectedWeaponLabel = modeLoadout
+          ? radarModule.weaponModule.getSelectedLoadDisplay(weaponMode, modeLoadout)
+          : 'N/A';
 
         ctx.save();
         ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -3504,67 +3641,328 @@ class RadarModule {
           return;
         }
 
-        const myPos = window.geofs?.aircraft?.instance?.llaLocation;
-        const myHeading = Number(window.geofs?.animation?.values?.heading) || 0;
         const navModule = radarModule.navModule;
-        const visibleUsersAll = Object.values(window.multiplayer?.visibleUsers ?? {});
-        const visibleUsers = navModule?.filterMultiplayerContacts
-          ? navModule.filterMultiplayerContacts(visibleUsersAll)
-          : visibleUsersAll;
+        const mapModule = navModule?.mapModule;
+        const scene = mapModule?.getSceneData?.();
+        const ownship = scene?.ownship ?? null;
+        const trafficContactsAll = Array.isArray(scene?.traffic) ? scene.traffic : [];
+        const trafficContacts = fooMode === 'HD'
+          ? trafficContactsAll.filter((contact) => contact.callsign !== 'Foo')
+          : trafficContactsAll;
+        const myHeading = Number(ownship?.heading ?? window.geofs?.animation?.values?.heading) || 0;
+        const myPitch = -Number(window.geofs?.animation?.values?.atilt);
+        const myAltMeters = Number(ownship?.alt ?? window.geofs?.aircraft?.instance?.llaLocation?.[2]) || 0;
 
-        const radarTop = contentY;
-        const radarBottom = contentY + contentH;
-        const radarHeight = Math.max(0, radarBottom - radarTop);
-        const cx = contentX + contentW * 0.5;
-        const cy = radarTop + radarHeight * 0.5;
-        const radius = Math.max(200, Math.min(contentW * 0.5, radarHeight * 0.5));
+        // Define display area - wider, extending further left and right
+        const margin = contentW * 0.02;
+        const displayLeft = contentX + margin;
+        const displayRight = contentX + contentW - margin;
+        const displayTop = contentY + contentH * 0.06;
+        const displayBottom = contentY + contentH * 0.95;
+        const displayWidth = displayRight - displayLeft;
+        const displayHeight = displayBottom - displayTop;
 
-        ctx.strokeStyle = '#004422';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(cx, cy, radius * 0.5, 0, Math.PI * 2);
-        ctx.stroke();
+        // Update sweep angle (1 second from one side to the other)
+        const sweepNow = Date.now();
+        if (!radarModule.lastSweepUpdateTime) {
+          radarModule.lastSweepUpdateTime = sweepNow;
+        }
+        const deltaMs = sweepNow - radarModule.lastSweepUpdateTime;
+        radarModule.lastSweepUpdateTime = sweepNow;
+        radarModule.sweepAngle += radarModule.sweepDirection * (deltaMs * 0.1);
+        if (radarModule.sweepAngle >= 100) {
+          radarModule.sweepAngle = 100;
+          radarModule.sweepDirection = -1;
+        } else if (radarModule.sweepAngle <= 0) {
+          radarModule.sweepAngle = 0;
+          radarModule.sweepDirection = 1;
+        }
+        const sweepX = displayLeft + (radarModule.sweepAngle / 100) * displayWidth;
 
-        const sweepAngle = ((Date.now() % 3000) / 3000) * Math.PI * 2;
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(cx, cy);
-        ctx.lineTo(cx + Math.cos(sweepAngle) * radius, cy + Math.sin(sweepAngle) * radius);
-        ctx.stroke();
+        const selectedTrafficUid = mapModule?.selectedTrafficUid ?? null;
 
-        if (Array.isArray(myPos)) {
-          for (const user of visibleUsers) {
-            const co = user?.lastUpdate?.co;
-            if (!Array.isArray(co) || co.length < 3) continue;
+        // Cone parameters: 30 degrees on each side
+        const CONE_HALF_ANGLE_H = 30; // degrees horizontal
+        const CONE_HALF_ANGLE_V = 30; // degrees vertical
 
-            const targetPos = [Number(co[0]) || 0, Number(co[1]) || 0, Number(co[2]) || 0];
-            const distanceNm = distanceMeters(myPos, targetPos) / 1609.34;
+        // Update contacts only once per second
+        const currentTime = Date.now();
+        const shouldUpdate = (currentTime - radarModule.lastContactUpdateTime) >= 1000;
+        
+        let aircraftInCone = radarModule.cachedAircraftInCone;
+        if (shouldUpdate && ownship) {
+          radarModule.lastContactUpdateTime = currentTime;
+          aircraftInCone = [];
+          for (const contact of trafficContacts) {
+            const uid = String(contact?.uid ?? '').trim();
+            if (!uid) continue;
+
+            if (typeof mapModule?.isContactAllowedByShowFilter === 'function' && !mapModule.isContactAllowedByShowFilter(contact)) {
+              continue;
+            }
+
+            const forwardNm = Number(contact?.forwardNm);
+            const rightNm = Number(contact?.rightNm);
+            if (!Number.isFinite(forwardNm) || !Number.isFinite(rightNm)) continue;
+
+            const distanceNm = Math.sqrt((forwardNm * forwardNm) + (rightNm * rightNm));
             if (!Number.isFinite(distanceNm) || distanceNm <= 0 || distanceNm >= rangeNm) continue;
 
-            const bearing = bearingDeg(myPos, targetPos);
-            const relative = (bearing - myHeading - 90) * Math.PI / 180;
-            const ratio = distanceNm / rangeNm;
-            const px = cx + (ratio * radius) * Math.cos(relative);
-            const py = cy + (ratio * radius) * Math.sin(relative);
+            // Calculate relative bearing using heading-frame coordinates.
+            // In this frame: +forward is nose direction, +right is right wing.
+            const relativeBearing = (Math.atan2(rightNm, forwardNm) * 180 / Math.PI);
 
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(px - 4, py - 4, 8, 8);
-            ctx.font = `${Math.round(h * 0.020)}px monospace`;
-            ctx.textAlign = 'left';
-            ctx.textBaseline = 'middle';
-            const altKft = Math.round(((Number(co[2]) || 0) * 3.28084) / 1000);
-            ctx.fillText(String(altKft), px + 10, py);
+            // Check if within horizontal cone
+            if (Math.abs(relativeBearing) > CONE_HALF_ANGLE_H) continue;
+
+            // Calculate elevation angle
+            const horizontalDistM = Math.max(1, distanceNm * 1852);
+            const targetAltMeters = Number(contact?.alt);
+            const altDiff = (Number.isFinite(targetAltMeters) ? targetAltMeters : myAltMeters) - myAltMeters;
+            const elevationAngle = Math.atan2(altDiff, horizontalDistM) * 180 / Math.PI;
+            const relativeElevation = elevationAngle - myPitch;
+
+            // Check if within vertical cone
+            if (Math.abs(relativeElevation) > CONE_HALF_ANGLE_V) continue;
+
+            const xRatio = (relativeBearing + CONE_HALF_ANGLE_H) / (2 * CONE_HALF_ANGLE_H);
+            const x = displayLeft + xRatio * displayWidth;
+            const yRatio = distanceNm / rangeNm;
+            const y = displayBottom - yRatio * displayHeight;
+
+            // Get track direction
+            const track = Number(contact?.trackDeg ?? contact?.headingDeg ?? 0);
+
+            // Add aircraft to list (always show all aircraft in cone)
+            aircraftInCone.push({
+              x, y, uid, distanceNm, relativeBearing, relativeElevation, track,
+              altKft: Number.isFinite(Number(contact?.altFeet))
+                ? Math.round(Number(contact.altFeet) / 1000)
+                : Math.round(((Number(contact?.alt) || 0) * 3.28084) / 1000),
+              contact
+            });
+          }
+          
+          // Store updated aircraft in cache
+          radarModule.cachedAircraftInCone = aircraftInCone;
+        }
+
+        // Store visible aircraft for A/C selection
+        radarModule.visibleAircraftInCone = aircraftInCone;
+
+        // Break lock automatically when locked aircraft is no longer visible on RDR.
+        if (radarModule.hardLockedUid) {
+          const lockStillVisible = aircraftInCone.some((aircraft) => String(aircraft?.uid ?? '') === String(radarModule.hardLockedUid));
+          if (!lockStillVisible) {
+            radarModule.hardLockedUid = null;
           }
         }
 
+        // Draw border
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(displayLeft, displayTop, displayWidth, displayHeight);
+
+        // Draw weapon status labels above radar rectangle
+        const statusY = displayTop - h * 0.030;
         ctx.fillStyle = color;
+        ctx.font = `bold ${Math.round(h * 0.032)}px monospace`;
+        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'left';
+        ctx.fillText(`WPN ${weaponMode}`, displayLeft, statusY);
+        ctx.textAlign = 'center';
+        ctx.fillText(selectedWeaponLabel, displayLeft + displayWidth * 0.5, statusY);
+        ctx.textAlign = 'right';
+        ctx.fillText(`MASTER ${weaponMasterState}`, displayRight, statusY);
+
+        if (weaponMasterState === 'OFF') {
+          ctx.fillStyle = '#ffff33';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.font = `bold ${Math.round(h * 0.032)}px monospace`;
+          ctx.fillText('MASTER OFF', displayLeft + displayWidth * 0.5, displayTop + displayHeight * 0.5);
+          ctx.fillStyle = color;
+        } else if (weaponMode !== 'A/A') {
+          ctx.fillStyle = '#ffff33';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.font = `bold ${Math.round(h * 0.032)}px monospace`;
+          ctx.fillText('SELECT A/A MODE', displayLeft + displayWidth * 0.5, displayTop + displayHeight * 0.5);
+          ctx.fillStyle = color;
+        }
+
+        // Draw horizontal grid lines (range rings)
+        ctx.strokeStyle = '#004422';
+        ctx.lineWidth = 1;
+        for (let i = 1; i <= 3; i++) {
+          const ratio = i / 4;
+          const y = displayBottom - (displayHeight * ratio);
+          ctx.beginPath();
+          ctx.moveTo(displayLeft, y);
+          ctx.lineTo(displayRight, y);
+          ctx.stroke();
+        }
+
+        // Draw tick marks on sides
+        const tickLength = 20;
+        
+        // Left and right side ticks (3 each, horizontal)
+        for (let i = 1; i <= 3; i++) {
+          const y = displayTop + (displayHeight * i / 4);
+          // Left side
+          ctx.beginPath();
+          ctx.moveTo(displayLeft, y);
+          ctx.lineTo(displayLeft + tickLength, y);
+          ctx.stroke();
+          // Right side
+          ctx.beginPath();
+          ctx.moveTo(displayRight, y);
+          ctx.lineTo(displayRight - tickLength, y);
+          ctx.stroke();
+        }
+
+        // Top and bottom ticks (5 each, vertical)
+        for (let i = 1; i <= 5; i++) {
+          const x = displayLeft + (displayWidth * i / 6);
+          // Top side
+          ctx.beginPath();
+          ctx.moveTo(x, displayTop);
+          ctx.lineTo(x, displayTop + tickLength);
+          ctx.stroke();
+          // Bottom side
+          ctx.beginPath();
+          ctx.moveTo(x, displayBottom);
+          ctx.lineTo(x, displayBottom - tickLength);
+          ctx.stroke();
+        }
+
+        // Draw sweep line (vertical, moving left to right)
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(cx, cy, 5, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.moveTo(sweepX, displayTop);
+        ctx.lineTo(sweepX, displayBottom);
+        ctx.stroke();
+
+        if (radarModule.weaponModule?.isFireFlashVisible()) {
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.font = `bold ${Math.round(h * 0.12)}px monospace`;
+          ctx.fillStyle = '#ff0000';
+          ctx.fillText(radarModule.weaponModule.getActionFlashLabel(), contentX + contentW * 0.5, h * 0.72);
+          ctx.fillStyle = color;
+        }
+
+        // Draw aircraft symbols
+        const drawTrafficContact = (x, y, aircraft) => {
+          const isSelected = String(aircraft.uid) === String(selectedTrafficUid);
+          const isHardLocked = String(aircraft.uid) === String(radarModule.hardLockedUid);
+          
+          // If hard locked, make entire icon red
+          const baseColor = isHardLocked ? '#ff0000' : (mapModule?.getTrafficColor(aircraft.contact) ?? '#ffffff');
+          const number = mapModule?.getContactNumber(aircraft.contact) ?? '?';
+          const glyph = String(number);
+
+          ctx.fillStyle = baseColor;
+          ctx.font = `bold ${Math.round(h * 0.032)}px monospace`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(glyph, x, y);
+
+          const numberHalfH = Math.max(h * 0.016, 8);
+          const roofHalfW = Math.max(w * 0.022, 10);
+          const roofY = y - numberHalfH - h * 0.007;
+          const legLen = Math.max(h * 0.022, 10);
+
+          ctx.strokeStyle = baseColor;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(x - roofHalfW, roofY);
+          ctx.lineTo(x + roofHalfW, roofY);
+          ctx.moveTo(x - roofHalfW, roofY);
+          ctx.lineTo(x - roofHalfW, roofY + legLen);
+          ctx.moveTo(x + roofHalfW, roofY);
+          ctx.lineTo(x + roofHalfW, roofY + legLen);
+          ctx.stroke();
+
+          // Direction indicator - shows track direction
+          const track = Number(aircraft.track ?? 0);
+          const relTrackRad = ((track - myHeading) * Math.PI / 180);
+          const dirX = Math.sin(relTrackRad);
+          const dirY = -Math.cos(relTrackRad);
+          const numberRadius = Math.max(h * 0.021, 11);
+          const lineStart = numberRadius + 2;
+          const lineLen = Math.max(h * 0.034, 16);
+
+          ctx.beginPath();
+          ctx.moveTo(x + dirX * lineStart, y + dirY * lineStart);
+          ctx.lineTo(x + dirX * (lineStart + lineLen), y + dirY * (lineStart + lineLen));
+          ctx.stroke();
+
+          // Selection brackets (square corners like NAV page)
+          if (isSelected && !isHardLocked) {
+            const pad = 2;
+            const left = x - roofHalfW - pad;
+            const right = x + roofHalfW + pad;
+            const top = roofY - pad;
+            const bottom = y + numberHalfH + pad;
+            const arm = Math.max(5, h * 0.012);
+            ctx.strokeStyle = '#ff3333';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(left, top + arm); ctx.lineTo(left, top); ctx.lineTo(left + arm, top);
+            ctx.moveTo(right - arm, top); ctx.lineTo(right, top); ctx.lineTo(right, top + arm);
+            ctx.moveTo(left, bottom - arm); ctx.lineTo(left, bottom); ctx.lineTo(left + arm, bottom);
+            ctx.moveTo(right - arm, bottom); ctx.lineTo(right, bottom); ctx.lineTo(right, bottom - arm);
+            ctx.stroke();
+          }
+
+          // Diamond for hard lock
+          if (isHardLocked) {
+            const boundLeft = x - roofHalfW - 6;
+            const boundRight = x + roofHalfW + 6;
+            const boundTop = roofY - 6;
+            const boundBottom = y + numberHalfH + 6;
+            const halfW = (boundRight - boundLeft) * 0.5;
+            const halfH = (boundBottom - boundTop) * 0.5;
+            const diamondSize = Math.max(halfW, halfH) + 3;
+            const diamondCenterY = y - 2;
+            ctx.strokeStyle = '#ff0000';
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.moveTo(x, diamondCenterY - diamondSize);
+            ctx.lineTo(x + diamondSize, diamondCenterY);
+            ctx.lineTo(x, diamondCenterY + diamondSize);
+            ctx.lineTo(x - diamondSize, diamondCenterY);
+            ctx.closePath();
+            ctx.stroke();
+          }
+        };
+
+        // Plot aircraft
+        for (const aircraft of aircraftInCone) {
+          drawTrafficContact(aircraft.x, aircraft.y, aircraft);
+        }
+
+        // Draw range indicator
+        ctx.fillStyle = color;
+        ctx.font = `bold ${Math.round(h * 0.032)}px monospace`;
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'top';
+        ctx.fillText(`${rangeNm} NM`, displayRight - w * 0.01, displayTop + h * 0.01);
+
+        // Draw LOCK indicator if hard locked
+        if (radarModule.hardLockedUid) {
+          const lockedAircraft = aircraftInCone.find((aircraft) => String(aircraft?.uid ?? '') === String(radarModule.hardLockedUid));
+          const lockedName = String(lockedAircraft?.contact?.aircraftName ?? '').trim() || 'UNKNOWN';
+          const lockedCallsign = String(lockedAircraft?.contact?.callsign ?? '').trim() || 'N/A';
+
+          ctx.fillStyle = '#ff0000';
+          ctx.font = `bold ${Math.round(h * 0.038)}px monospace`;
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'top';
+          ctx.fillText(`LOCK ${lockedName} ${lockedCallsign}`.slice(0, 42), displayLeft + w * 0.01, displayTop + h * 0.01);
+        }
 
         ctx.restore();
       }
@@ -10785,7 +11183,7 @@ class MfdModule {
       addon.dataCartridge = new DataCartridgeModule();
       addon.nav = new NavModule();
       addon.map = new MapModule();
-      addon.radar = new RadarModule({ navModule: addon.nav });
+      addon.radar = new RadarModule({ navModule: addon.nav, weaponModule: addon.weapons });
       addon.targetingPod = new TargetingPodModule(() => this.addon);
       addon.flight = new FlightModule(() => this.addon);
       addon.nav.setMapModule(addon.map);

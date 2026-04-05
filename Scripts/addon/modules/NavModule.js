@@ -1097,17 +1097,17 @@
 
     // Returns FOO visibility setting from the RDR page.
     getFooVisibilityMode() {
-      return OptionModule.getOptionValue('RDR', 'FOO', 'SHOW');
+      return OptionModule.getOptionValue('RDR', 'FOO', 'SH');
     }
 
     // Returns true when contacts with callsign FOO should be hidden.
     shouldHideFooContacts() {
-      return this.getFooVisibilityMode() === 'HIDE';
+      return this.getFooVisibilityMode() === 'HD';
     }
 
-    // Returns true when a callsign equals FOO (case-insensitive).
+    // Returns true when a callsign equals Foo.
     isFooCallsign(callsign) {
-      return callsign === 'FOO';
+      return callsign === 'Foo';
     }
 
     // Returns true when one traffic contact is allowed by current FOO filter.

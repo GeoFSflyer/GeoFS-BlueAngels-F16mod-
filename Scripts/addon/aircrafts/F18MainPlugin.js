@@ -245,7 +245,7 @@
       addon.dataCartridge = new DataCartridgeModule();
       addon.nav = new NavModule();
       addon.map = new MapModule();
-      addon.radar = new RadarModule({ navModule: addon.nav });
+      addon.radar = new RadarModule({ navModule: addon.nav, weaponModule: addon.weapons });
       addon.targetingPod = new TargetingPodModule(() => this.addon);
       addon.flight = new FlightModule(() => this.addon);
       addon.nav.setMapModule(addon.map);
