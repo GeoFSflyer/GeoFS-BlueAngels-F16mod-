@@ -6,6 +6,9 @@ class RadarModule {
     this.sweepAngle = 0; // Current sweep position (0-100)
     this.sweepDirection = 1; // 1 = left to right, -1 = right to left
     this.lastSweepUpdateTime = 0;
+    this.verticalScanPos = 0; // Current vertical scan position (0-100)
+    this.verticalScanDirection = 1; // 1 = down, -1 = up
+    this.lastVerticalScanUpdateTime = 0;
     this.visibleAircraftInCone = []; // Store currently visible aircraft in cone
     this.lastContactUpdateTime = 0; // Timestamp of last contact update
     this.cachedAircraftInCone = []; // Cached aircraft positions
@@ -92,10 +95,15 @@ class RadarModule {
           }
         },
         {
-          key: 'N/A9',
-          label: '',
-          states: [''],
+          key: 'SCAN',
+          label: 'SCN',
+          states: ['6B', '3B'],
           stateIndex: 0,
+          managedExternally: true,
+          onClick: () => {
+            const current = OptionModule.getOptionValue('RDR', 'SCAN', '6B');
+            OptionModule.setOption('RDR', 'SCAN', current === '6B' ? '3B' : '6B');
+          }
         },
         {
           key: 'FIRE',
@@ -222,12 +230,16 @@ class RadarModule {
         const rangeNm = Number.isFinite(rangeNmRaw) && rangeNmRaw > 0 ? rangeNmRaw : 20;
         const radarEnabled = OptionModule.getOptionValue('RDR', 'RADAR', 'OFF') === 'ON';
         const fooMode = OptionModule.getOptionValue('RDR', 'FOO', 'SH');
+        const scanMode = OptionModule.getOptionValue('RDR', 'SCAN', '6B');
         const weaponMasterState = String(OptionModule.getOptionValue('WPN', 'MASTER', 'OFF')).toUpperCase();
         const weaponMode = String(OptionModule.getOptionValue('WPN', 'MODE', 'NAV')).toUpperCase();
         const modeLoadout = radarModule.weaponModule?.getModeLoadout(weaponMode);
         const selectedWeaponLabel = modeLoadout
           ? radarModule.weaponModule.getSelectedLoadDisplay(weaponMode, modeLoadout)
           : 'N/A';
+        const selectedWeaponEffectiveness = modeLoadout
+          ? radarModule.weaponModule.getSelectedWeaponEffectiveness(weaponMode, modeLoadout)
+          : null;
 
         ctx.save();
         ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -285,14 +297,15 @@ class RadarModule {
         const displayWidth = displayRight - displayLeft;
         const displayHeight = displayBottom - displayTop;
 
-        // Update sweep angle (1 second from one side to the other)
+        // Update sweep angle
+        const sweepMs = scanMode === '3B' ? 500 : 1000;
         const sweepNow = Date.now();
         if (!radarModule.lastSweepUpdateTime) {
           radarModule.lastSweepUpdateTime = sweepNow;
         }
         const deltaMs = sweepNow - radarModule.lastSweepUpdateTime;
         radarModule.lastSweepUpdateTime = sweepNow;
-        radarModule.sweepAngle += radarModule.sweepDirection * (deltaMs * 0.1);
+        radarModule.sweepAngle += radarModule.sweepDirection * (deltaMs * (100 / sweepMs));
         if (radarModule.sweepAngle >= 100) {
           radarModule.sweepAngle = 100;
           radarModule.sweepDirection = -1;
@@ -302,15 +315,31 @@ class RadarModule {
         }
         const sweepX = displayLeft + (radarModule.sweepAngle / 100) * displayWidth;
 
+        const verticalNow = Date.now();
+        if (!radarModule.lastVerticalScanUpdateTime) {
+          radarModule.lastVerticalScanUpdateTime = verticalNow;
+        }
+        const verticalDeltaMs = verticalNow - radarModule.lastVerticalScanUpdateTime;
+        radarModule.lastVerticalScanUpdateTime = verticalNow;
+        radarModule.verticalScanPos += radarModule.verticalScanDirection * (verticalDeltaMs * (100 / sweepMs));
+        if (radarModule.verticalScanPos >= 100) {
+          radarModule.verticalScanPos = 100;
+          radarModule.verticalScanDirection = -1;
+        } else if (radarModule.verticalScanPos <= 0) {
+          radarModule.verticalScanPos = 0;
+          radarModule.verticalScanDirection = 1;
+        }
+
         const selectedTrafficUid = mapModule?.selectedTrafficUid ?? null;
 
-        // Cone parameters: 30 degrees on each side
-        const CONE_HALF_ANGLE_H = 30; // degrees horizontal
-        const CONE_HALF_ANGLE_V = 30; // degrees vertical
+        // Cone parameters by scan mode
+        const CONE_HALF_ANGLE_H = scanMode === '3B' ? 15 : 30;
+        const CONE_HALF_ANGLE_V = scanMode === '3B' ? 15 : 30;
 
-        // Update contacts only once per second
+        // Update contacts by scan mode
         const currentTime = Date.now();
-        const shouldUpdate = (currentTime - radarModule.lastContactUpdateTime) >= 1000;
+        const contactUpdateMs = scanMode === '3B' ? 500 : 1000;
+        const shouldUpdate = (currentTime - radarModule.lastContactUpdateTime) >= contactUpdateMs;
         
         let aircraftInCone = radarModule.cachedAircraftInCone;
         if (shouldUpdate && ownship) {
@@ -381,6 +410,10 @@ class RadarModule {
           }
         }
 
+        const lockedAircraft = radarModule.hardLockedUid
+          ? aircraftInCone.find((aircraft) => String(aircraft.uid) === String(radarModule.hardLockedUid))
+          : null;
+
         // Draw border
         ctx.strokeStyle = color;
         ctx.lineWidth = 2;
@@ -397,6 +430,47 @@ class RadarModule {
         ctx.fillText(selectedWeaponLabel, displayLeft + displayWidth * 0.5, statusY);
         ctx.textAlign = 'right';
         ctx.fillText(`MASTER ${weaponMasterState}`, displayRight, statusY);
+
+        if (selectedWeaponEffectiveness) {
+          const markerFractions = radarModule.weaponModule.getEffectivenessMarkerFractions(selectedWeaponEffectiveness);
+          const bracketHeight = displayHeight * (2 / 3);
+          const bracketTop = displayTop + (displayHeight - bracketHeight) * 0.5;
+          const bracketBottom = bracketTop + bracketHeight;
+          const bracketX = displayRight - w * 0.02;
+          const tickLen = w * 0.018;
+
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(bracketX, bracketTop);
+          ctx.lineTo(bracketX, bracketBottom);
+          ctx.stroke();
+
+          const markerYs = [
+            bracketTop + markerFractions.engagementMax * bracketHeight,
+            bracketTop + markerFractions.effectiveMax * bracketHeight,
+            bracketTop + markerFractions.effectiveMin * bracketHeight,
+            bracketTop + markerFractions.engagementMin * bracketHeight
+          ];
+
+          for (const y of markerYs) {
+            ctx.beginPath();
+            ctx.moveTo(bracketX, y);
+            ctx.lineTo(bracketX - tickLen, y);
+            ctx.stroke();
+          }
+
+          if (lockedAircraft) {
+            const lockedFraction = radarModule.weaponModule.getEffectivenessDistanceFraction(selectedWeaponEffectiveness, lockedAircraft.distanceNm);
+            const lockedY = bracketTop + lockedFraction * bracketHeight;
+            ctx.fillStyle = color;
+            ctx.font = `bold ${Math.round(h * 0.046)}px monospace`;
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('>', bracketX, lockedY);
+            ctx.fillStyle = color;
+          }
+        }
 
         if (weaponMasterState === 'OFF') {
           ctx.fillStyle = '#ffff33';
@@ -444,9 +518,10 @@ class RadarModule {
           ctx.stroke();
         }
 
-        // Top and bottom ticks (5 each, vertical)
-        for (let i = 1; i <= 5; i++) {
-          const x = displayLeft + (displayWidth * i / 6);
+        // Top and bottom ticks (vertical)
+        const topBottomTickCount = scanMode === '3B' ? 2 : 5;
+        for (let i = 1; i <= topBottomTickCount; i++) {
+          const x = displayLeft + (displayWidth * i / (topBottomTickCount + 1));
           // Top side
           ctx.beginPath();
           ctx.moveTo(x, displayTop);
@@ -466,6 +541,21 @@ class RadarModule {
         ctx.moveTo(sweepX, displayTop);
         ctx.lineTo(sweepX, displayBottom);
         ctx.stroke();
+
+        const firstBarY = displayBottom - (displayHeight * (1 / 4));
+        const thirdBarY = displayBottom - (displayHeight * (3 / 4));
+        const scanTopY = Math.min(firstBarY, thirdBarY);
+        const scanBottomY = Math.max(firstBarY, thirdBarY);
+        const fullScanSpan = scanBottomY - scanTopY;
+        const verticalScanSpan = scanMode === '3B' ? fullScanSpan * 0.5 : fullScanSpan;
+        const verticalScanTop = scanTopY + (fullScanSpan - verticalScanSpan) * 0.5;
+        const verticalScanY = verticalScanTop + (radarModule.verticalScanPos / 100) * verticalScanSpan;
+
+        ctx.fillStyle = color;
+        ctx.font = `bold ${Math.round(h * 0.035)}px monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('<', displayLeft + 10, verticalScanY);
 
         if (radarModule.weaponModule?.isFireFlashVisible()) {
           ctx.textAlign = 'center';
@@ -576,15 +666,18 @@ class RadarModule {
 
         // Draw LOCK indicator if hard locked
         if (radarModule.hardLockedUid) {
-          const lockedAircraft = aircraftInCone.find((aircraft) => String(aircraft?.uid ?? '') === String(radarModule.hardLockedUid));
-          const lockedName = String(lockedAircraft?.contact?.aircraftName ?? '').trim() || 'UNKNOWN';
+          const lockedType = String(lockedAircraft?.contact?.aircraftName ?? '').trim() || 'UNKNOWN';
           const lockedCallsign = String(lockedAircraft?.contact?.callsign ?? '').trim() || 'N/A';
 
           ctx.fillStyle = '#ff0000';
-          ctx.font = `bold ${Math.round(h * 0.038)}px monospace`;
+          ctx.font = `bold ${Math.round(h * 0.034)}px monospace`;
           ctx.textAlign = 'left';
           ctx.textBaseline = 'top';
-          ctx.fillText(`LOCK ${lockedName} ${lockedCallsign}`.slice(0, 42), displayLeft + w * 0.01, displayTop + h * 0.01);
+          const lockTextX = displayLeft + w * 0.01;
+          const lockTextY = displayTop + h * 0.045;
+          const lockLineStep = h * 0.036;
+          ctx.fillText(`LOCK ${lockedCallsign}`.slice(0, 42), lockTextX, lockTextY);
+          ctx.fillText(lockedType.slice(0, 42), lockTextX, lockTextY + lockLineStep);
         }
 
         ctx.restore();

@@ -50,6 +50,82 @@ class WeaponModule {
         this.loadStateFromStorage();
     }
 
+    static effectivenessByType = 
+    [
+        {
+            "name": "AIM-9X",
+            "engagement_window": { "min": 0.2, "max": 18.9 },
+            "effective_range": { "min": 0.5, "max": 8.1 },
+            "max_speed": 2.5
+        },
+        {
+            "name": "AIM-120C",
+            "engagement_window": { "min": 1.1, "max": 48.6 },
+            "effective_range": { "min": 10.8, "max": 27.0 },
+            "max_speed": 4.0
+        },
+        {
+            "name": "AIM-120D",
+            "engagement_window": { "min": 1.1, "max": 86.4 },
+            "effective_range": { "min": 16.2, "max": 43.2 },
+            "max_speed": 4.0
+        },
+        {
+            "name": "AIM-7M",
+            "engagement_window": { "min": 1.1, "max": 37.8 },
+            "effective_range": { "min": 8.1, "max": 21.6 },
+            "max_speed": 4.0
+        },
+        {
+            "name": "R-73",
+            "engagement_window": { "min": 0.2, "max": 21.6 },
+            "effective_range": { "min": 0.5, "max": 8.1 },
+            "max_speed": 2.5
+        },
+        {
+            "name": "R-27R",
+            "engagement_window": { "min": 1.1, "max": 40.5 },
+            "effective_range": { "min": 10.8, "max": 24.3 },
+            "max_speed": 4.5
+        },
+        {
+            "name": "R-27ER",
+            "engagement_window": { "min": 1.1, "max": 70.2 },
+            "effective_range": { "min": 16.2, "max": 37.8 },
+            "max_speed": 5.0
+        },
+        {
+            "name": "R-27T",
+            "engagement_window": { "min": 0.5, "max": 21.6 },
+            "effective_range": { "min": 5.4, "max": 16.2 },
+            "max_speed": 4.0
+        },
+        {
+            "name": "R-27ET",
+            "engagement_window": { "min": 0.5, "max": 64.8 },
+            "effective_range": { "min": 10.8, "max": 32.4 },
+            "max_speed": 4.0
+        },
+        {
+            "name": "R-77",
+            "engagement_window": { "min": 1.1, "max": 43.2 },
+            "effective_range": { "min": 10.8, "max": 27.0 },
+            "max_speed": 4.0
+        },
+        {
+            "name": "R-77-1",
+            "engagement_window": { "min": 1.1, "max": 59.4 },
+            "effective_range": { "min": 16.2, "max": 37.8 },
+            "max_speed": 4.5
+        },
+        {
+            "name": "R-77M",
+            "engagement_window": { "min": 1.6, "max": 102.6 },
+            "effective_range": { "min": 21.6, "max": 54.0 },
+            "max_speed": 5.0
+        }
+    ];
+
     registerMfdPages(mfdModule) {
         mfdModule.registerPage({
         title: 'WPN',
@@ -590,6 +666,36 @@ class WeaponModule {
         const quantity = Number.isFinite(station.quantity) ? station.quantity : 0;
         const load = station.load ?? station.display ?? 'N/A';
         return `${quantity}x ${load}`;
+    }
+
+    getSelectedWeaponEffectiveness(mode, modeLoadout) {
+        const selected = this.ensureSelectedWeapon(mode, modeLoadout);
+        if (!selected || selected.station === 'gun') return null;
+        const station = modeLoadout[selected.side][selected.station];
+        const profile = WeaponModule.effectivenessByType.find((item) => item.name === station.load);
+        if (!profile) return null;
+        return profile;
+    }
+
+    getEffectivenessMarkerFractions(profile) {
+        const minEngagement = profile.engagement_window.min;
+        const maxEngagement = profile.engagement_window.max;
+        const span = maxEngagement - minEngagement;
+
+        return {
+            engagementMax: 0,
+            effectiveMax: (maxEngagement - profile.effective_range.max) / span,
+            effectiveMin: (maxEngagement - profile.effective_range.min) / span,
+            engagementMin: 1
+        };
+    }
+
+    getEffectivenessDistanceFraction(profile, distanceNm) {
+        const minEngagement = profile.engagement_window.min;
+        const maxEngagement = profile.engagement_window.max;
+        const span = maxEngagement - minEngagement;
+        const fraction = (maxEngagement - distanceNm) / span;
+        return HelperModule.clampValue(fraction, 0, 1);
     }
 
     hasRadarHardLock() {

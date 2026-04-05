@@ -402,6 +402,82 @@ class WeaponModule {
         this.loadStateFromStorage();
     }
 
+    static effectivenessByType = 
+    [
+        {
+            "name": "AIM-9X",
+            "engagement_window": { "min": 0.2, "max": 18.9 },
+            "effective_range": { "min": 0.5, "max": 8.1 },
+            "max_speed": 2.5
+        },
+        {
+            "name": "AIM-120C",
+            "engagement_window": { "min": 1.1, "max": 48.6 },
+            "effective_range": { "min": 10.8, "max": 27.0 },
+            "max_speed": 4.0
+        },
+        {
+            "name": "AIM-120D",
+            "engagement_window": { "min": 1.1, "max": 86.4 },
+            "effective_range": { "min": 16.2, "max": 43.2 },
+            "max_speed": 4.0
+        },
+        {
+            "name": "AIM-7M",
+            "engagement_window": { "min": 1.1, "max": 37.8 },
+            "effective_range": { "min": 8.1, "max": 21.6 },
+            "max_speed": 4.0
+        },
+        {
+            "name": "R-73",
+            "engagement_window": { "min": 0.2, "max": 21.6 },
+            "effective_range": { "min": 0.5, "max": 8.1 },
+            "max_speed": 2.5
+        },
+        {
+            "name": "R-27R",
+            "engagement_window": { "min": 1.1, "max": 40.5 },
+            "effective_range": { "min": 10.8, "max": 24.3 },
+            "max_speed": 4.5
+        },
+        {
+            "name": "R-27ER",
+            "engagement_window": { "min": 1.1, "max": 70.2 },
+            "effective_range": { "min": 16.2, "max": 37.8 },
+            "max_speed": 5.0
+        },
+        {
+            "name": "R-27T",
+            "engagement_window": { "min": 0.5, "max": 21.6 },
+            "effective_range": { "min": 5.4, "max": 16.2 },
+            "max_speed": 4.0
+        },
+        {
+            "name": "R-27ET",
+            "engagement_window": { "min": 0.5, "max": 64.8 },
+            "effective_range": { "min": 10.8, "max": 32.4 },
+            "max_speed": 4.0
+        },
+        {
+            "name": "R-77",
+            "engagement_window": { "min": 1.1, "max": 43.2 },
+            "effective_range": { "min": 10.8, "max": 27.0 },
+            "max_speed": 4.0
+        },
+        {
+            "name": "R-77-1",
+            "engagement_window": { "min": 1.1, "max": 59.4 },
+            "effective_range": { "min": 16.2, "max": 37.8 },
+            "max_speed": 4.5
+        },
+        {
+            "name": "R-77M",
+            "engagement_window": { "min": 1.6, "max": 102.6 },
+            "effective_range": { "min": 21.6, "max": 54.0 },
+            "max_speed": 5.0
+        }
+    ];
+
     registerMfdPages(mfdModule) {
         mfdModule.registerPage({
         title: 'WPN',
@@ -942,6 +1018,36 @@ class WeaponModule {
         const quantity = Number.isFinite(station.quantity) ? station.quantity : 0;
         const load = station.load ?? station.display ?? 'N/A';
         return `${quantity}x ${load}`;
+    }
+
+    getSelectedWeaponEffectiveness(mode, modeLoadout) {
+        const selected = this.ensureSelectedWeapon(mode, modeLoadout);
+        if (!selected || selected.station === 'gun') return null;
+        const station = modeLoadout[selected.side][selected.station];
+        const profile = WeaponModule.effectivenessByType.find((item) => item.name === station.load);
+        if (!profile) return null;
+        return profile;
+    }
+
+    getEffectivenessMarkerFractions(profile) {
+        const minEngagement = profile.engagement_window.min;
+        const maxEngagement = profile.engagement_window.max;
+        const span = maxEngagement - minEngagement;
+
+        return {
+            engagementMax: 0,
+            effectiveMax: (maxEngagement - profile.effective_range.max) / span,
+            effectiveMin: (maxEngagement - profile.effective_range.min) / span,
+            engagementMin: 1
+        };
+    }
+
+    getEffectivenessDistanceFraction(profile, distanceNm) {
+        const minEngagement = profile.engagement_window.min;
+        const maxEngagement = profile.engagement_window.max;
+        const span = maxEngagement - minEngagement;
+        const fraction = (maxEngagement - distanceNm) / span;
+        return HelperModule.clampValue(fraction, 0, 1);
     }
 
     hasRadarHardLock() {
@@ -3383,6 +3489,9 @@ class RadarModule {
     this.sweepAngle = 0; // Current sweep position (0-100)
     this.sweepDirection = 1; // 1 = left to right, -1 = right to left
     this.lastSweepUpdateTime = 0;
+    this.verticalScanPos = 0; // Current vertical scan position (0-100)
+    this.verticalScanDirection = 1; // 1 = down, -1 = up
+    this.lastVerticalScanUpdateTime = 0;
     this.visibleAircraftInCone = []; // Store currently visible aircraft in cone
     this.lastContactUpdateTime = 0; // Timestamp of last contact update
     this.cachedAircraftInCone = []; // Cached aircraft positions
@@ -3469,10 +3578,15 @@ class RadarModule {
           }
         },
         {
-          key: 'N/A9',
-          label: '',
-          states: [''],
+          key: 'SCAN',
+          label: 'SCN',
+          states: ['6B', '3B'],
           stateIndex: 0,
+          managedExternally: true,
+          onClick: () => {
+            const current = OptionModule.getOptionValue('RDR', 'SCAN', '6B');
+            OptionModule.setOption('RDR', 'SCAN', current === '6B' ? '3B' : '6B');
+          }
         },
         {
           key: 'FIRE',
@@ -3599,12 +3713,16 @@ class RadarModule {
         const rangeNm = Number.isFinite(rangeNmRaw) && rangeNmRaw > 0 ? rangeNmRaw : 20;
         const radarEnabled = OptionModule.getOptionValue('RDR', 'RADAR', 'OFF') === 'ON';
         const fooMode = OptionModule.getOptionValue('RDR', 'FOO', 'SH');
+        const scanMode = OptionModule.getOptionValue('RDR', 'SCAN', '6B');
         const weaponMasterState = String(OptionModule.getOptionValue('WPN', 'MASTER', 'OFF')).toUpperCase();
         const weaponMode = String(OptionModule.getOptionValue('WPN', 'MODE', 'NAV')).toUpperCase();
         const modeLoadout = radarModule.weaponModule?.getModeLoadout(weaponMode);
         const selectedWeaponLabel = modeLoadout
           ? radarModule.weaponModule.getSelectedLoadDisplay(weaponMode, modeLoadout)
           : 'N/A';
+        const selectedWeaponEffectiveness = modeLoadout
+          ? radarModule.weaponModule.getSelectedWeaponEffectiveness(weaponMode, modeLoadout)
+          : null;
 
         ctx.save();
         ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -3662,14 +3780,15 @@ class RadarModule {
         const displayWidth = displayRight - displayLeft;
         const displayHeight = displayBottom - displayTop;
 
-        // Update sweep angle (1 second from one side to the other)
+        // Update sweep angle
+        const sweepMs = scanMode === '3B' ? 500 : 1000;
         const sweepNow = Date.now();
         if (!radarModule.lastSweepUpdateTime) {
           radarModule.lastSweepUpdateTime = sweepNow;
         }
         const deltaMs = sweepNow - radarModule.lastSweepUpdateTime;
         radarModule.lastSweepUpdateTime = sweepNow;
-        radarModule.sweepAngle += radarModule.sweepDirection * (deltaMs * 0.1);
+        radarModule.sweepAngle += radarModule.sweepDirection * (deltaMs * (100 / sweepMs));
         if (radarModule.sweepAngle >= 100) {
           radarModule.sweepAngle = 100;
           radarModule.sweepDirection = -1;
@@ -3679,15 +3798,31 @@ class RadarModule {
         }
         const sweepX = displayLeft + (radarModule.sweepAngle / 100) * displayWidth;
 
+        const verticalNow = Date.now();
+        if (!radarModule.lastVerticalScanUpdateTime) {
+          radarModule.lastVerticalScanUpdateTime = verticalNow;
+        }
+        const verticalDeltaMs = verticalNow - radarModule.lastVerticalScanUpdateTime;
+        radarModule.lastVerticalScanUpdateTime = verticalNow;
+        radarModule.verticalScanPos += radarModule.verticalScanDirection * (verticalDeltaMs * (100 / sweepMs));
+        if (radarModule.verticalScanPos >= 100) {
+          radarModule.verticalScanPos = 100;
+          radarModule.verticalScanDirection = -1;
+        } else if (radarModule.verticalScanPos <= 0) {
+          radarModule.verticalScanPos = 0;
+          radarModule.verticalScanDirection = 1;
+        }
+
         const selectedTrafficUid = mapModule?.selectedTrafficUid ?? null;
 
-        // Cone parameters: 30 degrees on each side
-        const CONE_HALF_ANGLE_H = 30; // degrees horizontal
-        const CONE_HALF_ANGLE_V = 30; // degrees vertical
+        // Cone parameters by scan mode
+        const CONE_HALF_ANGLE_H = scanMode === '3B' ? 15 : 30;
+        const CONE_HALF_ANGLE_V = scanMode === '3B' ? 15 : 30;
 
-        // Update contacts only once per second
+        // Update contacts by scan mode
         const currentTime = Date.now();
-        const shouldUpdate = (currentTime - radarModule.lastContactUpdateTime) >= 1000;
+        const contactUpdateMs = scanMode === '3B' ? 500 : 1000;
+        const shouldUpdate = (currentTime - radarModule.lastContactUpdateTime) >= contactUpdateMs;
         
         let aircraftInCone = radarModule.cachedAircraftInCone;
         if (shouldUpdate && ownship) {
@@ -3758,6 +3893,10 @@ class RadarModule {
           }
         }
 
+        const lockedAircraft = radarModule.hardLockedUid
+          ? aircraftInCone.find((aircraft) => String(aircraft.uid) === String(radarModule.hardLockedUid))
+          : null;
+
         // Draw border
         ctx.strokeStyle = color;
         ctx.lineWidth = 2;
@@ -3774,6 +3913,47 @@ class RadarModule {
         ctx.fillText(selectedWeaponLabel, displayLeft + displayWidth * 0.5, statusY);
         ctx.textAlign = 'right';
         ctx.fillText(`MASTER ${weaponMasterState}`, displayRight, statusY);
+
+        if (selectedWeaponEffectiveness) {
+          const markerFractions = radarModule.weaponModule.getEffectivenessMarkerFractions(selectedWeaponEffectiveness);
+          const bracketHeight = displayHeight * (2 / 3);
+          const bracketTop = displayTop + (displayHeight - bracketHeight) * 0.5;
+          const bracketBottom = bracketTop + bracketHeight;
+          const bracketX = displayRight - w * 0.02;
+          const tickLen = w * 0.018;
+
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(bracketX, bracketTop);
+          ctx.lineTo(bracketX, bracketBottom);
+          ctx.stroke();
+
+          const markerYs = [
+            bracketTop + markerFractions.engagementMax * bracketHeight,
+            bracketTop + markerFractions.effectiveMax * bracketHeight,
+            bracketTop + markerFractions.effectiveMin * bracketHeight,
+            bracketTop + markerFractions.engagementMin * bracketHeight
+          ];
+
+          for (const y of markerYs) {
+            ctx.beginPath();
+            ctx.moveTo(bracketX, y);
+            ctx.lineTo(bracketX - tickLen, y);
+            ctx.stroke();
+          }
+
+          if (lockedAircraft) {
+            const lockedFraction = radarModule.weaponModule.getEffectivenessDistanceFraction(selectedWeaponEffectiveness, lockedAircraft.distanceNm);
+            const lockedY = bracketTop + lockedFraction * bracketHeight;
+            ctx.fillStyle = color;
+            ctx.font = `bold ${Math.round(h * 0.046)}px monospace`;
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('>', bracketX, lockedY);
+            ctx.fillStyle = color;
+          }
+        }
 
         if (weaponMasterState === 'OFF') {
           ctx.fillStyle = '#ffff33';
@@ -3821,9 +4001,10 @@ class RadarModule {
           ctx.stroke();
         }
 
-        // Top and bottom ticks (5 each, vertical)
-        for (let i = 1; i <= 5; i++) {
-          const x = displayLeft + (displayWidth * i / 6);
+        // Top and bottom ticks (vertical)
+        const topBottomTickCount = scanMode === '3B' ? 2 : 5;
+        for (let i = 1; i <= topBottomTickCount; i++) {
+          const x = displayLeft + (displayWidth * i / (topBottomTickCount + 1));
           // Top side
           ctx.beginPath();
           ctx.moveTo(x, displayTop);
@@ -3843,6 +4024,21 @@ class RadarModule {
         ctx.moveTo(sweepX, displayTop);
         ctx.lineTo(sweepX, displayBottom);
         ctx.stroke();
+
+        const firstBarY = displayBottom - (displayHeight * (1 / 4));
+        const thirdBarY = displayBottom - (displayHeight * (3 / 4));
+        const scanTopY = Math.min(firstBarY, thirdBarY);
+        const scanBottomY = Math.max(firstBarY, thirdBarY);
+        const fullScanSpan = scanBottomY - scanTopY;
+        const verticalScanSpan = scanMode === '3B' ? fullScanSpan * 0.5 : fullScanSpan;
+        const verticalScanTop = scanTopY + (fullScanSpan - verticalScanSpan) * 0.5;
+        const verticalScanY = verticalScanTop + (radarModule.verticalScanPos / 100) * verticalScanSpan;
+
+        ctx.fillStyle = color;
+        ctx.font = `bold ${Math.round(h * 0.035)}px monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('<', displayLeft + 10, verticalScanY);
 
         if (radarModule.weaponModule?.isFireFlashVisible()) {
           ctx.textAlign = 'center';
@@ -3953,15 +4149,18 @@ class RadarModule {
 
         // Draw LOCK indicator if hard locked
         if (radarModule.hardLockedUid) {
-          const lockedAircraft = aircraftInCone.find((aircraft) => String(aircraft?.uid ?? '') === String(radarModule.hardLockedUid));
-          const lockedName = String(lockedAircraft?.contact?.aircraftName ?? '').trim() || 'UNKNOWN';
+          const lockedType = String(lockedAircraft?.contact?.aircraftName ?? '').trim() || 'UNKNOWN';
           const lockedCallsign = String(lockedAircraft?.contact?.callsign ?? '').trim() || 'N/A';
 
           ctx.fillStyle = '#ff0000';
-          ctx.font = `bold ${Math.round(h * 0.038)}px monospace`;
+          ctx.font = `bold ${Math.round(h * 0.034)}px monospace`;
           ctx.textAlign = 'left';
           ctx.textBaseline = 'top';
-          ctx.fillText(`LOCK ${lockedName} ${lockedCallsign}`.slice(0, 42), displayLeft + w * 0.01, displayTop + h * 0.01);
+          const lockTextX = displayLeft + w * 0.01;
+          const lockTextY = displayTop + h * 0.045;
+          const lockLineStep = h * 0.036;
+          ctx.fillText(`LOCK ${lockedCallsign}`.slice(0, 42), lockTextX, lockTextY);
+          ctx.fillText(lockedType.slice(0, 42), lockTextX, lockTextY + lockLineStep);
         }
 
         ctx.restore();
@@ -10510,38 +10709,38 @@ class MfdModule {
         'A/A': {
           gun: 412,
           left: {
-            wingtip: { load: 'AIM-9', display: '9M', quantity: 2, type: 'A/A' },
-            hardpoint1: { load: 'AIM-120', display: '12M', quantity: 2, type: 'A/A' },
-            hardpoint2: { load: 'AIM-120', display: '12M', quantity: 2, type: 'A/A' }
+            wingtip: { load: 'AIM-9X', display: '9M', quantity: 2, type: 'A/A' },
+            hardpoint1: { load: 'AIM-120D', display: '12M', quantity: 2, type: 'A/A' },
+            hardpoint2: { load: 'AIM-120D', display: '12M', quantity: 2, type: 'A/A' }
           },
           right: {
-            wingtip: { load: 'AIM-9', display: '9M', quantity: 2, type: 'A/A' },
-            hardpoint1: { load: 'AIM-120', display: '12M', quantity: 2, type: 'A/A' },
-            hardpoint2: { load: 'AIM-120', display: '12M', quantity: 2, type: 'A/A' }
+            wingtip: { load: 'AIM-9X', display: '9M', quantity: 2, type: 'A/A' },
+            hardpoint1: { load: 'AIM-120D', display: '12M', quantity: 2, type: 'A/A' },
+            hardpoint2: { load: 'AIM-120D', display: '12M', quantity: 2, type: 'A/A' }
           }
         },
         'L/R A/A': {
           gun: 412,
           left: {
-            wingtip: { load: 'AIM-9', display: '9M', quantity: 2, type: 'A/A' },
-            hardpoint1: { load: 'AIM-120', display: '12M', quantity: 2, type: 'A/A' },
+            wingtip: { load: 'AIM-9X', display: '9M', quantity: 2, type: 'A/A' },
+            hardpoint1: { load: 'AIM-120D', display: '12M', quantity: 2, type: 'A/A' },
             hardpoint2: { load: 'Fuel', display: 'FUEL', quantity: 1, type: 'FUEL' }
           },
           right: {
-            wingtip: { load: 'AIM-9', display: '9M', quantity: 2, type: 'A/A' },
-            hardpoint1: { load: 'AIM-120', display: '12M', quantity: 2, type: 'A/A' },
+            wingtip: { load: 'AIM-9X  ', display: '9M', quantity: 2, type: 'A/A' },
+            hardpoint1: { load: 'AIM-120D', display: '12M', quantity: 2, type: 'A/A' },
             hardpoint2: { load: 'Fuel', display: 'FUEL', quantity: 1, type: 'FUEL' }
           }
         },
         'A/G': {
           gun: 412,
           left: {
-            wingtip: { load: 'AIM-9', display: '9M', quantity: 2, type: 'A/A' },
+            wingtip: { load: 'AIM-9X', display: '9M', quantity: 2, type: 'A/A' },
             hardpoint1: { load: 'AGM-88', display: 'HARM', quantity: 1, type: 'A/G' },
             hardpoint2: { load: 'AGM-84K', display: 'SLAM-ER', quantity: 1, type: 'A/G' }
           },
           right: {
-            wingtip: { load: 'AIM-9', display: '9M', quantity: 2, type: 'A/A' },
+            wingtip: { load: 'AIM-9X', display: '9M', quantity: 2, type: 'A/A' },
             hardpoint1: { load: 'AGM-88', display: 'HARM', quantity: 1, type: 'A/G' },
             hardpoint2: { load: 'JDAM', display: 'JDAM', quantity: 1, type: 'A/G' }
           }
@@ -10549,12 +10748,12 @@ class MfdModule {
         'L/R A/G': {
           gun: 412,
           left: {
-            wingtip: { load: 'AIM-9', display: '9M', quantity: 2, type: 'A/A' },
+            wingtip: { load: 'AIM-9X', display: '9M', quantity: 2, type: 'A/A' },
             hardpoint1: { load: 'AGM-88', display: 'HARM', quantity: 1, type: 'A/G' },
             hardpoint2: { load: 'Fuel', display: 'FUEL', quantity: 1, type: 'FUEL' }
           },
           right: {
-            wingtip: { load: 'AIM-9', display: '9M', quantity: 2, type: 'A/A' },
+            wingtip: { load: 'AIM-9X', display: '9M', quantity: 2, type: 'A/A' },
             hardpoint1: { load: 'AGM-88', display: 'HARM', quantity: 1, type: 'A/G' },
             hardpoint2: { load: 'Fuel', display: 'FUEL', quantity: 1, type: 'FUEL' }
           }
@@ -10562,12 +10761,12 @@ class MfdModule {
         'L/R': {
           gun: 412,
           left: {
-            wingtip: { load: 'AIM-9', display: '9M', quantity: 1, type: 'A/A' },
+            wingtip: { load: 'AIM-9X', display: '9M', quantity: 1, type: 'A/A' },
             hardpoint1: { load: 'Fuel', display: 'FUEL', quantity: 1, type: 'FUEL' },
             hardpoint2: { load: 'Fuel', display: 'FUEL', quantity: 1, type: 'FUEL' }
           },
           right: {
-            wingtip: { load: 'AIM-9', display: '9M', quantity: 1, type: 'A/A' },
+            wingtip: { load: 'AIM-9X', display: '9M', quantity: 1, type: 'A/A' },
             hardpoint1: { load: 'Fuel', display: 'FUEL', quantity: 1, type: 'FUEL' },
             hardpoint2: { load: 'Fuel', display: 'FUEL', quantity: 1, type: 'FUEL' }
           }
@@ -10575,12 +10774,12 @@ class MfdModule {
         'MIN': {
           gun: 300,
           left: {
-            wingtip: { load: 'AIM-9', display: '9M', quantity: 1, type: 'A/A' },
+            wingtip: { load: 'AIM-9X', display: '9M', quantity: 1, type: 'A/A' },
             hardpoint1: { load: 'N/A', display: 'N/A', quantity: 0, type: 'N/A' },
             hardpoint2: { load: 'N/A', display: 'N/A', quantity: 0, type: 'N/A' }
           },
           right: {
-            wingtip: { load: 'AIM-9', display: '9M', quantity: 1, type: 'A/A' },
+            wingtip: { load: 'AIM-9X', display: '9M', quantity: 1, type: 'A/A' },
             hardpoint1: { load: 'N/A', display: 'N/A', quantity: 0, type: 'N/A' },
             hardpoint2: { load: 'N/A', display: 'N/A', quantity: 0, type: 'N/A' }
           }
