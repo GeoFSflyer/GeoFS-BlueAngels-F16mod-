@@ -346,7 +346,7 @@ class RadarModule {
           radarModule.lastContactUpdateTime = currentTime;
           aircraftInCone = [];
           for (const contact of trafficContacts) {
-            const uid = String(contact?.uid ?? '').trim();
+            const uid = contact?.uid;
             if (!uid) continue;
 
             if (typeof mapModule?.isContactAllowedByShowFilter === 'function' && !mapModule.isContactAllowedByShowFilter(contact)) {
@@ -671,11 +671,11 @@ class RadarModule {
 
           ctx.fillStyle = '#ff0000';
           ctx.font = `bold ${Math.round(h * 0.034)}px monospace`;
-          ctx.textAlign = 'left';
+          ctx.textAlign = 'center';
           ctx.textBaseline = 'top';
-          const lockTextX = displayLeft + w * 0.01;
-          const lockTextY = displayTop + h * 0.045;
           const lockLineStep = h * 0.036;
+          const lockTextX = displayLeft + displayWidth * 0.5;
+          const lockTextY = displayTop + tickLength + h * 0.01;
           ctx.fillText(`LOCK ${lockedCallsign}`.slice(0, 42), lockTextX, lockTextY);
           ctx.fillText(lockedType.slice(0, 42), lockTextX, lockTextY + lockLineStep);
         }

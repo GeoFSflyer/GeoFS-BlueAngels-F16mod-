@@ -1988,6 +1988,8 @@ window.DataCartridgeModule = DataCartridgeModule;
           const mode = OptionModule.getOptionValue('NAV', 'DISPLAY', 'HSI');
           const declutterLevel = OptionModule.getOptionValue('NAV', 'DECLUTTER', 'OFF');
           const radarEnabled = OptionModule.getOptionValue('RDR', 'RADAR', 'OFF') === 'ON';
+          const radarScanMode = OptionModule.getOptionValue('RDR', 'SCAN', '6B');
+          const radarConeHalfAngleDeg = radarScanMode === '3B' ? 15 : 30;
 
           ctx.save();
           ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -2051,6 +2053,22 @@ window.DataCartridgeModule = DataCartridgeModule;
             ctx.lineTo(tailHalf, tailY);
             ctx.stroke();
             ctx.restore();
+          };
+
+          const drawRadarConeGuides = (x, y, headingRelDeg = 0, topLimitY = 0, maxLen = Infinity) => {
+            if (!radarEnabled) return;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.8;
+            ctx.beginPath();
+            for (const side of [-1, 1]) {
+              const guideRad = (headingRelDeg + (side * radarConeHalfAngleDeg)) * Math.PI / 180;
+              const gx = Math.sin(guideRad);
+              const gy = -Math.cos(guideRad);
+              const guideLen = Math.min(maxLen, (y - topLimitY) / Math.max(0.0001, -gy));
+              ctx.moveTo(x, y);
+              ctx.lineTo(x + gx * guideLen, y + gy * guideLen);
+            }
+            ctx.stroke();
           };
 
           const drawWaypointDiamond = (x, y, selected = false) => {
@@ -2580,6 +2598,7 @@ window.DataCartridgeModule = DataCartridgeModule;
               ctx.fillText(`CRS ${courseDisplay}`, contentX + contentW * 0.975, bottomReadoutY);
             }
 
+            drawRadarConeGuides(cx, cy, 0, contentY, radius);
             drawOwnshipSymbol(cx, cy, 1);
             if (!radarEnabled) {
               drawRadarOffInfo(cx, cy + h * 0.080);
@@ -2780,6 +2799,7 @@ window.DataCartridgeModule = DataCartridgeModule;
             if (ownshipPoint) {
               const ownshipHeading = Number(scene?.ownship?.heading) || 0;
               const ownshipRelHeading = ownshipHeading - mapUpHeadingDeg;
+              drawRadarConeGuides(ownshipPoint.x, ownshipPoint.y, ownshipRelHeading, mapTop);
               drawOwnshipSymbol(ownshipPoint.x, ownshipPoint.y, 1, ownshipRelHeading);
             }
             if (!radarEnabled) {
@@ -4154,11 +4174,11 @@ class RadarModule {
 
           ctx.fillStyle = '#ff0000';
           ctx.font = `bold ${Math.round(h * 0.034)}px monospace`;
-          ctx.textAlign = 'left';
+          ctx.textAlign = 'center';
           ctx.textBaseline = 'top';
-          const lockTextX = displayLeft + w * 0.01;
-          const lockTextY = displayTop + h * 0.045;
           const lockLineStep = h * 0.036;
+          const lockTextX = displayLeft + displayWidth * 0.5;
+          const lockTextY = displayTop + tickLength + h * 0.01;
           ctx.fillText(`LOCK ${lockedCallsign}`.slice(0, 42), lockTextX, lockTextY);
           ctx.fillText(lockedType.slice(0, 42), lockTextX, lockTextY + lockLineStep);
         }
