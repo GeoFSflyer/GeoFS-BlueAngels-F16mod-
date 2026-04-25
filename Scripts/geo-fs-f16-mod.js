@@ -77,14 +77,6 @@ this.addMfd({
         scale: [0.29, 0.29, 0.285],
         defaultPageTitle: 'SYS'
       });
-
-      this.addMfd({
-        name: 'CENTER',
-        position: [-0.003, 6.085, 0.335],
-        rotation: [23.5, 0, 0],
-        scale: [0.335, 0.335, 0.335],
-        defaultPageTitle: 'CHK'
-      });
     }
 
     // Adds a new MFD module instance to the active plugin.
