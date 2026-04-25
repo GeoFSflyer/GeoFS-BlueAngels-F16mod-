@@ -64,7 +64,7 @@
       //   - scale = MFD size on panel
 this.addMfd({
         name: 'LEFT',
-        position: [-0.16, 7.5, 0.5],
+        position: [-0.16, 7.5, 0.3],
         rotation: [8, 0, 0],
         scale: [0.29, 0.29, 0.285],
         defaultPageTitle: 'NAV'
