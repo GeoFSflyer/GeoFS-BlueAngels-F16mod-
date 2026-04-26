@@ -6820,7 +6820,7 @@ computeCameraOrientationRelativeToAircraft(camLLA, tgtLLA, aircraft) {
     static COCKPIT_VIEW_PRESETS = [
       {
         name: 'DEFAULT',
-        position: [0, 5.5, 0.95],
+        position: [0, 6.3, 1.1],
         orientation: [0, -15, 0],
         FOV: 1.7
       },
